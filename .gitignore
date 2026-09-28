@@ -1,0 +1,12 @@
+cache/
+artifacts/
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+.codex/
+.DS_Store
+*.log
+*.pem
+*.key
