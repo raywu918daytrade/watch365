@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="watch365">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>幫你盯盤</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <header class="topbar"><strong>幫你盯盤</strong><div class="top-status"><span id="topDot"></span><span id="topText">設定監控</span></div></header>
+  <main class="shell">
+    <section id="onboarding" hidden>
+      <nav class="onboarding-progress" aria-label="設定進度"><div class="progress-head"><strong id="stepLabel">第 1 步，共 4 步</strong><span id="remainingLabel">還剩 3 步</span></div><div class="stepper steps steps-horizontal"><span class="step step-primary">選股票</span><span class="step">設條件</span><span class="step">確認啟用</span><span class="step">完成</span></div></nav>
+
+      <section id="step1" class="step-panel">
+        <header><p>選擇監控範圍</p><h1>想監控哪些股票？</h1><span>貼上台股代號，系統會自動確認名稱與上市／上櫃市場。</span></header>
+        <div class="composer"><textarea id="symbolInput" class="textarea textarea-bordered" rows="3" placeholder="輸入代號，例如 2330、2454、6488" spellcheck="false"></textarea><button id="parseButton" class="btn btn-outline" type="button">確認股票</button></div>
+        <div class="minor-row"><span id="parseStatus"></span></div>
+        <details class="utility-details"><summary>從 CSV 匯入</summary><div><label class="btn btn-ghost btn-sm" for="csvInput">選擇 CSV 單欄檔案</label><input id="csvInput" class="visually-hidden" type="file" accept=".csv,text/csv"></div></details>
+        <div id="correctionList" class="correction-list"></div>
+        <details id="draftDetails" class="selection-details"><summary><strong id="draftCount">已選 0 檔</strong><span>展開查看或移除</span></summary><div id="draftList" class="stock-list"></div></details>
+        <section id="draftCoverage" class="coverage-panel" aria-live="polite"><p>正在確認系統名單涵蓋狀態。</p></section>
+        <div class="step-actions"><button id="step1Next" class="btn btn-primary" type="button">下一步：設定條件</button></div>
+      </section>
+
+      <section id="step2" class="step-panel" hidden>
+        <header><p>設定提醒條件</p><h1>什麼情況發生時通知？</h1><span>選擇條件後，設定所需參數。</span></header>
+        <div class="mode-tabs" role="tablist" aria-label="條件輸入方式"><button id="manualModeButton" class="btn btn-sm mode-tab active" role="tab" aria-selected="true" type="button">手動設定</button><button id="textModeButton" class="btn btn-sm mode-tab" role="tab" aria-selected="false" type="button">文字描述</button></div>
+        <section id="agentMode" class="agent-composer" aria-labelledby="agentTitle" hidden>
+          <div><strong id="agentTitle">用文字描述條件</strong></div>
+          <div class="agent-input"><textarea id="agentInput" class="textarea textarea-bordered" maxlength="500" placeholder="例如：一分鐘 RSI 14 上穿 30"></textarea><button id="agentParseButton" class="btn btn-secondary" type="button">解析需求</button></div>
+          <div id="agentStatus" class="agent-status" aria-live="polite"></div>
+          <div id="agentResult" class="agent-result" hidden><div><strong id="agentResultTitle"></strong><p id="agentResultText"></p></div><button id="agentConfirmButton" class="btn btn-primary btn-sm" type="button" hidden>確認帶入</button><button id="agentFormulaActivateButton" class="btn btn-primary btn-sm" type="button" hidden>套用並啟用</button><button id="agentRequestButton" class="btn btn-outline btn-sm" type="button" hidden>提出新指標需求</button></div>
+          <section id="requestConfirm" class="request-panel" hidden><div><strong>確認需求摘要</strong><p id="requestOriginalText" class="request-original"></p><div class="request-fields"><label>指標名稱<input id="requestIndicatorName" class="input input-bordered" maxlength="80"></label><label>資料週期<select id="requestTimeframe" class="select select-bordered"><option value="">請選擇</option><option value="1m">一分鐘</option><option value="d1">日線</option><option value="other">其他週期</option></select></label><label id="requestCustomTimeframeWrap" hidden>自訂週期<input id="requestCustomTimeframe" class="input input-bordered" maxlength="50" placeholder="例如：5 分鐘"></label><label>參數或計算定義<textarea id="requestParameters" class="textarea textarea-bordered" maxlength="300" placeholder="例如：快線 12、慢線 26；若沒有參數請填無參數"></textarea></label><label>觸發條件<textarea id="requestTrigger" class="textarea textarea-bordered" maxlength="300" placeholder="例如：快線向上穿越慢線"></textarea></label></div><p id="requestFormError" class="form-error" role="alert"></p><small>送出後狀態為「待評估」，不會自動建立或啟用監控。</small></div><div><button id="requestCancelButton" class="btn btn-ghost btn-sm" type="button">取消</button><button id="requestSubmitButton" class="btn btn-primary btn-sm" type="button">送出需求</button></div></section>
+          <div class="request-tools"><button id="requestListButton" class="btn btn-ghost btn-sm" type="button">查看已提交需求</button></div><section id="requestList" class="request-list" hidden aria-live="polite"></section>
+        </section>
+        <section id="manualMode"><label class="form-control strategy-control"><span class="label-text">監控條件</span><select id="strategySelect" class="select select-bordered" aria-label="監控條件"></select></label><div id="strategyDescription" class="preset selected"></div><div id="strategyParams" class="strategy-params"></div><p id="strategyError" class="form-error" role="alert"></p></section>
+        <div class="step-actions"><button class="btn btn-ghost back" data-back="1" type="button">返回選股票</button><button id="step2Next" class="btn btn-primary" type="button">下一步：查看結果</button></div>
+      </section>
+
+      <section id="step3" class="step-panel" hidden>
+        <header><p>確認監控內容</p><h1>確認後開始監控</h1><span>只有按下啟用後，這份設定才會生效。</span></header>
+        <dl class="summary-list"><div><dt>股票範圍</dt><dd><span id="previewCount"></span>，<span id="previewCoverage">確認中</span></dd></div><div><dt>提醒條件</dt><dd id="previewRule"></dd></div><div><dt>資料狀態</dt><dd id="previewDataStatus">確認中</dd></div></dl>
+        <div id="previewCoverageDetails" class="coverage-details"></div>
+        <div id="previewResult" class="preview-result alert"></div>
+        <div class="step-actions"><button class="btn btn-ghost back" data-back="2" type="button">返回修改</button><button id="activateButton" class="btn btn-primary" type="button">啟用這個監控</button></div>
+      </section>
+
+      <section id="step4" class="step-panel complete" hidden>
+        <div class="complete-mark">✓</div><header><p>設定完成</p><h1 id="completeTitle">已開始監控</h1><span id="completeText"></span></header>
+        <div id="completeStatus" class="completion-status">等待行情</div>
+        <div class="step-actions"><button id="openWorkspace" class="btn btn-primary" type="button">查看監控工作台</button></div>
+      </section>
+    </section>
+
+    <section id="workspace" hidden>
+      <div class="task-head"><div><p>監控工作台</p><h1 id="taskTitle">台股監控</h1><span id="taskSubtitle"></span></div><div class="task-actions"><button id="openUniverseButton" class="btn btn-ghost btn-sm" type="button">系統監控名單</button><button id="adjustButton" class="btn btn-outline btn-sm" type="button">調整設定</button></div></div>
+      <section id="workspaceStatus" class="workspace-status alert" aria-live="polite">
+        <div><span id="taskStatus" class="badge"></span><strong id="statusTitle"></strong><p id="statusMessage"></p></div>
+        <span id="taskUpdated"></span>
+      </section>
+      <section class="monitor-summary" aria-labelledby="summaryTitle">
+        <div class="section-heading"><div><p class="section-kicker">目前設定</p><h2 id="summaryTitle">正在監控什麼</h2></div><button id="toggleButton" class="btn btn-ghost btn-sm" type="button"></button></div>
+        <dl class="workspace-summary"><div><dt>客戶已選</dt><dd id="taskCount"></dd></div><div><dt>系統名單涵蓋</dt><dd id="taskCoverage">確認中</dd></div><div><dt>市場</dt><dd id="taskMarkets"></dd></div><div><dt>篩選條件</dt><dd id="taskRule"></dd></div><div><dt>通知</dt><dd>符合條件時立即通知</dd></div></dl>
+        <div id="workspaceCoverageDetails" class="coverage-details"></div>
+      </section>
+      <div id="waitingBanner" hidden></div>
+      <section class="results"><div class="section-heading"><div><p class="section-kicker">最新檢查</p><h2>目前過濾結果</h2></div><span id="resultTime"></span></div><div class="result-metrics"><div><strong id="checkedCount">0</strong><span>已檢查</span></div><div><strong id="matchedCount">0</strong><span>符合條件</span></div><div><strong id="waitingCount">0</strong><span>等待資料</span></div></div><p id="resultMessage"></p></section>
+      <section class="signals"><div class="section-heading"><div><p class="section-kicker">條件成立</p><h2>最新訊號</h2></div><span id="signalCount" class="badge badge-outline">0</span></div><div id="signalsList"></div><p id="emptySignals"></p></section>
+      <p class="disclaimer">本服務僅供資訊提醒，不構成投資建議。</p>
+    </section>
+
+    <section id="systemUniverse" hidden>
+      <div class="universe-head"><div><p>系統資料範圍</p><h1>系統監控名單</h1><span>系統依這份最新名單收集股票資料；你的個人監控設定不會因此改變。</span></div><button id="closeUniverseButton" class="btn btn-ghost btn-sm" type="button">返回工作台</button></div>
+      <section id="universeStatus" class="universe-status alert" aria-live="polite"><span class="loading loading-spinner loading-sm" aria-hidden="true"></span><div><strong>正在取得系統監控名單</strong><p>確認最新來源版本與股票清單中。</p></div></section>
+      <div id="universeContent" hidden>
+        <dl class="universe-summary"><div><dt>名單更新日期</dt><dd id="universeDate"></dd></div><div><dt>監控名單檔數</dt><dd id="universeTotal"></dd></div></dl>
+        <div class="universe-tools"><label class="input input-bordered"><span class="visually-hidden">搜尋股票</span><input id="universeSearch" type="search" placeholder="搜尋代號或名稱"></label><span id="universeMatches"></span></div>
+        <div class="universe-table-wrap"><table class="table universe-table"><thead><tr><th scope="col">股票代號</th><th scope="col">名稱</th></tr></thead><tbody id="universeRows"></tbody></table></div>
+        <p id="universeEmpty" class="universe-empty" hidden>找不到符合搜尋條件的股票。</p>
+        <nav class="universe-pagination" aria-label="系統監控名單分頁"><button id="universePrev" class="btn btn-ghost btn-sm" type="button">上一頁</button><span id="universePage"></span><button id="universeNext" class="btn btn-ghost btn-sm" type="button">下一頁</button></nav>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body></html>

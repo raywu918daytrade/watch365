@@ -1,0 +1,15 @@
+{
+  "id": "rsi.cross",
+  "version": "1.0.0",
+  "name": "RSI 上穿門檻",
+  "description": "Wilder RSI 由下往上穿越指定值。",
+  "executor": "rsi_wilder_cross",
+  "timeframe": "1m",
+  "source": "db/m1_live/{tradingDate}.parquet",
+  "warmupBars": 15,
+  "params": [
+    { "key": "period", "label": "RSI 期數", "type": "integer", "min": 2, "max": 100, "default": 14 },
+    { "key": "threshold", "label": "上穿門檻", "type": "number", "min": 1, "max": 99, "default": 70 }
+  ],
+  "condition": { "operator": "crosses_above", "left": "rsi", "right": "threshold", "label": "RSI 上穿門檻" }
+}

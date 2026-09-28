@@ -1,0 +1,14 @@
+{
+  "id": "sma.cross",
+  "version": "1.0.0",
+  "name": "價格上穿 SMA",
+  "description": "一分鐘收盤價由下往上穿越簡單移動平均線。",
+  "executor": "sma_cross",
+  "timeframe": "1m",
+  "source": "db/m1_live/{tradingDate}.parquet",
+  "warmupBars": 21,
+  "params": [
+    { "key": "period", "label": "SMA 期數", "type": "integer", "min": 2, "max": 200, "default": 20 }
+  ],
+  "condition": { "operator": "crosses_above", "left": "close", "right": "sma", "label": "收盤價上穿 SMA" }
+}

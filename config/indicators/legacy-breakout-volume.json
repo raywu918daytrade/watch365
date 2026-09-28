@@ -1,0 +1,12 @@
+{
+  "id": "legacy.breakout-volume",
+  "version": "1.0.0",
+  "name": "突破今日高點＋成交量放大",
+  "description": "價格突破今日前高，且一分鐘成交量達近期中位數兩倍。",
+  "executor": "high_volume_breakout",
+  "timeframe": "1m",
+  "source": "db/m1_live/{tradingDate}.parquet",
+  "warmupBars": 5,
+  "params": [],
+  "condition": { "operator": "all", "label": "突破前高且量能放大" }
+}

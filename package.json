@@ -1,0 +1,30 @@
+{
+  "name": "watch365",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/styles.css -o ./public/styles.css --minify",
+    "dev:css": "tailwindcss -i ./src/styles.css -o ./public/styles.css --watch",
+    "prestart": "npm run build:css",
+    "start": "node src/server.js",
+    "test": "node --test",
+    "test:engine": "node scripts/engine-smoke.mjs",
+    "test:formula-e2e": "node scripts/formula-e2e.mjs",
+    "test:ui": "node scripts/ui-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "hyparquet": "^1.25.1",
+    "hyparquet-compressors": "^1.1.1",
+    "technicalindicators": "^3.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.46",
+    "playwright": "^1.55.1",
+    "tailwindcss": "^4.3.3"
+  }
+}
