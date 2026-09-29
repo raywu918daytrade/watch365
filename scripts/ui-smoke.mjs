@@ -1,279 +1,31 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
-import { chromium } from 'playwright';
+import {mkdir,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:net';
+import {chromium} from 'playwright';
 
-const projectRoot = new URL('../', import.meta.url).pathname;
-const output = new URL('../artifacts/', import.meta.url).pathname;
-await mkdir(output, { recursive: true });
-const stateDirectory = await mkdtemp(join(tmpdir(), 'watch365-ui-'));
-const port = await new Promise((resolve, reject) => {
-  const probe = createServer();
-  probe.once('error', reject);
-  probe.listen(0, '127.0.0.1', () => {
-    const address = probe.address();
-    probe.close((error) => error ? reject(error) : resolve(address.port));
-  });
-});
-const baseURL = `http://127.0.0.1:${port}`;
-const serverProcess = spawn(process.execPath, ['src/server.js'], {
-  cwd: projectRoot,
-  env: { ...process.env, INDICATOR_AGENT_PROVIDER: '', INDICATOR_AGENT_MODEL: '', PORT: String(port), WATCH365_DATA_FILE: join(stateDirectory, 'state.json'), WATCH365_INDICATOR_REQUESTS_FILE: join(stateDirectory, 'indicator-requests.json') },
-  stdio: ['ignore', 'pipe', 'pipe']
-});
-let serverOutput = '';
-serverProcess.stdout.on('data', (chunk) => { serverOutput += chunk; });
-serverProcess.stderr.on('data', (chunk) => { serverOutput += chunk; });
-for (let attempt = 0; attempt < 100; attempt += 1) {
-  if (serverProcess.exitCode !== null) throw new Error(`ui_server_exited_${serverProcess.exitCode}: ${serverOutput}`);
-  try { if ((await fetch(baseURL)).ok) break; } catch {}
-  if (attempt === 99) throw new Error(`ui_server_start_timeout: ${serverOutput}`);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-}
-let browser;
-
-try {
-  browser = await chromium.launch({ headless: true, executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
-  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await desktop.newPage();
-  const assertModeSelected=async(target,selectedId)=>{const state=await target.evaluate((id)=>{const selected=document.querySelector(`#${id}`);const other=document.querySelector(`#${id==='manualModeButton'?'textModeButton':'manualModeButton'}`);const style=(node)=>{const value=getComputedStyle(node);return{background:value.backgroundColor,color:value.color,shadow:value.boxShadow};};return{selected:style(selected),other:style(other),selectedAria:selected.getAttribute('aria-selected'),otherAria:other.getAttribute('aria-selected')};},selectedId);if(state.selectedAria!=='true'||state.otherAria!=='false'||JSON.stringify(state.selected)===JSON.stringify(state.other))throw new Error(`mode_selected_style_missing_${selectedId}_${JSON.stringify(state)}`);};
-  await page.route('**/api/watchlist/resolve', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    await route.continue();
-  });
-  await page.goto(baseURL);
-  await page.getByRole('heading', { name:'想監控哪些股票？' }).waitFor();
-  const visiblePrimaryActions = await page.locator('#step1 .btn-primary:visible').count();
-  if (visiblePrimaryActions !== 1) throw new Error(`step1_primary_action_count_${visiblePrimaryActions}`);
-  if (await page.locator('#parseButton').evaluate((button) => button.classList.contains('btn-primary'))) throw new Error('parse_button_is_primary');
-  await page.locator('#csvInput').setInputFiles({name:'watchlist.csv',mimeType:'text/csv',buffer:Buffer.from('2330\nBAD')});
-  await page.getByText('找到 1 檔').waitFor();
-  await page.getByPlaceholder('輸入代號，例如 2330、2454、6488').fill('2454,6488');
-  await page.getByRole('button', { name: '確認股票' }).click();
-  const busyButton = page.getByRole('button', { name: '確認中' });
-  await busyButton.waitFor();
-  if (!(await busyButton.isDisabled())) throw new Error('parse_button_not_disabled_while_busy');
-  if (await busyButton.getAttribute('aria-busy') !== 'true') throw new Error('parse_button_missing_aria_busy');
-  await page.getByText('找到 2 檔').waitFor();
-  await page.locator('#draftCoverage').getByText('名單涵蓋 3 檔', { exact:true }).waitFor();
-  await page.screenshot({ path: `${output}desktop-step1.png`, fullPage: true });
-  await page.getByRole('button', { name: '下一步：設定條件' }).click();
-  if(!(await page.locator('#manualMode').isVisible())||await page.locator('#agentMode').isVisible())throw new Error('step2_default_mode_not_manual');
-  await assertModeSelected(page,'manualModeButton');
-  await page.getByRole('tab',{name:'文字描述'}).click();
-  if(!(await page.locator('#agentMode').isVisible())||await page.locator('#manualMode').isVisible())throw new Error('step2_modes_not_exclusive');
-  await assertModeSelected(page,'textModeButton');
-  await page.reload(); await page.getByRole('heading',{name:'什麼情況發生時通知？'}).waitFor(); await assertModeSelected(page,'textModeButton');
-  await page.getByRole('tab',{name:'手動設定'}).click(); await assertModeSelected(page,'manualModeButton');
-  await page.getByRole('tab',{name:'文字描述'}).click(); await assertModeSelected(page,'textModeButton');
-  const indicatorRegistry=await fetch(`${baseURL}/api/indicators`).then((response)=>response.json()); const rsiDefinition=indicatorRegistry.items.find((item)=>item.id==='rsi.cross');
-  await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('一分鐘 RSI 14 上穿 30');
-  await page.getByRole('button',{name:'解析需求'}).click();
-  await page.getByText('Agent 尚未設定模型服務，仍可使用下方手動設定。',{exact:true}).waitFor();
-  if((await page.getByLabel('監控條件').inputValue())!=='legacy.breakout-volume@1.0.0')throw new Error('unconfigured_agent_changed_strategy');
-  const rsiProposal={id:'rsi.cross',version:'1.0.0',timeframe:'1m',definitionFingerprint:rsiDefinition.fingerprint,params:{period:14,threshold:30}};
-  let agentDelayMs=0; let requestSubmitFailure=false; let requestDelayQueue=[];
-  await page.route('**/api/indicator-agent/parse',async(route)=>{if(agentDelayMs)await new Promise((resolve)=>setTimeout(resolve,agentDelayMs));const text=JSON.parse(route.request().postData()||'{}').text;const result=text.includes('公式測試')?{status:'formula',summary:'MACD 上穿訊號線 · 一分鐘',formulaSummary:'(EMA(收盤價, 12) - EMA(收盤價, 26)) 向上穿越 EMA((EMA(收盤價, 12) - EMA(收盤價, 26)), 9)',proposal:{fingerprint:'a'.repeat(64),warmupBars:35},proposalId:'11111111-1111-4111-8111-111111111111',proposalToken:'signed-test-token'}:text.includes('MACD')||text.includes('布林')?{status:'unsupported',reason:'目前尚未支援這項指標。',requestDraft:{requestedIndicator:'other',requestedTimeframe:'unknown',requestedDirection:'unknown',params:{period:null,threshold:null}}}:text.includes('新指標')?{status:'clarification',question:'請補充指標名稱、週期與條件。',proposal:null,summary:null}:{status:'matched',proposal:rsiProposal,summary:'RSI 上穿門檻（RSI 期數 14、上穿門檻 30） · M1 · v1.0.0'};await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});});
-  await page.route('**/api/indicator-agent/confirm',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({proposal:rsiProposal})}));
-  await page.route('**/api/indicator-requests',async(route)=>{if(route.request().method()==='POST'){const delay=requestDelayQueue.shift()||0;if(delay)await new Promise((resolve)=>setTimeout(resolve,delay));if(requestSubmitFailure){await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'INDICATOR_REQUEST_SAVE_FAILED'})});return;}}await route.continue();});
-  await page.getByRole('button',{name:'解析需求'}).click(); await page.getByText('需要你確認',{exact:true}).waitFor();
-  if((await page.getByLabel('監控條件').inputValue())!=='legacy.breakout-volume@1.0.0')throw new Error('agent_applied_without_confirmation');
-  await page.getByRole('button',{name:'確認帶入'}).click(); await page.getByLabel('上穿門檻').waitFor();
-  if(!(await page.locator('#manualMode').isVisible())||await page.locator('#agentMode').isVisible())throw new Error('agent_confirmation_did_not_return_to_manual');
-  if((await page.getByLabel('上穿門檻').inputValue())!=='30')throw new Error('agent_confirmation_did_not_fill_form');
-  if((await fetch(`${baseURL}/api/state`).then((response)=>response.json())).settings.strategy.id!=='legacy.breakout-volume')throw new Error('agent_confirmation_persisted_without_activation');
-  await page.getByRole('tab',{name:'文字描述'}).click();await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('公式測試');await page.getByRole('button',{name:'解析需求'}).click();await page.getByRole('button',{name:'套用並啟用'}).waitFor();await page.getByText(/EMA\(收盤價, 12\)/).waitFor();await page.screenshot({path:`${output}desktop-formula-confirmation.png`,fullPage:true});await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('公式測試已修改');if(await page.getByRole('button',{name:'套用並啟用'}).isVisible())throw new Error('formula_input_change_kept_stale_token');
-  await page.getByRole('tab',{name:'文字描述'}).click();await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('一分鐘 RSI 14 上穿 30'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByRole('button',{name:'確認帶入'}).waitFor();
-  await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('幫我做 MACD');
-  if(await page.getByRole('button',{name:'確認帶入'}).isVisible())throw new Error('agent_input_change_kept_stale_proposal');
-  agentDelayMs=250; await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('slow parse'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByRole('tab',{name:'手動設定'}).click();
-  await page.getByLabel('監控條件').selectOption('sma.cross@1.0.0');
-  if(!(await page.locator('#agentParseButton').isEnabled()))throw new Error('manual_change_left_agent_button_disabled');
-  await page.waitForTimeout(350); if(await page.getByRole('button',{name:'確認帶入'}).isVisible())throw new Error('stale_parse_survived_manual_change');
-  await page.getByRole('tab',{name:'文字描述'}).click(); agentDelayMs=250; await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('slow leave'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByRole('button',{name:'返回選股票'}).click(); await page.waitForTimeout(350); await page.getByRole('button',{name:'下一步：設定條件'}).click();
-  if(await page.getByRole('button',{name:'確認帶入'}).isVisible())throw new Error('stale_parse_survived_step_change');
-  if(!(await page.getByRole('button',{name:'解析需求'}).isEnabled()))throw new Error('step_change_left_agent_button_disabled');
-  agentDelayMs=0; await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('我要新指標'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByText('請補充指標名稱、週期與條件。',{exact:true}).waitFor(); if(await page.getByRole('button',{name:'提出新指標需求'}).isVisible())throw new Error('clarification_exposed_request_submission');
-  const stateBeforeIndicatorRequest=await fetch(`${baseURL}/api/state`).then((response)=>response.json()); await page.locator('#agentInput').fill('請支援 MACD 黃金交叉'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByRole('button',{name:'提出新指標需求'}).click(); await page.getByText('確認需求摘要',{exact:true}).waitFor();
-  await page.getByRole('button',{name:'送出需求'}).click(); await page.getByText('請補齊指標名稱、具體資料週期、參數或定義，以及觸發條件。',{exact:true}).waitFor();
-  await page.getByLabel('指標名稱').fill('MACD'); await page.getByLabel('資料週期').selectOption('1m'); await page.getByLabel('參數或計算定義').fill('快線 12、慢線 26、訊號線 9'); await page.getByLabel('觸發條件').fill('MACD 線向上穿越訊號線');
-  requestSubmitFailure=true; await page.getByRole('button',{name:'送出需求'}).click(); await page.getByText(/需求未送出/).waitFor(); if(await page.getByText('需求已送出，狀態為待評估。',{exact:true}).count())throw new Error('failed_request_rendered_as_success');
-  requestSubmitFailure=false; await page.getByRole('button',{name:'送出需求'}).click(); await page.getByText('需求已送出，狀態為待評估。',{exact:true}).waitFor(); await page.getByText('待評估',{exact:true}).waitFor(); await page.screenshot({path:`${output}desktop-indicator-request.png`,fullPage:true});
-  const stateAfterIndicatorRequest=await fetch(`${baseURL}/api/state`).then((response)=>response.json()); if(JSON.stringify(stateBeforeIndicatorRequest.settings)!==JSON.stringify(stateAfterIndicatorRequest.settings))throw new Error('indicator_request_changed_monitor_settings');
-  await page.reload(); await page.getByRole('heading',{name:'什麼情況發生時通知？'}).waitFor(); await page.getByRole('button',{name:'查看已提交需求'}).click(); await page.getByText('請支援 MACD 黃金交叉',{exact:true}).waitFor(); await page.getByText('待評估',{exact:true}).waitFor(); await page.getByText('查看完整需求',{exact:true}).click(); await page.getByText('快線 12、慢線 26、訊號線 9',{exact:true}).waitFor(); await page.getByText('MACD 線向上穿越訊號線',{exact:true}).waitFor();
-  await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('請支援布林通道突破');await page.getByRole('button',{name:'解析需求'}).click();await page.getByRole('button',{name:'提出新指標需求'}).click();await page.getByLabel('指標名稱').fill('布林通道');await page.getByLabel('資料週期').selectOption('1m');await page.getByLabel('參數或計算定義').fill('期間 20、標準差 2');await page.getByLabel('觸發條件').fill('價格突破上軌');requestDelayQueue=[150,400];await page.getByRole('button',{name:'送出需求'}).click();if(!(await page.getByRole('button',{name:'取消'}).isDisabled())||!(await page.getByLabel('指標名稱').isDisabled()))throw new Error('pending_request_form_not_locked');await page.getByRole('tab',{name:'手動設定'}).click();await page.getByRole('tab',{name:'文字描述'}).click();await page.getByRole('button',{name:'解析需求'}).click();await page.getByRole('button',{name:'提出新指標需求'}).click();await page.getByLabel('指標名稱').fill('新的未送出名稱');await page.getByLabel('資料週期').selectOption('1m');await page.getByLabel('參數或計算定義').fill('期間 20、標準差 2');await page.getByLabel('觸發條件').fill('價格突破上軌');await page.getByRole('button',{name:'送出需求'}).click();await page.waitForTimeout(220);if(!(await page.locator('#requestConfirm').isVisible())||(await page.getByLabel('指標名稱').inputValue())!=='新的未送出名稱'||!(await page.getByLabel('指標名稱').isDisabled()))throw new Error('stale_request_response_overwrote_newer_form');await page.getByText('需求已送出，狀態為待評估。',{exact:true}).waitFor();
-  agentDelayMs=0; await page.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('一分鐘 RSI 14 上穿 30'); await page.getByRole('button',{name:'解析需求'}).click(); await page.getByRole('button',{name:'確認帶入'}).waitFor(); await page.getByRole('tab',{name:'手動設定'}).click();
-  await page.getByLabel('監控條件').selectOption('sma.cross@1.0.0');
-  await page.getByLabel('SMA 期數').fill('10');
-  await page.reload(); await page.getByRole('heading',{name:'什麼情況發生時通知？'}).waitFor();
-  if((await page.getByLabel('SMA 期數').inputValue())!=='10')throw new Error('step2_draft_not_restored_after_reload');
-  await page.locator('#strategyDescription').getByText('使用已完成的一分鐘 K', { exact:true }).waitFor();
-  await page.screenshot({ path: `${output}desktop-step2.png`, fullPage: true });
-  await page.getByRole('button', { name: '下一步：查看結果' }).click();
-  await page.locator('#previewCoverage').getByText('3 檔涵蓋／0 檔未涵蓋', { exact:true }).waitFor();
-  await page.getByText('尚未啟用', { exact: true }).waitFor();
-  await page.screenshot({ path: `${output}desktop-step3.png`, fullPage: true });
-  await page.getByRole('button', { name: '啟用這個監控' }).click();
-  await page.getByText('監控設定已啟用').waitFor(); await page.getByRole('button',{name:'查看監控工作台'}).waitFor({state:'visible'}); if(!(await page.getByRole('button',{name:'查看監控工作台'}).isEnabled()))throw new Error('step4_workspace_button_still_disabled');
-  await page.screenshot({ path: `${output}desktop-step4.png`, fullPage: true });
-  await page.getByRole('button', { name: '查看監控工作台' }).click();
-  await page.getByText('目前過濾結果').waitFor();
-  await page.locator('#taskRule').getByText('價格上穿 SMA（SMA 期數 10） · 一分鐘', { exact:true }).waitFor();
-  await page.locator('#taskCoverage').getByText('3 / 3 檔', { exact:true }).waitFor();
-  await page.screenshot({ path: `${output}desktop-workspace.png`, fullPage: true });
-  await page.reload();
-  await page.locator('#taskRule').getByText('價格上穿 SMA（SMA 期數 10） · 一分鐘', { exact:true }).waitFor();
-  const expectedUniverse=await fetch(`${baseURL}/api/system-universe?page=1&pageSize=50`).then((response)=>response.json());
-  if(!expectedUniverse.total||!expectedUniverse.items?.length)throw new Error('system_universe_empty');
-  const searchTarget=expectedUniverse.items[0];
-  await page.getByRole('button', { name: '系統監控名單' }).click();
-  await page.locator('#universeStatus strong').getByText('系統監控名單已載入', { exact:true }).waitFor();
-  await page.getByText(`${expectedUniverse.total} 檔`, { exact:true }).waitFor();
-  if (await page.locator('#universeRows tr').count() !== Math.min(50,expectedUniverse.total)) throw new Error('system_universe_page_size');
-  await page.getByPlaceholder('搜尋代號或名稱').fill(searchTarget.symbol);
-  await page.getByText(searchTarget.symbol, { exact:true }).waitFor();
-  if(searchTarget.name)await page.getByText(searchTarget.name, { exact:true }).waitFor();
-  await page.getByPlaceholder('搜尋代號或名稱').fill('');
-  await page.getByText(`共 ${expectedUniverse.total} 檔`, { exact:true }).waitFor();
-  if(expectedUniverse.pages>1){await page.getByRole('button', { name:'下一頁' }).click();await page.getByText(`第 2 / ${expectedUniverse.pages} 頁`, { exact:true }).waitFor();}
-  await page.screenshot({ path: `${output}desktop-system-universe.png`, fullPage: true });
-  await page.getByRole('button', { name:'返回工作台' }).click();
-  const desktopOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  if (desktopOverflow) throw new Error('desktop_horizontal_overflow');
-  await desktop.close();
-
-  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  const mobilePage = await mobile.newPage();
-  await mobilePage.route('**/api/indicator-agent/parse',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'unsupported',reason:'目前尚未支援 MACD。',requestDraft:{requestedIndicator:'other',requestedTimeframe:'unknown',requestedDirection:'unknown',params:{period:null,threshold:null}}})}));
-  await mobilePage.goto(baseURL);
-  await mobilePage.getByRole('heading', { name: '價格上穿 SMA監控' }).waitFor();
-  await mobilePage.screenshot({ path: `${output}mobile-workspace.png`, fullPage: true });
-  await mobilePage.getByRole('button', { name:'系統監控名單' }).click();
-  await mobilePage.locator('#universeStatus strong').getByText('系統監控名單已載入', { exact:true }).waitFor();
-  await mobilePage.screenshot({ path: `${output}mobile-system-universe.png`, fullPage: true });
-  const universeOverflow = await mobilePage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  if (universeOverflow) throw new Error('mobile_system_universe_horizontal_overflow');
-  await mobilePage.getByRole('button', { name:'返回工作台' }).click();
-  const mobileOverflow = await mobilePage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  if (mobileOverflow) throw new Error('mobile_horizontal_overflow');
-  await mobilePage.getByRole('button', { name: '調整設定' }).click();
-  await mobilePage.getByRole('heading', { name: '想監控哪些股票？' }).waitFor();
-  await mobilePage.screenshot({ path: `${output}mobile-step1.png`, fullPage: true });
-  await mobilePage.getByRole('button', { name:'下一步：設定條件' }).click();
-  await mobilePage.getByRole('tab',{name:'文字描述'}).click(); await mobilePage.getByPlaceholder('例如：一分鐘 RSI 14 上穿 30').fill('請支援 MACD 黃金交叉'); await mobilePage.getByRole('button',{name:'解析需求'}).click(); await mobilePage.getByRole('button',{name:'提出新指標需求'}).click(); await mobilePage.getByText('確認需求摘要',{exact:true}).waitFor(); await mobilePage.screenshot({path:`${output}mobile-indicator-request.png`,fullPage:true});
-  if(await mobilePage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_indicator_request_horizontal_overflow');
-  await mobilePage.getByRole('button',{name:'取消'}).click(); await mobilePage.getByRole('tab',{name:'手動設定'}).click();
-  await mobilePage.getByLabel('監控條件').selectOption('rsi.cross@1.0.0');
-  await mobilePage.getByLabel('RSI 期數').fill('14');
-  await mobilePage.getByLabel('上穿門檻').fill('65');
-  await mobilePage.getByText('Wilder RSI 由下往上穿越指定值。').waitFor();
-  await mobilePage.screenshot({ path: `${output}mobile-step2-indicators.png`, fullPage: true });
-  if(await mobilePage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_strategy_horizontal_overflow');
-  await mobilePage.getByRole('button',{name:'下一步：查看結果'}).click(); await mobilePage.getByRole('heading',{name:'確認後開始監控'}).waitFor(); await mobilePage.locator('#previewCoverage').getByText('3 檔涵蓋／0 檔未涵蓋',{exact:true}).waitFor();
-  await mobilePage.screenshot({path:`${output}mobile-step3.png`,fullPage:true});
-  await mobilePage.getByRole('button',{name:'啟用這個監控'}).click(); await mobilePage.getByText('監控設定已啟用').waitFor(); await mobilePage.getByRole('button',{name:'查看監控工作台'}).waitFor();
-  await mobilePage.screenshot({path:`${output}mobile-step4.png`,fullPage:true});
-  if(await mobilePage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_onboarding_horizontal_overflow');
-  await mobile.close();
-
-  const baseState = await fetch(`${baseURL}/api/state`).then((response) => response.json());
-  const formulaState=structuredClone(baseState);formulaState.settings.strategy={id:'formula.custom',version:'formula.v1',executor:'formula_v1',name:'MACD 上穿訊號線',timeframe:'1m',source:'db/m1_live/{tradingDate}.parquet',definitionFingerprint:'a'.repeat(64),params:{},formula:{summary:'MACD 向上穿越訊號線',warmupBars:35,ast:{op:'gte',left:{op:'source',field:'close'},right:{op:'constant',value:1}}},activatedAt:'2026-09-26T01:00:00.000Z'};formulaState.settings.monitorTask={name:'MACD 上穿訊號線監控',onboardingCompleted:true,completedAt:'2026-09-26T01:00:00.000Z'};
-  const formulaContext=await browser.newContext({viewport:{width:390,height:844}});const formulaPage=await formulaContext.newPage();await formulaPage.route('**/api/state',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(formulaState)}));await formulaPage.goto(baseURL);await formulaPage.locator('#taskRule').getByText(/MACD 向上穿越訊號線/).waitFor();await formulaPage.getByRole('button',{name:'調整設定'}).click();await formulaPage.getByRole('button',{name:'下一步：設定條件'}).click();if((await formulaPage.getByLabel('監控條件').inputValue())!=='formula.custom@formula.v1')throw new Error('formula_strategy_replaced_on_edit');await formulaPage.getByText('MACD 向上穿越訊號線',{exact:false}).first().waitFor();await formulaPage.reload();if((await formulaPage.getByLabel('監控條件').inputValue())!=='formula.custom@formula.v1')throw new Error('formula_strategy_replaced_on_reload');if(await formulaPage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_formula_strategy_horizontal_overflow');await formulaPage.screenshot({path:`${output}mobile-formula-preserved.png`,fullPage:true});await formulaContext.close();
-  const selectedTen=Array.from({length:10},(_,index)=>({symbol:String(1000+index),name:`股票${index}`,market:index%2?'TPEx':'TWSE'}));
-  const coverageState=structuredClone(baseState); coverageState.settings.watchlist=selectedTen; coverageState.settings.monitorTask.onboardingCompleted=true;
-  coverageState.runtime={...coverageState.runtime,coverageStatus:'available',coverageRevision:'fixture-rev',coverageUpdatedDate:'2026-09-25',selectedWatchlistCount:10,effectiveWatchlistCount:6,uncoveredWatchlistCount:4,effectiveWatchlist:selectedTen.slice(0,6).map((item)=>item.symbol)};
-  const coverageBody=(coveredSymbols)=>({status:'available',updatedDate:'2026-09-25',universeTotal:500,counts:{selected:10,covered:coveredSymbols.length,uncovered:10-coveredSymbols.length},items:selectedTen.map((item)=>({...item,coverage:coveredSymbols.includes(item.symbol)?'covered':'uncovered'}))});
-  let coverageFixture={status:200,body:coverageBody(selectedTen.slice(0,6).map((item)=>item.symbol))};
-  const coverageContext=await browser.newContext({viewport:{width:1440,height:900}}); const coveragePage=await coverageContext.newPage();
-  await coveragePage.route('**/api/state',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(coverageState)}));
-  await coveragePage.route('**/api/system-universe/coverage',(route)=>route.fulfill({status:coverageFixture.status,contentType:'application/json',body:JSON.stringify(coverageFixture.body)}));
-  await coveragePage.goto(baseURL); await coveragePage.locator('#taskCoverage').getByText('6 / 10 檔',{exact:true}).waitFor(); await coveragePage.locator('#workspaceCoverageDetails').getByText('目前未涵蓋 4 檔',{exact:true}).waitFor();
-  await coveragePage.screenshot({path:`${output}desktop-coverage-10-6-4.png`,fullPage:true});
-  coverageFixture={status:200,body:coverageBody(selectedTen.slice(5).map((item)=>item.symbol))}; await coveragePage.reload(); await coveragePage.locator('#taskCoverage').getByText('5 / 10 檔',{exact:true}).waitFor();
-  coverageFixture={status:503,body:{status:'unknown',error:'HF_UNIVERSE_SOURCE_FAILED'}}; await coveragePage.reload(); await coveragePage.locator('#taskCoverage').getByText('未知（已選 10 檔）',{exact:true}).waitFor();
-  if(await coveragePage.getByText('0 / 10 檔',{exact:true}).count())throw new Error('unknown_coverage_rendered_as_zero');
-  await coverageContext.close();
-
-  const coverageMobile=await browser.newContext({viewport:{width:390,height:844}}); const coverageMobilePage=await coverageMobile.newPage(); coverageFixture={status:200,body:coverageBody(selectedTen.slice(0,6).map((item)=>item.symbol))};
-  await coverageMobilePage.route('**/api/state',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(coverageState)}));
-  await coverageMobilePage.route('**/api/system-universe/coverage',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(coverageFixture.body)}));
-  await coverageMobilePage.goto(baseURL); await coverageMobilePage.locator('#taskCoverage').getByText('6 / 10 檔',{exact:true}).waitFor();
-  if(await coverageMobilePage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_coverage_horizontal_overflow');
-  await coverageMobilePage.screenshot({path:`${output}mobile-coverage-10-6-4.png`,fullPage:true}); await coverageMobile.close();
-  async function checkWorkspaceState(name, state, expectedText, expectedMetrics, viewport = { width: 390, height: 844 }) {
-    const context = await browser.newContext({ viewport });
-    const statePage = await context.newPage();
-    await statePage.route('**/api/state', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) }));
-    await statePage.goto(baseURL);
-    for (const text of expectedText) await statePage.getByText(text, { exact: false }).first().waitFor();
-    const metrics = await Promise.all(['checkedCount','matchedCount','waitingCount'].map((id) => statePage.locator(`#${id}`).textContent()));
-    if (metrics.join(',') !== expectedMetrics.join(',')) throw new Error(`${name}_metrics_${metrics.join('_')}`);
-    const overflow = await statePage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-    if (overflow) throw new Error(`${name}_horizontal_overflow`);
-    await statePage.screenshot({ path: `${output}mobile-workspace-${name}.png`, fullPage: true });
-    await context.close();
-  }
-
-  const activeState = structuredClone(baseState);
-  activeState.runtime = { ...activeState.runtime, lastRunAt: new Date().toISOString(), lastProviderStatus: 'ok', lastError: null, coverageStatus:'available', effectiveWatchlistCount:activeState.settings.watchlist.length, uncoveredWatchlistCount:0, effectiveWatchlist:activeState.settings.watchlist.map((item)=>item.symbol) };
-  activeState.quotes = activeState.settings.watchlist.map(({ symbol }) => ({ symbol }));
-  activeState.signals = [];
-  await checkWorkspaceState('active-empty', activeState, ['監控運作正常', '本輪已完成檢查，目前尚未有股票符合條件。'], ['3','0','0']);
-
-  const errorState = structuredClone(activeState);
-  errorState.runtime = { ...errorState.runtime, lastProviderStatus: 'error', lastError: 'HF_DOWNLOAD_FAILED' };
-  await checkWorkspaceState('provider-error', errorState, ['目前無法取得行情資料', '本輪尚未完成篩選'], ['0','0','3']);
-
-  const scopeUnknownState=structuredClone(activeState);
-  scopeUnknownState.runtime={...scopeUnknownState.runtime,lastProviderStatus:'coverage_unknown',lastError:'HF_UNIVERSE_SOURCE_FAILED',coverageStatus:'unknown',effectiveWatchlistCount:null,effectiveWatchlist:[]};
-  await checkWorkspaceState('scope-unknown',scopeUnknownState,['目前無法確認系統監控範圍','本輪未執行股票條件判定'],['—','0','—']);
-
-  const emptyScopeState=structuredClone(activeState);
-  emptyScopeState.runtime={...emptyScopeState.runtime,lastProviderStatus:'empty_scope',lastError:null,coverageStatus:'available',effectiveWatchlistCount:0,uncoveredWatchlistCount:emptyScopeState.settings.watchlist.length,effectiveWatchlist:[]};
-  await checkWorkspaceState('empty-scope',emptyScopeState,['目前沒有系統名單涵蓋股票','本輪沒有股票進入條件判定'],['0','0','0']);
-
-  const signalState = structuredClone(activeState);
-  signalState.signals = [{ id:'ui-test-signal', symbol:'2330', name:'台積電', market:'TWSE', price:900, triggeredAt:new Date().toISOString(), referenceHigh:895, volume:200, volumeThreshold:180 }];
-  signalState.notifications = [{ id:'ui-test-notification', signalId:'ui-test-signal', status:'pending' }];
-  await checkWorkspaceState('active-signal', signalState, ['目前有 1 檔', '2330 台積電'], ['3','1','0']);
-
-  const pausedState = structuredClone(activeState);
-  pausedState.settings.enabled = false;
-  await checkWorkspaceState('paused-empty', pausedState, ['監控目前暫停', '本輪已完成檢查，目前尚未有股票符合條件。'], ['3','0','0']);
-
-  const pausedWaitingState = structuredClone(baseState);
-  pausedWaitingState.settings.enabled = false;
-  pausedWaitingState.runtime={...pausedWaitingState.runtime,coverageStatus:'available',effectiveWatchlistCount:pausedWaitingState.settings.watchlist.length,uncoveredWatchlistCount:0,effectiveWatchlist:pausedWaitingState.settings.watchlist.map((item)=>item.symbol)};
-  await checkWorkspaceState('paused-waiting-mobile', pausedWaitingState, ['監控目前暫停', '目前仍在等待今日行情', '等待今日 M1 行情；完整 K 棒到達後會自動檢查指標條件'], ['0','0','3']);
-  await checkWorkspaceState('paused-waiting-desktop', pausedWaitingState, ['監控目前暫停', '目前仍在等待今日行情', '等待今日 M1 行情；完整 K 棒到達後會自動檢查指標條件'], ['0','0','3'], { width:1440, height:900 });
-
-  const pausedErrorState = structuredClone(errorState);
-  pausedErrorState.settings.enabled = false;
-  await checkWorkspaceState('paused-provider-error', pausedErrorState, ['監控目前暫停', '目前行情資料異常', '本輪尚未完成篩選'], ['0','0','3']);
-
-  const pausedSignalState = structuredClone(signalState);
-  pausedSignalState.settings.enabled = false;
-  await checkWorkspaceState('paused-signal', pausedSignalState, ['監控目前暫停', '目前有 1 檔', '2330 台積電'], ['3','1','0']);
-
-  async function checkUniverseResponse(name, response, expectedText) {
-    const context=await browser.newContext({viewport:{width:390,height:844}}); const statePage=await context.newPage();
-    await statePage.route('**/api/state',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(activeState)}));
-    await statePage.route('**/api/system-universe**',(route)=>route.fulfill({status:response.status,contentType:'application/json',body:JSON.stringify(response.body)}));
-    await statePage.goto(baseURL); await statePage.getByRole('button',{name:'系統監控名單'}).click();
-    for(const text of expectedText)await statePage.getByText(text,{exact:false}).first().waitFor();
-    await context.close();
-  }
-  await checkUniverseResponse('missing',{status:503,body:{status:'missing',error:'HF_UNIVERSE_NOT_FOUND'}},['目前沒有系統監控名單']);
-  await checkUniverseResponse('error',{status:503,body:{status:'error',error:'HF_UNIVERSE_SOURCE_FAILED'}},['目前無法取得系統監控名單']);
-  console.log(JSON.stringify({ desktop: 'ok', mobile: 'ok', onboarding: 'step1-step4', coverage:{example:'10/6/4',revisionChange:'recomputed',unknown:'not-zero'}, systemUniverse: { observedTotal:expectedUniverse.total, search:'ok', pagination:'ok', states:['available','missing','error'] }, states: ['waiting','active-empty','provider-error','scope-unknown','empty-scope','active-signal','paused-empty','paused-waiting','paused-provider-error','paused-signal'], overflow: false, isolatedState: true }));
-} finally {
-  await browser?.close();
-  serverProcess.kill('SIGTERM');
-  await Promise.race([
-    new Promise((resolve) => serverProcess.once('exit', resolve)),
-    new Promise((resolve) => setTimeout(resolve, 2000))
-  ]);
-  await rm(stateDirectory, { recursive: true, force: true });
-}
+const root=new URL('../',import.meta.url).pathname,output=new URL('../artifacts/',import.meta.url).pathname;await mkdir(output,{recursive:true});const dir=await mkdtemp(join(tmpdir(),'watch365-agent-ui-')),port=await freePort(),base=`http://127.0.0.1:${port}`;
+const server=spawn(process.execPath,['src/server.js'],{cwd:root,env:{...process.env,PORT:String(port),WATCH365_DATA_FILE:join(dir,'state.json'),WATCH365_INDICATOR_REQUESTS_FILE:join(dir,'requests.json'),INDICATOR_AGENT_PROVIDER:'',INDICATOR_AGENT_MODEL:''},stdio:['ignore','pipe','pipe']});let serverOutput='';server.stdout.on('data',(c)=>serverOutput+=c);server.stderr.on('data',(c)=>serverOutput+=c);await waitForServer();let browser;
+try{
+  const baseline=(await fetch(`${base}/api/state`).then((r)=>r.json())).settings;browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+  const desktop=await browser.newContext({viewport:{width:1440,height:900}}),page=await desktop.newPage();await page.goto(base);await page.getByRole('heading',{name:'你想怎麼監控？'}).waitFor();
+  await page.getByRole('radio',{name:/盯指定股票/}).click();await page.getByRole('button',{name:'繼續設定'}).click();await page.getByRole('heading',{name:'先選股票，再設定條件'}).waitFor();
+  await page.getByPlaceholder('輸入股票代號，例如 2330、2454').fill('2330 2454');await page.getByRole('button',{name:'送出'}).click();await page.getByText(/右側股票清單已同步更新/).waitFor();if(await page.locator('#draftList .stock-row').count()!==2)throw new Error('chat_stock_not_synced');
+  await page.getByRole('tab',{name:'條件'}).click();await page.locator('#conditionSection > summary').click();await page.getByLabel('條件',{exact:true}).selectOption('sma.cross@1.0.0');await page.getByLabel('SMA 期數').fill('37');await page.getByRole('button',{name:'加入條件'}).click();await page.getByLabel('任一符合').check();
+  await page.getByRole('button',{name:'查看完整草案'}).click();await page.getByRole('heading',{name:'確認監控草案'}).waitFor();await page.getByText('2 檔指定股票',{exact:true}).waitFor();await page.getByText('任一條件符合',{exact:true}).waitFor();await page.getByText('草案 · 尚未啟用',{exact:true}).waitFor();if(await page.locator('.inspector-detail[open]').count())throw new Error('advanced_details_open_by_default');const firstCondition=page.locator('#conditionList .condition-row').first();if(await firstCondition.getByText(/SMA 期數 37/).isVisible())throw new Error('condition_params_visible_when_collapsed');await firstCondition.getByText('查看參數與公式',{exact:true}).click();await firstCondition.getByText(/SMA 期數 37/).waitFor();await firstCondition.getByText('查看參數與公式',{exact:true}).click();await page.screenshot({path:`${output}desktop-converged-watchlist.png`,fullPage:true});
+  await page.reload();await page.getByRole('heading',{name:'確認監控草案'}).waitFor();if(!await page.getByText(/2330/).count())throw new Error('refresh_lost_draft');await page.getByRole('button',{name:'保留草案'}).click();if(!await page.getByRole('button',{name:'草案已保留'}).isDisabled())throw new Error('draft_a_not_marked_saved');await page.getByRole('button',{name:'返回修改'}).click();await page.getByRole('button',{name:'返回目的'}).click();
+  await page.getByRole('radio',{name:/用指標找股票/}).click();await page.getByRole('button',{name:'繼續設定'}).click();await page.getByRole('heading',{name:'先設定條件，再確認系統範圍'}).waitFor();if(await page.locator('#draftList .stock-row').count())throw new Error('purpose_state_leaked');await page.getByText('HF 每日最新系統名單').waitFor();
+  await page.getByPlaceholder('描述條件，例如一分鐘 RSI 14 上穿 30').fill('一分鐘 RSI 14 上穿 30');await page.getByRole('button',{name:'送出'}).click();await page.getByText('Agent 尚未設定，仍可使用手動條件。',{exact:true}).waitFor();await page.locator('#conditionSection > summary').click();await page.getByLabel('條件',{exact:true}).selectOption('rsi.cross@1.0.0');await page.getByLabel('RSI 期數').fill('14');await page.getByLabel('上穿門檻').fill('30');await page.getByRole('button',{name:'加入條件'}).click();await page.getByLabel('條件',{exact:true}).selectOption('sma.cross@1.0.0');await page.getByLabel('SMA 期數').fill('20');await page.getByRole('button',{name:'加入條件'}).click();await page.getByRole('button',{name:'查看完整草案'}).click();const draftBSave=page.getByRole('button',{name:'保留草案'});if(!await draftBSave.isEnabled())throw new Error('draft_b_save_not_reset');await page.getByText('草案 · 尚未啟用',{exact:true}).waitFor();await draftBSave.click();if(!await page.getByRole('button',{name:'草案已保留'}).isDisabled())throw new Error('draft_b_not_saved');await page.screenshot({path:`${output}desktop-agent-screen.png`,fullPage:true});await page.locator('#conditionList .condition-row').first().getByRole('button',{name:'移除條件'}).click();if(!await draftBSave.isEnabled())throw new Error('valid_dirty_draft_not_reset');await page.getByText('草案 · 尚未啟用',{exact:true}).waitFor();await page.locator('#conditionList .condition-row').first().getByRole('button',{name:'移除條件'}).click();if(!await draftBSave.isDisabled())throw new Error('invalid_draft_save_enabled');await page.getByText('草案尚未完整',{exact:true}).waitFor();if(await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('desktop_overflow');await assertSettingsUnchanged(baseline);await desktop.close();
+  const candidateContext=await browser.newContext({viewport:{width:1100,height:800}}),candidatePage=await candidateContext.newPage();await candidatePage.route('**/api/indicator-agent/parse',(route)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'existing',summary:'價格上穿 SMA（SMA 期數 20） · M1',proposal:{id:'sma.cross',version:'1.0.0',timeframe:'1m',definitionFingerprint:'test',params:{period:20}}})}));await candidatePage.goto(base);await candidatePage.getByRole('radio',{name:/用指標找股票/}).click();await candidatePage.getByRole('button',{name:'繼續設定'}).click();if(!await candidatePage.getByRole('button',{name:'送出'}).isDisabled())throw new Error('empty_send_enabled');await candidatePage.getByPlaceholder('描述條件，例如一分鐘 RSI 14 上穿 30').fill('一分鐘價格上穿 SMA 20');if(JSON.stringify(await visibleEnabledPrimaryNames(candidatePage))!==JSON.stringify(['送出']))throw new Error('input_primary_count');await candidatePage.getByRole('button',{name:'送出'}).click();await candidatePage.getByText('可加入草案',{exact:true}).waitFor();if(await candidatePage.locator('#conditionList .condition-row').count())throw new Error('candidate_added_without_confirmation');if(await candidatePage.getByRole('button',{name:'查看完整草案'}).isVisible())throw new Error('candidate_competes_with_next_action');if(await candidatePage.locator('#agentInput').isVisible())throw new Error('candidate_editor_still_visible');if(JSON.stringify(await visibleEnabledPrimaryNames(candidatePage))!==JSON.stringify(['加入草案']))throw new Error('candidate_primary_count');await candidatePage.screenshot({path:`${output}desktop-converged-candidate.png`,fullPage:true});await candidatePage.getByRole('button',{name:'加入草案'}).click();if(await candidatePage.locator('#conditionList .condition-row').count()!==1)throw new Error('candidate_confirmation_failed');if(!await candidatePage.getByRole('button',{name:'查看完整草案'}).isVisible())throw new Error('next_action_not_restored');if(JSON.stringify(await visibleEnabledPrimaryNames(candidatePage))!==JSON.stringify(['查看完整草案']))throw new Error('preview_primary_count');await candidatePage.getByRole('button',{name:'返回目的'}).click();await candidatePage.locator('#conditionList .condition-row').getByRole('button',{name:'修改'}).click();await candidatePage.getByRole('heading',{name:'先設定條件，再確認系統範圍'}).waitFor();if(!await candidatePage.locator('#conditionSection').evaluate((node)=>node.open))throw new Error('inspector_edit_tool_not_open');if(await candidatePage.getByLabel('SMA 期數').inputValue()!=='20')throw new Error('inspector_edit_params_lost');await candidatePage.getByLabel('SMA 期數').fill('22');await candidatePage.getByRole('button',{name:'更新條件'}).click();const updatedRow=candidatePage.locator('#conditionList .condition-row');await updatedRow.getByText('查看參數與公式',{exact:true}).click();await updatedRow.getByText(/SMA 期數 22/).waitFor();await candidateContext.close();
+  const formulaContext=await browser.newContext({viewport:{width:1100,height:800}}),formulaPage=await formulaContext.newPage();const fullFormula='價格與成交量複合條件：收盤價向上穿越 EMA(收盤價, 12) 且成交量大於 SMA(成交量, 20) 乘以 1.5';await formulaPage.addInitScript((summary)=>localStorage.setItem('watch365_draft_v3',JSON.stringify({step:2,purpose:'screen',branches:{watchlist:{watchlist:[],conditions:[],matchMode:'all'},screen:{conditions:[{id:'formula-1',kind:'formula',sourceText:'價格與成交量複合條件',summary}],matchMode:'all'}}})),fullFormula);await formulaPage.goto(base);const formulaRow=formulaPage.locator('#conditionList .condition-row');await formulaRow.getByText('自訂公式：價格與成交量複合條件',{exact:true}).waitFor();if(await formulaRow.getByText(fullFormula,{exact:true}).isVisible())throw new Error('formula_detail_visible_when_collapsed');await formulaRow.getByText('查看參數與公式',{exact:true}).click();await formulaRow.getByText(fullFormula,{exact:true}).waitFor();await formulaContext.close();
+  const deleteContext=await browser.newContext({viewport:{width:1100,height:800}}),deletePage=await deleteContext.newPage();let releaseDelete;await deletePage.route('**/api/indicator-agent/parse',async(route)=>{await new Promise((resolve)=>releaseDelete=resolve);await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'existing',summary:'價格上穿 SMA（SMA 期數 30） · M1',proposal:{id:'sma.cross',version:'1.0.0',timeframe:'1m',definitionFingerprint:'test',params:{period:30}}})});});await deletePage.goto(base);await deletePage.getByRole('radio',{name:/用指標找股票/}).click();await deletePage.getByRole('button',{name:'繼續設定'}).click();await deletePage.locator('#conditionSection > summary').click();await deletePage.getByLabel('條件',{exact:true}).selectOption('sma.cross@1.0.0');await deletePage.getByRole('button',{name:'加入條件'}).click();await deletePage.locator('#conditionList .condition-row').getByRole('button',{name:'修改'}).click();await deletePage.getByPlaceholder('描述條件，例如一分鐘 RSI 14 上穿 30').fill('一分鐘價格上穿 SMA 30');await deletePage.getByRole('button',{name:'送出'}).click();await deletePage.locator('#conditionList .condition-row').getByRole('button',{name:'移除條件'}).click();releaseDelete();await deletePage.waitForTimeout(100);if(await deletePage.getByText('可加入草案',{exact:true}).isVisible().catch(()=>false)||await deletePage.getByRole('button',{name:'加入草案'}).isVisible().catch(()=>false))throw new Error('deleted_edit_candidate_visible');await deleteContext.close();
+  const raceContext=await browser.newContext({viewport:{width:1100,height:800}}),racePage=await raceContext.newPage();let release;await racePage.route('**/api/indicator-agent/parse',async(route)=>{await new Promise((resolve)=>release=resolve);await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'existing',summary:'價格上穿 SMA（SMA 期數 20） · M1',proposal:{id:'sma.cross',version:'1.0.0',timeframe:'1m',definitionFingerprint:'test',params:{period:20}}})});});await racePage.goto(base);await racePage.getByRole('radio',{name:/盯指定股票/}).click();await racePage.getByRole('button',{name:'繼續設定'}).click();await racePage.getByRole('tab',{name:'條件'}).click();await racePage.getByPlaceholder('描述條件，例如一分鐘 RSI 14 上穿 30').fill('一分鐘價格上穿 SMA 20');await racePage.getByRole('button',{name:'送出'}).click();await racePage.getByRole('tab',{name:'股票'}).click();release();await racePage.waitForTimeout(100);if(await racePage.getByRole('button',{name:'加入草案'}).isVisible().catch(()=>false))throw new Error('stale_candidate_visible');await raceContext.close();
+  const mobile=await browser.newContext({viewport:{width:390,height:844}}),mobilePage=await mobile.newPage();await mobilePage.goto(base);await mobilePage.getByRole('radio',{name:/用指標找股票/}).click();await mobilePage.getByRole('button',{name:'繼續設定'}).click();await mobilePage.getByRole('heading',{name:'先設定條件，再確認系統範圍'}).waitFor();await mobilePage.locator('#draftDrawer > summary').click();await mobilePage.locator('#draftDrawer > summary').click();if(await mobilePage.locator('.inspector-detail[open]').count())throw new Error('mobile_advanced_details_open_by_default');await mobilePage.screenshot({path:`${output}mobile-converged-workspace.png`,fullPage:true});if(await mobilePage.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth))throw new Error('mobile_overflow');await mobile.close();
+  console.log(JSON.stringify({desktop:['watchlist-chat','screen-chat'],mobile:'390x844',progress:'compact-top',advancedDetails:'collapsed',candidatePrimary:true,canonicalSync:true,purposeIsolation:true,candidateConfirmation:true,staleGuard:true,manualFallback:true,persistence:true,formalSettings:'unchanged',overflow:false}));
+}finally{await browser?.close();server.kill('SIGTERM');await Promise.race([new Promise((r)=>server.once('exit',r)),new Promise((r)=>setTimeout(r,2000))]);await rm(dir,{recursive:true,force:true});}
+async function assertSettingsUnchanged(expected){const actual=(await fetch(`${base}/api/state`).then((r)=>r.json())).settings;if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('formal_settings_changed');}
+async function visibleEnabledPrimary(page){return page.locator('button.btn-primary').evaluateAll((buttons)=>buttons.filter((button)=>!button.disabled&&!button.hidden&&button.getClientRects().length>0).length);}
+async function visibleEnabledPrimaryNames(page){return page.locator('button.btn-primary').evaluateAll((buttons)=>buttons.filter((button)=>!button.disabled&&!button.hidden&&button.getClientRects().length>0).map((button)=>button.textContent.trim()));}
+async function freePort(){return new Promise((resolve,reject)=>{const probe=createServer();probe.once('error',reject);probe.listen(0,'127.0.0.1',()=>{const {port}=probe.address();probe.close((error)=>error?reject(error):resolve(port));});});}
+async function waitForServer(){for(let i=0;i<100;i++){if(server.exitCode!==null)throw new Error(`server_exited:${serverOutput}`);try{if((await fetch(base)).ok)return;}catch{}await new Promise((r)=>setTimeout(r,50));}throw new Error(`server_timeout:${serverOutput}`);}

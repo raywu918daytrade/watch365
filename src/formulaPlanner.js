@@ -1,4 +1,4 @@
-import { requestStructuredAgent } from './indicatorAgent.js';
+import { analyzeIndicatorRequest, requestStructuredAgent } from './indicatorAgent.js';
 import { validateStrategy } from './indicatorRegistry.js';
 import { formulaSummary, validateFormula } from './formulaEngine.js';
 
@@ -15,19 +15,26 @@ export const FORMULA_PLAN_SCHEMA={type:'object',additionalProperties:false,prope
 export async function planMonitorCondition(text,definitions,{context=[],...options}={}){
   const request=String(text||'').trim();if(!request)throw plannerError('INDICATOR_AGENT_INPUT_REQUIRED',400);if(request.length>500)throw plannerError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
   const history=validateContext(context);
+  const registryResult=await analyzeIndicatorRequest(request,definitions,{...options,context:history});
+  if(registryResult.status==='matched')return{status:'existing',summary:registryResult.summary,proposal:registryResult.proposal,provider:registryResult.provider};
+  if(registryResult.status==='clarification')return{status:'clarification',message:registryResult.question,provider:registryResult.provider};
+  const deterministic=knownUnsupportedFormula(registryResult,definitions);if(deterministic)return deterministic;
+  if(registryResult.requestDraft?.requestedIndicator!=='other')return{status:'discussion',message:registryResult.reason||'這項 registry 條件目前不支援，請調整週期或方向。',provider:registryResult.provider};
   const registry=definitions.map(({id,version,name,timeframe,params,condition})=>({id,version,name,timeframe,params,condition}));
   const system=[
     '你是台股盤中監控條件規劃器，只能輸出 schema，不得執行程式。所有說明使用繁體中文。',
     '只允許當日已完成的一分鐘K：close、volume、常數、add/sub/mul/div、任意數值序列的SMA/EMA、crosses_above/crosses_below/gte/lte，以及最多兩條布林條件的all。週期2到200；總暖機需求不可超過台股當日270根完整K，不可跨日補資料。',
     'nodes 必須依相依順序排列且 id 唯一；source填field；constant填value；sma/ema填inputId與period；二元運算與比較填leftId/rightId；all也用leftId/rightId。其他不適用欄位一律null。rootId指向最後布林節點。',
     'MACD(12,26,9)表示 EMA(close,12)-EMA(close,26)，訊號線表示 EMA(前述差值,9)，可直接產生公式，不要回discussion。',
-    '使用者明確指定可計算公式且資訊完整時回formula。能完全對應Registry時回existing。缺少週期、比較方向、比較對象或門檻時回clarification且message只問必要問題，禁止猜測。要求5分、日線、跨股票、外部資料、未完成K、超過當日270根暖機或能力外運算時回discussion，message需提出可計算的替代方向並說明必須由使用者確認。',
-    'formula與existing都必須明確是1m；使用者未指定資料週期時回clarification。existing才填indicatorId/version/params；formula才填nodes/rootId。',
+    '這是公式階段，只能回formula、clarification或discussion，禁止回existing。使用者明確指定可計算公式且資訊完整時回formula。缺少週期、比較方向、比較對象或門檻時回clarification且message只問必要問題，禁止猜測。要求5分、日線、跨股票、外部資料、未完成K、超過當日270根暖機或能力外運算時回discussion，message需提出可計算的替代方向並說明必須由使用者確認。',
+    'formula必須明確是1m；使用者未指定資料週期時回clarification。formula的indicatorId/version與params值一律null，只填nodes/rootId。',
     `Registry: ${JSON.stringify(registry)}`
   ].join('\n');
   const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
   const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,options);
-  return validatePlan(raw,definitions,status);
+  const result=validatePlan(raw,definitions,status);
+  if(result.status==='existing')throw plannerError('FORMULA_PLAN_INVALID',422);
+  return result;
 }
 
 export function validatePlan(raw,definitions,provider={provider:'stub',model:'stub'}){
@@ -39,6 +46,7 @@ export function validatePlan(raw,definitions,provider={provider:'stub',model:'st
   if(raw.status==='existing'){
     if(raw.nodes.length||raw.rootId!==null)throw plannerError('FORMULA_PLAN_INVALID',422);
     const definition=definitions.find((item)=>item.id===raw.indicatorId&&item.version===raw.version);if(!definition)throw plannerError('FORMULA_PLAN_INVALID',422);
+    for(const key of ['period','threshold'])if(!definition.params.some((item)=>item.key===key)&&raw.params[key]!==null)throw plannerError('FORMULA_PLAN_INVALID',422);
     const params={};for(const schema of definition.params){const value=raw.params[schema.key];if(value==null)throw plannerError('FORMULA_PLAN_INVALID',422);params[schema.key]=value;}
     let strategy;try{strategy=validateStrategy({id:definition.id,version:definition.version,timeframe:'1m',params},definition);}catch{throw plannerError('FORMULA_PLAN_INVALID',422);}
     return{status:'existing',summary:`${definition.name}${definition.params.length?`（${definition.params.map((item)=>`${item.label} ${strategy.params[item.key]}`).join('、')}）`:''} · M1`,proposal:{id:strategy.id,version:strategy.version,timeframe:'1m',definitionFingerprint:definition.fingerprint,params:strategy.params},provider};
@@ -48,6 +56,8 @@ export function validatePlan(raw,definitions,provider={provider:'stub',model:'st
   const name=raw.name.trim();if(name.length<2||name.length>100)throw plannerError('FORMULA_PLAN_INVALID',422);
   return{status:'formula',summary:`${name} · 一分鐘`,formulaSummary:formulaSummary(ast),proposal:{name,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider};
 }
+
+function knownUnsupportedFormula(result,definitions){const draft=result.requestDraft;if(!draft||draft.requestedIndicator!=='sma'||draft.requestedTimeframe!=='1m'||draft.requestedDirection!=='crosses_below'||!Number.isFinite(draft.params?.period)||draft.params?.threshold!==null)return null;const definition=definitions.find((item)=>item.executor==='sma_cross');if(!definition)return null;let strategy;try{strategy=validateStrategy({id:definition.id,version:definition.version,timeframe:'1m',params:{period:draft.params.period}},definition);}catch{return null;}const ast={op:'crosses_below',left:{op:'source',field:'close'},right:{op:'sma',input:{op:'source',field:'close'},period:strategy.params.period}};const validated=validateFormula(ast);return{status:'formula',summary:`價格下穿 SMA ${strategy.params.period} · 一分鐘`,formulaSummary:formulaSummary(validated.ast),proposal:{name:`價格下穿 SMA ${strategy.params.period}`,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider:result.provider};}
 
 function compileGraph(nodes,rootId){if(!Array.isArray(nodes)||nodes.length<1||nodes.length>32||typeof rootId!=='string')throw plannerError('FORMULA_PLAN_INVALID',422);const built=new Map();for(const node of nodes){exactObject(node,['id','op','field','value','period','inputId','leftId','rightId']);if(!/^[a-z0-9][a-z0-9_]{0,31}$/i.test(node.id)||built.has(node.id)||!NODE_OPS.includes(node.op))throw plannerError('FORMULA_PLAN_INVALID',422);validateNodeFields(node);let ast;if(node.op==='source')ast={op:'source',field:node.field};else if(node.op==='constant')ast={op:'constant',value:node.value};else if(['sma','ema'].includes(node.op))ast={op:node.op,input:lookup(built,node.inputId),period:node.period};else if(node.op==='all')ast={op:'all',items:[lookup(built,node.leftId),lookup(built,node.rightId)]};else ast={op:node.op,left:lookup(built,node.leftId),right:lookup(built,node.rightId)};built.set(node.id,ast);}return lookup(built,rootId);}
 function validateNodeFields(node){const nulled=(...keys)=>keys.every((key)=>node[key]===null);if(node.op==='source'&&['close','volume'].includes(node.field)&&nulled('value','period','inputId','leftId','rightId'))return;if(node.op==='constant'&&Number.isFinite(node.value)&&nulled('field','period','inputId','leftId','rightId'))return;if(['sma','ema'].includes(node.op)&&Number.isInteger(node.period)&&typeof node.inputId==='string'&&nulled('field','value','leftId','rightId'))return;if(['add','sub','mul','div','crosses_above','crosses_below','gte','lte','all'].includes(node.op)&&typeof node.leftId==='string'&&typeof node.rightId==='string'&&nulled('field','value','period','inputId'))return;throw plannerError('FORMULA_PLAN_INVALID',422);}

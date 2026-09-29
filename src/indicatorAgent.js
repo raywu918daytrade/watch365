@@ -25,10 +25,11 @@ export function indicatorAgentStatus(env=process.env){
   return{configured:true,provider,model,reason:null};
 }
 
-export async function analyzeIndicatorRequest(text,definitions,{env=process.env,fetchImpl=fetch}={}){
+export async function analyzeIndicatorRequest(text,definitions,{env=process.env,fetchImpl=fetch,context=[]}={}){
   const request=String(text||'').trim();
   if(!request)throw agentError('INDICATOR_AGENT_INPUT_REQUIRED',400);
   if(request.length>500)throw agentError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
+  const history=validateConversationContext(context);
   const capabilities=definitions.map(({id,version,name,timeframe,params,condition})=>({id,version,name,timeframe,params,condition}));
   const system=[
     '你是台股監控條件解析器。只能從提供的 registry 選擇，不能發明、替換週期、替換方向或生成程式。',
@@ -40,7 +41,8 @@ export async function analyzeIndicatorRequest(text,definitions,{env=process.env,
     '範例：「我要RSI」應回 status=clarification、requestedIndicator=rsi、requestedTimeframe=unknown、requestedDirection=unknown、period=null、threshold=null，並以繁體中文詢問缺少資訊。',
     `Registry: ${JSON.stringify(capabilities)}`
   ].join('\n');
-  const {raw,status}=await requestStructuredAgent(system,request,AGENT_OUTPUT_SCHEMA,TOOL_NAME,{env,fetchImpl,maxTokens:1200});
+  const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
+  const {raw,status}=await requestStructuredAgent(system,user,AGENT_OUTPUT_SCHEMA,TOOL_NAME,{env,fetchImpl,maxTokens:1200});
   return validateAgentOutput(raw,definitions,status);
 }
 
@@ -59,6 +61,7 @@ export function validateAgentOutput(raw,definitions,provider={provider:'stub',mo
   const definition=definitions.find((item)=>item.id===raw.indicatorId&&item.version===raw.version);
   if(!definition)return unsupportedResult(raw,'模型提出的指標版本不在目前 registry',provider);
   if(raw.timeframe!==definition.timeframe||!requestMatchesDefinition(raw,definition))return unsupportedResult(raw,'需求的週期、方向或指標與目前支援能力不符',provider);
+  for(const key of ['period','threshold'])if(!definition.params.some((item)=>item.key===key)&&raw.params[key]!==null)throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',422);
   const params={}; let missing=false;
   for(const schema of definition.params){const value=raw.params[schema.key];if(value==null){missing=true;params[schema.key]=schema.default;}else params[schema.key]=value;}
   let strategy;
@@ -122,4 +125,5 @@ async function providerJson(response){
 }
 function clampTimeout(value){const number=Number(value||10000);return Number.isFinite(number)?Math.min(30000,Math.max(1000,number)):10000;}
 function nullableStrings(values){return values.every((value)=>value===null||typeof value==='string');}
+function validateConversationContext(value){if(!Array.isArray(value)||value.length>4)throw agentError('INDICATOR_AGENT_CONTEXT_INVALID',400);return value.map((item)=>{if(!item||typeof item!=='object'||Array.isArray(item)||Object.keys(item).sort().join(',')!=='request,response'||typeof item.request!=='string'||typeof item.response!=='string'||item.request.length>500||item.response.length>500)throw agentError('INDICATOR_AGENT_CONTEXT_INVALID',400);return{request:item.request,response:item.response};});}
 function agentError(code,statusCode){return Object.assign(new Error(code),{code,statusCode});}

@@ -14,7 +14,7 @@ const nodes=[
   {id:'signal',op:'ema',field:null,value:null,period:9,inputId:'macd',leftId:null,rightId:null},
   {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'macd',rightId:'signal'}
 ];
-const model=createServer(async(request,response)=>{for await(const _ of request){}response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify({status:'formula',message:'',name:'MACD 上穿訊號線',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes,rootId:'cross'})}}]}));});await new Promise((resolve)=>model.listen(modelPort,'127.0.0.1',resolve));
+const model=createServer(async(request,response)=>{let body='';for await(const chunk of request)body+=chunk;const payload=JSON.parse(body);const registry=payload.response_format?.json_schema?.name==='submit_indicator_request';const output=registry?{status:'unsupported',indicatorId:null,version:null,timeframe:null,params:{period:null,threshold:null},requestedIndicator:'other',requestedTimeframe:'1m',requestedDirection:'crosses_above',clarificationQuestion:'',unsupportedReason:'需要公式規劃'}:{status:'formula',message:'',name:'MACD 上穿訊號線',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes,rootId:'cross'};response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify(output)}}]}));});await new Promise((resolve)=>model.listen(modelPort,'127.0.0.1',resolve));
 let processHandle;
 try{
   await start();const base=`http://127.0.0.1:${appPort}`;const watchlist=[{symbol:'2330',name:'台積電',market:'TWSE'}];

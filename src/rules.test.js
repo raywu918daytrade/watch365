@@ -494,6 +494,7 @@ test('Agent 含糊需求要求確認；D1、下穿、未知指標與越界輸出
   const down=validateAgentOutput(agentOutput({indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedDirection:'crosses_below',params:{period:14,threshold:30}}),definitions); assert.equal(down.status,'unsupported');
   const macd=validateAgentOutput(agentOutput({status:'unsupported',indicatorId:null,version:null,timeframe:null,requestedIndicator:'other',requestedDirection:'unknown',params:{period:null,threshold:null},unsupportedReason:'MACD 尚未支援'}),definitions); assert.equal(macd.status,'unsupported');
   assert.throws(()=>validateAgentOutput(agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:999,threshold:null}}),definitions),/INDICATOR_AGENT_OUTPUT_INVALID/);
+  assert.throws(()=>validateAgentOutput(agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:20,threshold:30}}),definitions),/INDICATOR_AGENT_OUTPUT_INVALID/);
   assert.throws(()=>validateAgentOutput({...agentOutput({}),executor:'eval(userInput)'},definitions),/INDICATOR_AGENT_OUTPUT_INVALID/);
   assert.throws(()=>validateAgentOutput({...agentOutput({}),params:{period:'20',threshold:null}},definitions),/INDICATOR_AGENT_OUTPUT_INVALID/);
   const proposal=validateAgentOutput(agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:20,threshold:null}}),definitions).proposal;
@@ -600,6 +601,7 @@ test('單一規劃器可分流既有條件、公式、補問與討論，運算�
   const formula=validatePlan({...common,status:'formula',nodes,rootId:'cross'},definitions);assert.equal(formula.status,'formula');assert.match(formula.formulaSummary,/EMA/);assert.equal(formula.proposal.warmupBars,35);
   const numericIds=nodes.map((node,index)=>({...node,id:String(index+1),inputId:node.inputId?String(nodes.findIndex((item)=>item.id===node.inputId)+1):null,leftId:node.leftId?String(nodes.findIndex((item)=>item.id===node.leftId)+1):null,rightId:node.rightId?String(nodes.findIndex((item)=>item.id===node.rightId)+1):null}));assert.equal(validatePlan({...common,status:'formula',nodes:numericIds,rootId:'6'},definitions).proposal.warmupBars,35);
   const sma=definitions.find((item)=>item.id==='sma.cross');const existing=validatePlan({...common,status:'existing',name:'SMA',indicatorId:sma.id,version:sma.version,params:{period:20,threshold:null},nodes:[],rootId:null},definitions);assert.equal(existing.proposal.params.period,20);
+  assert.throws(()=>validatePlan({...common,status:'existing',name:'SMA',indicatorId:sma.id,version:sma.version,params:{period:20,threshold:30},nodes:[],rootId:null},definitions),/FORMULA_PLAN_INVALID/);
   assert.equal(validatePlan({...common,status:'clarification',message:'請問要向上還是向下穿越？',timeframe:null,nodes:[],rootId:null},definitions).status,'clarification');
   assert.equal(validatePlan({...common,status:'discussion',message:'目前只有一分鐘完整K。',nodes:[],rootId:null},definitions).status,'discussion');
   const invalid=structuredClone(nodes);invalid[1].inputId='signal';assert.throws(()=>validatePlan({...common,status:'formula',nodes:invalid,rootId:'cross'},definitions),/FORMULA_PLAN_INVALID/);
@@ -608,11 +610,54 @@ test('單一規劃器可分流既有條件、公式、補問與討論，運算�
 
 test('規劃器補問會把受限對話前文連同本次回答交給同一次規劃', async () => {
   const definitions=await new IndicatorRegistry().list();let captured;
-  const output={status:'clarification',message:'請補充上穿門檻。',name:'',timeframe:null,indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[],rootId:null};
+  const output={status:'clarification',indicatorId:null,version:null,timeframe:null,params:{period:null,threshold:null},requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_above',clarificationQuestion:'請補充上穿門檻。',unsupportedReason:''};
   const fetchImpl=async(_url,options)=>{captured=JSON.parse(options.body);return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(output)}}]}),{status:200,headers:{'content-type':'application/json'}});};
   await planMonitorCondition('30',definitions,{context:[{request:'一分鐘 RSI 14 上穿',response:'請補充上穿門檻。'}],env:{INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'test',GROQ_API_KEY:'secret'},fetchImpl});
   const payload=JSON.parse(captured.messages[1].content);assert.equal(payload.currentReply,'30');assert.equal(payload.previousConversation[0].request,'一分鐘 RSI 14 上穿');
 });
+
+test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與公式 fallback', async () => {
+  const definitions=await new IndicatorRegistry().list();
+  const badRsiFormula={status:'formula',message:'RSI 14 上穿 30',name:'RSI 上穿 30',timeframe:'1m',indicatorId:null,version:null,params:{period:14,threshold:30},nodes:[
+    {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},
+    {id:'sma14',op:'sma',field:null,value:null,period:14,inputId:'close',leftId:null,rightId:null},
+    {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'sma14'}
+  ],rootId:'cross'};
+  assert.throws(()=>validatePlan(badRsiFormula,definitions),/FORMULA_PLAN_INVALID/);
+
+  const env={INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'fixture',GROQ_API_KEY:'secret'};
+  for(const fixture of [
+    {text:'一分鐘 RSI 14 上穿 30',output:agentOutput({indicatorId:'rsi.cross',requestedIndicator:'rsi',params:{period:14,threshold:30}}),id:'rsi.cross'},
+    {text:'一分鐘價格上穿 SMA 20',output:agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:20,threshold:null}}),id:'sma.cross'}
+  ]){
+    let calls=0;const fetchImpl=async()=>{calls++;return groqResponse(fixture.output);};
+    const result=await planMonitorCondition(fixture.text,definitions,{env,fetchImpl});assert.equal(result.status,'existing');assert.equal(result.proposal.id,fixture.id);assert.equal(calls,1);
+  }
+
+  let clarificationBody,calls=0;const clarificationOutput=agentOutput({status:'clarification',indicatorId:null,version:null,timeframe:null,requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_above',params:{period:null,threshold:null},clarificationQuestion:'請補充上穿門檻。'});
+  const clarification=await planMonitorCondition('30',definitions,{context:[{request:'一分鐘 RSI 14 上穿',response:'請補充上穿門檻。'}],env,fetchImpl:async(_url,options)=>{calls++;clarificationBody=JSON.parse(options.body);return groqResponse(clarificationOutput);}});
+  assert.equal(clarification.status,'clarification');assert.equal(clarification.proposal,undefined);assert.equal(calls,1);const conversation=JSON.parse(clarificationBody.messages[1].content);assert.equal(conversation.currentReply,'30');assert.equal(conversation.previousConversation[0].request,'一分鐘 RSI 14 上穿');
+
+  calls=0;const formulaNodes=[{id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},{id:'ema3',op:'ema',field:null,value:null,period:3,inputId:'close',leftId:null,rightId:null},{id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'ema3'}];
+  const unsupported=agentOutput({status:'unsupported',indicatorId:null,version:null,timeframe:null,requestedIndicator:'other',requestedTimeframe:'1m',requestedDirection:'crosses_above',params:{period:null,threshold:null},unsupportedReason:'需要公式規劃'});
+  const formulaOutput={status:'formula',message:'',name:'價格上穿 EMA3',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes:formulaNodes,rootId:'cross'};
+  const formula=await planMonitorCondition('一分鐘價格上穿 EMA 3',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:formulaOutput)});assert.equal(formula.status,'formula');assert.equal(calls,2);
+
+  calls=0;const smaBelow=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:20,threshold:null},unsupportedReason:'registry 僅提供上穿'});const deterministic=await planMonitorCondition('一分鐘收盤價下穿 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(smaBelow);}});assert.equal(deterministic.status,'formula');assert.match(deterministic.formulaSummary,/向下穿越 SMA/);assert.equal(deterministic.proposal.warmupBars,21);assert.equal(calls,1);
+  calls=0;const missingSmaPeriod=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:null,threshold:null},unsupportedReason:'缺少期數'});const missingResult=await planMonitorCondition('一分鐘收盤價下穿 SMA',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(missingSmaPeriod);}});assert.equal(missingResult.status,'discussion');assert.equal(calls,1);
+
+  for(const firstPass of [
+    agentOutput({status:'unsupported',indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:14,threshold:30},unsupportedReason:'RSI 下穿目前不支援'}),
+    agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'d1',requestedDirection:'crosses_above',params:{period:20,threshold:null},unsupportedReason:'日線目前不支援'})
+  ]){calls=0;const result=await planMonitorCondition('不支援的 registry 條件',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(firstPass);}});assert.equal(result.status,'discussion');assert.equal(calls,1);}
+
+  calls=0;const smuggledExisting={status:'existing',message:'',name:'SMA',timeframe:'1m',indicatorId:'sma.cross',version:'1.0.0',params:{period:20,threshold:null},nodes:[],rootId:null};
+  await assert.rejects(()=>planMonitorCondition('自訂條件',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:smuggledExisting)}),/FORMULA_PLAN_INVALID/);assert.equal(calls,2);
+
+  calls=0;await assert.rejects(()=>planMonitorCondition('一分鐘價格上穿 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse({...agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:20,threshold:null}}),executor:'eval'});}}),/INDICATOR_AGENT_OUTPUT_INVALID/);assert.equal(calls,1);
+});
+
+function groqResponse(output){return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(output)}}]}),{status:200,headers:{'content-type':'application/json'}});}
 
 function emptyState() { return { sessions: {}, dedupe: {} }; }
 function warmState() {

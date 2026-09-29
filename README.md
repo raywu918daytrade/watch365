@@ -2,6 +2,10 @@
 
 台股第一階段的本機盯盤服務。唯一正式資料來源是 Hugging Face Dataset，沒有其他資料來源或 fallback。
 
+## UI/UX 原型
+
+最新已確認的 UI 流程記錄於 [`docs/ui-prototype-flow.md`](docs/ui-prototype-flow.md)。該流程目前僅為本地示例原型，尚未接上真實監控、Agent 或通知功能；以下 backend 現況說明不因此改變。
+
 ## HF-only 資料流
 
 - 使用 `HF_REPO_ID` 與 `HF_TOKEN`，設定值不會出現在 API、log 或 capability report。
