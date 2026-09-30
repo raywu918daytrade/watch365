@@ -23,12 +23,14 @@ const ERROR_TEXT={
 };
 const root=document.querySelector('#app');
 let state=load();
-let pollTimer=0,searchTimer=0,seenNotifications=new Set();
+let pollTimer=0,searchTimer=0,aiTimer=0,seenNotifications=new Set();
+// Parse results for first-turn AI requests, keyed by text, so retyping the same words doesn't re-call the model.
+const aiCache=new Map();
 document.querySelector('#homeButton').addEventListener('click',()=>go('home'));
 window.addEventListener('hashchange',render);
 
 function initial(){return{purpose:null,selected:[],watchlist:[],conditions:[],formula:null,activeIndicator:'rsi',drafts:{},requestText:'',ai:null,history:null};}
-function load(){try{return{...initial(),...JSON.parse(localStorage.getItem(KEY))};}catch{return initial();}}
+function load(){try{const saved={...initial(),...JSON.parse(localStorage.getItem(KEY))};if(saved.ai)saved.ai.loading=false;return saved;}catch{return initial();}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{}}
 function resetDraft(){state=initial();save();}
 function node(){return location.hash.slice(1)||'home';}
@@ -164,7 +166,17 @@ function conditions(){
   shell({step:'conditions',title:'設定監控條件',lead:`範圍：${scope}。條件以一分鐘 K 收盤判斷；最多組合 2 個條件，需全部同時成立才觸發。`,back:state.purpose==='watchlist'?'stocks':'home',body:`<label class="proto-search"><input id="indicatorSearch" type="search" placeholder="搜尋 RSI、SMA、EMA，或直接描述條件交給 AI" aria-label="搜尋指標" value="${escapeHtml(state.requestText)}"></label><div class="proto-library proto-inline-library" id="indicatorResults"></div><section id="aiPanel"></section><section class="proto-condition-editor"><p class="proto-eyebrow">目前參數</p><h2>${escapeHtml(item.name)}</h2><p class="proto-signature">${escapeHtml(item.desc)}</p><div class="proto-form"><label>方向<select id="direction">${item.directions.map((value)=>`<option value="${value}" ${draft.direction===value?'selected':''}>${DIRECTION_LABEL[value]}</option>`).join('')}</select></label><label>期數<input id="period" type="number" min="2" max="${item.periodMax}" value="${escapeHtml(draft.period)}"></label>${item.threshold?`<label>門檻<input id="threshold" type="number" min="1" max="99" value="${escapeHtml(draft.threshold)}"></label>`:''}<p id="paramError" class="proto-error" role="alert"></p></div><button id="addCondition" class="proto-secondary">加入這個條件</button></section>${conditionMarkup()}<section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span>${state.formula?'AI 自訂條件':`${state.conditions.length} 個條件`}</span><button id="confirmConditions" class="proto-primary" ${hasConditions()?'':'disabled'}>確認設定</button></div>`});
   bindConditionList();
   const search=root.querySelector('#indicatorSearch'),results=root.querySelector('#indicatorResults');
-  const drawSearch=()=>{const value=search.value.trim(),needle=value.toLowerCase();state.requestText=value;save();const matches=INDICATORS.filter((entry)=>!needle||`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(needle));results.innerHTML=matches.length?matches.map((entry)=>`<button class="proto-indicator-pill ${entry.id===item.id?'active':''}" data-indicator="${entry.id}"><strong>${escapeHtml(entry.name)}</strong><small>已有指標</small></button>`).join(''):`<div class="proto-status"><strong>已有指標找不到「${escapeHtml(value)}」</strong><p>可以交給 AI 解析成監控條件，或提出新指標需求。</p><div class="proto-inline-actions"><button id="aiParse" class="proto-primary">用 AI 解析</button><button id="requestNew" class="proto-secondary">提出需求</button></div></div>`;results.querySelectorAll('[data-indicator]').forEach((button)=>button.addEventListener('click',()=>{state.activeIndicator=button.dataset.indicator;state.requestText='';save();render();}));results.querySelector('#requestNew')?.addEventListener('click',()=>go('request'));results.querySelector('#aiParse')?.addEventListener('click',()=>{state.ai={text:value,context:[],result:null};save();runAi();});};
+  const startAi=(value)=>{clearTimeout(aiTimer);if(state.ai&&state.ai.text===value&&!state.ai.context.length&&(state.ai.loading||state.ai.result||state.ai.error))return;state.ai={text:value,context:[],result:null};save();runAi();};
+  const drawSearch=()=>{
+    const value=search.value.trim(),needle=value.toLowerCase();state.requestText=value;save();clearTimeout(aiTimer);
+    const matches=INDICATORS.filter((entry)=>!needle||`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(needle));
+    results.innerHTML=matches.length?matches.map((entry)=>`<button class="proto-indicator-pill ${entry.id===item.id?'active':''}" data-indicator="${entry.id}"><strong>${escapeHtml(entry.name)}</strong><small>已有指標</small></button>`).join(''):`<p class="proto-signature">已有指標找不到「${escapeHtml(value)}」，${value.length>=2?'已交給 AI 判斷能不能直接監控。':'再多打幾個字，AI 會幫你判斷。'}</p>`;
+    results.querySelectorAll('[data-indicator]').forEach((button)=>button.addEventListener('click',()=>{state.activeIndicator=button.dataset.indicator;state.requestText='';save();render();}));
+    // A stale first-turn AI card for different text is dropped once the search matches again or is cleared.
+    if((matches.length||!value)&&state.ai&&!state.ai.context.length&&state.ai.text!==value){state.ai=null;save();drawAi();}
+    if(!matches.length&&value.length>=2)aiTimer=setTimeout(()=>startAi(value),700);
+  };
+  search.addEventListener('keydown',(event)=>{const value=search.value.trim();if(event.key==='Enter'&&value.length>=2&&!INDICATORS.some((entry)=>`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(value.toLowerCase())))startAi(value);});
   search.addEventListener('input',drawSearch);drawSearch();drawAi();drawHistory();
   const capture=()=>{state.drafts[item.id]={direction:root.querySelector('#direction').value,period:root.querySelector('#period').value,threshold:root.querySelector('#threshold')?.value??null};save();};
   root.querySelectorAll('#direction,#period,#threshold').forEach((input)=>input.addEventListener('input',()=>{capture();root.querySelector('#paramError').textContent='';}));
@@ -189,7 +201,9 @@ function bindConditionList(){root.querySelectorAll('[data-remove]').forEach((but
 async function runAi(){
   const ai=state.ai;if(!ai)return;
   ai.loading=true;ai.error=null;drawAi();
-  try{const result=await api('/api/indicator-agent/parse',{text:ai.text,context:ai.context});if(state.ai!==ai)return;ai.result=result;}
+  const cacheable=!ai.context.length,cached=cacheable?aiCache.get(ai.text):null;
+  if(cached){ai.result=cached;ai.loading=false;save();drawAi();return;}
+  try{const result=await api('/api/indicator-agent/parse',{text:ai.text,context:ai.context});if(cacheable)aiCache.set(ai.text,result);if(state.ai!==ai)return;ai.result=result;}
   catch(error){if(state.ai!==ai)return;ai.result=null;ai.error=errorText(error);}
   ai.loading=false;save();drawAi();
 }
@@ -198,24 +212,37 @@ function registryCondition(proposal){
   if(proposal?.id==='sma.cross')return{indicator:'sma',direction:'above',period:proposal.params.period,threshold:null};
   return null;
 }
+// Unsupported / uncomputable AI results end in a single click: the request is filed from the search text,
+// with the detailed form still one link away for people who want to spell out parameters.
+function quickRequestPayload(text){return{sourceText:text.length>=3?text:`${text} 指標`,indicatorName:text.slice(0,80),timeframe:'1m',parameterDescription:'未指定，評估時確認',triggerCondition:'未指定，評估時確認'};}
+function quickRequestCard(ai,title,message){
+  if(ai.requested)return`<div class="proto-status"><strong>${ai.requested.duplicate?'這個需求已經提過了':'需求已送出'}</strong><p>「${escapeHtml(ai.requested.name)}」目前狀態：待評估。評估完成前請先使用已有指標。</p><button class="proto-link" data-go="request">查看我的需求</button></div>`;
+  return`<div class="proto-status"><strong>${escapeHtml(title)}</strong>${message?`<p>${escapeHtml(message)}</p>`:''}<p class="proto-signature">送出後會列入新指標評估，不會影響目前的條件。</p><div class="proto-inline-actions"><button class="proto-primary" id="aiQuickRequest">送出需求</button><button class="proto-link" id="aiRequest">補充參數再送</button></div></div>`;
+}
 function drawAi(){
   const target=root.querySelector('#aiPanel');if(!target)return;
   const ai=state.ai;if(!ai){target.innerHTML='';return;}
   const head=`<div class="proto-history-head"><div><p class="proto-eyebrow">AI 解析</p><h2>${escapeHtml(ai.text)}</h2></div><button class="proto-link" id="aiClose">關閉</button></div>`;
   let body;
   if(ai.loading)body='<div class="proto-status"><strong>AI 解析中…</strong><p>通常需要幾秒鐘。</p></div>';
-  else if(ai.error)body=`<div class="proto-status"><strong>解析失敗</strong><p>${escapeHtml(ai.error)}</p><div class="proto-inline-actions"><button class="proto-secondary" id="aiRetry">再試一次</button><button class="proto-secondary" id="aiRequest">改為提出需求</button></div></div>`;
+  else if(ai.error)body=`<div class="proto-status"><strong>解析失敗</strong><p>${escapeHtml(ai.error)}</p><div class="proto-inline-actions"><button class="proto-secondary" id="aiRetry">再試一次</button><button class="proto-secondary" id="aiQuickRequest">直接送出需求</button></div></div>`;
   else{
     const result=ai.result||{};
-    if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:`<div class="proto-status"><strong>${escapeHtml(result.summary)}</strong><p>這個指標目前不能從這裡建立。</p><button class="proto-secondary" id="aiRequest">改為提出需求</button></div>`;}
+    if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
     else if(result.status==='formula')body=`<div class="proto-status"><strong>${escapeHtml(result.summary)}</strong><p>計算方式：${escapeHtml(result.formulaSummary)}</p><p class="proto-signature">AI 自訂條件會單獨使用，會取代目前已加入的條件。</p><button class="proto-primary" id="aiUseFormula">使用這個條件</button></div>`;
     else if(result.status==='clarification')body=`<div class="proto-status"><strong>AI 需要多一點資訊</strong><p>${escapeHtml(result.message)}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答上面的問題" aria-label="回答 AI"></label><button class="proto-primary" id="aiSendReply">送出</button></div>`;
-    else body=`<div class="proto-status"><strong>目前無法直接計算</strong><p>${escapeHtml(result.message||'這個條件超出目前可計算的範圍。')}</p><button class="proto-secondary" id="aiRequest">改為提出需求</button></div>`;
+    else body=quickRequestCard(ai,`「${ai.text}」目前還不支援`,result.message||'這個條件超出目前可計算的範圍。');
   }
   target.className='proto-condition-editor';target.innerHTML=head+body;
   target.querySelector('#aiClose').addEventListener('click',()=>{state.ai=null;save();drawAi();});
+  target.querySelectorAll('[data-go]').forEach((button)=>button.addEventListener('click',()=>go(button.dataset.go)));
   target.querySelector('#aiRetry')?.addEventListener('click',runAi);
   target.querySelector('#aiRequest')?.addEventListener('click',()=>{state.requestText=ai.text;state.ai=null;save();go('request');});
+  target.querySelector('#aiQuickRequest')?.addEventListener('click',async(event)=>{
+    const button=event.currentTarget;button.disabled=true;button.textContent='送出中…';
+    try{const result=await api('/api/indicator-requests',quickRequestPayload(ai.text));ai.requested={duplicate:result.duplicate,name:result.request.indicatorName};save();drawAi();}
+    catch(error){button.disabled=false;button.textContent='送出需求';alertInline(errorText(error));}
+  });
   target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{
     const condition=registryCondition(ai.result.proposal);
     if(state.formula){alertInline(ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS);return;}
