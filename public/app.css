@@ -149,3 +149,11 @@
 @media (max-width:640px) { .proto-template { min-height:0; padding:.55rem .6rem; } .proto-footer { display:block; padding-bottom:5.5rem; } }
 .proto-monitor header { align-items:flex-start; }
 .proto-monitor header .proto-badge { flex:none; }
+.proto-version { position:static; margin-left:.4rem; }
+.proto-badge.idle { background:#e6f4f1; color:#087a6e; }
+.proto-condition-editor summary { cursor:pointer; list-style-position:inside; }
+.proto-condition-editor details[open] summary { margin-bottom:.4rem; }
+.proto-monitor-actions .proto-link { margin-left:auto; }
+.proto-notice .proto-inline-actions { margin-top:.6rem; }
+@media (prefers-reduced-motion:reduce) { .proto-statusbar.live i, .proto-skeleton { animation:none; } }
+@media (max-width:640px) { .proto-monitor-actions { flex-direction:column; } .proto-monitor-actions .proto-link { margin:0; } .proto-notice .proto-inline-actions { flex-direction:column-reverse; } }
