@@ -89,8 +89,8 @@ async function routeApi(request, response) {
   // POST with the same body as /api/monitor/configure; GET ?spec=<json> is accepted for quick checks.
   if ((method === 'POST' || method === 'GET') && url.pathname === '/api/history/backtest') {
     let body;
-    try { body = method === 'POST' ? await readJson(request) : JSON.parse(url.searchParams.get('spec') || 'null'); }
-    catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    try { body = method === 'POST' ? await readJson(request) : url.searchParams.has('c') ? await compactHistorySpec(url.searchParams) : JSON.parse(url.searchParams.get('spec') || 'null'); }
+    catch (error) { sendJson(response, 400, { error:error.code || 'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
     if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
     try {
@@ -461,6 +461,19 @@ async function routeApi(request, response) {
   }
 
   sendJson(response, 404, { error: 'Not found' });
+}
+
+// Short GET form for quick checks: ?symbols=2330,2317&c=sma.above.20,ema.below.60 (or ?scope=screen&c=rsi.above.14.30)
+async function compactHistorySpec(params) {
+  const conditions = String(params.get('c')).split(',').map((item) => {
+    const [indicator, direction, period, threshold] = item.split('.');
+    return { indicator, direction, period:Number(period), threshold:threshold === undefined ? null : Number(threshold) };
+  });
+  if (params.get('scope') === 'screen') return { purpose:'screen', conditions };
+  const symbols = String(params.get('symbols') || '').split(',').filter(Boolean);
+  const master = await readHfTickerMaster();
+  const watchlist = symbols.map((symbol) => { const item = master.metadata.get(symbol); if (!item) throw Object.assign(new Error('WATCHLIST_MARKET_REQUIRED'), { code:'WATCHLIST_MARKET_REQUIRED' }); return { symbol, name:item.name, market:item.market }; });
+  return { purpose:'watchlist', watchlist, conditions };
 }
 
 // Builds the strategy for a monitor or a history lookup from either the structured UI conditions
