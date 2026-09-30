@@ -12,6 +12,7 @@ import { compressors } from 'hyparquet-compressors';
 import { downloadHfAsset, loadHfConfig } from './hfAdapter.js';
 import { evaluateFormulaSeries } from './formulaEngine.js';
 import { wilderRsi } from './indicatorEngine.js';
+import { roundPrice } from './marketBar.js';
 
 export const HISTORY_DAYS = 30;
 const COOLDOWN_MS = 30 * 60 * 1000;
@@ -120,7 +121,7 @@ export function collectRows(rows, collector, state = { shift: null, samples: [] 
     const symbol = String(row.stock_id);
     if (!collector.symbols.has(symbol)) continue;
     const start = toMs(row.date);
-    const close = Number(row.close);
+    const close = roundPrice(row.close);
     if (!Number.isFinite(start) || !Number.isFinite(close)) continue;
     const volume = row.volume == null ? null : Number(row.volume);
     if (state.shift === null) {

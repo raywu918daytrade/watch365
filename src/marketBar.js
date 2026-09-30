@@ -63,3 +63,10 @@ export function fromCumulativeVolume(current, previous) {
   if (!Number.isFinite(previous) || previous < 0 || current < previous) return { valid: false, reasonCode: 'volume_reset' };
   return { valid: true, volume: current - previous };
 }
+
+// HF parquet stores prices as float32 (74.6 arrives as 74.5999984741211). The smallest TW tick is 0.01.
+export function roundPrice(value) {
+  if (value === null || value === undefined || value === '') return NaN;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 100) / 100 : number;
+}

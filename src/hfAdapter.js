@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects, parquetSchema } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
-import { normalizeTwSymbol, toTaipeiTradingDate } from './marketBar.js';
+import { normalizeTwSymbol, roundPrice, toTaipeiTradingDate } from './marketBar.js';
 
 export const DEFAULT_CACHE_ROOT = new URL('../cache/hf/', import.meta.url).pathname;
 export const DEFAULT_ENV_PATHS = [
@@ -175,7 +175,7 @@ export async function readHfM1Bars(watchlist, { asOf = new Date(), receivedAt = 
   return rows.filter((row) => metadata.has(String(row.stock_id))).map((row) => {
     const start = String(row.date).includes('T') ? new Date(row.date) : new Date(`${row.date.replace(' ', 'T')}+08:00`);
     const end = new Date(start.getTime() + 60_000);
-    return { symbol: String(row.stock_id), market: metadata.get(String(row.stock_id)), provider: 'hf_dataset', timeframe: '1m', tradingDate: toTaipeiTradingDate(end), barStart: start.toISOString(), barEnd: end.toISOString(), open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: Number(row.volume), complete: true, providerEventAt: end.toISOString(), receivedAt };
+    return { symbol: String(row.stock_id), market: metadata.get(String(row.stock_id)), provider: 'hf_dataset', timeframe: '1m', tradingDate: toTaipeiTradingDate(end), barStart: start.toISOString(), barEnd: end.toISOString(), open: roundPrice(row.open), high: roundPrice(row.high), low: roundPrice(row.low), close: roundPrice(row.close), volume: Number(row.volume), complete: true, providerEventAt: end.toISOString(), receivedAt };
   }).sort((a, b) => a.barEnd.localeCompare(b.barEnd));
 }
 
