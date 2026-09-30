@@ -644,12 +644,18 @@ test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與
   const formula=await planMonitorCondition('一分鐘價格上穿 EMA 3',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:formulaOutput)});assert.equal(formula.status,'formula');assert.equal(calls,2);
 
   calls=0;const smaBelow=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:20,threshold:null},unsupportedReason:'registry 僅提供上穿'});const deterministic=await planMonitorCondition('一分鐘收盤價下穿 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(smaBelow);}});assert.equal(deterministic.status,'formula');assert.match(deterministic.formulaSummary,/向下穿越 SMA/);assert.equal(deterministic.proposal.warmupBars,21);assert.equal(calls,1);
-  calls=0;const missingSmaPeriod=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:null,threshold:null},unsupportedReason:'缺少期數'});const missingResult=await planMonitorCondition('一分鐘收盤價下穿 SMA',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(missingSmaPeriod);}});assert.equal(missingResult.status,'discussion');assert.equal(calls,1);
+  calls=0;const missingSmaPeriod=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:null,threshold:null},unsupportedReason:'缺少期數'});const missingResult=await planMonitorCondition('一分鐘收盤價下穿 SMA',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(missingSmaPeriod);}});assert.equal(missingResult.status,'formula');assert.equal(missingResult.proposal.warmupBars,21);assert.equal(calls,1);
 
-  for(const firstPass of [
-    agentOutput({status:'unsupported',indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:14,threshold:30},unsupportedReason:'RSI 下穿目前不支援'}),
-    agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'d1',requestedDirection:'crosses_above',params:{period:20,threshold:null},unsupportedReason:'日線目前不支援'})
-  ]){calls=0;const result=await planMonitorCondition('不支援的 registry 條件',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(firstPass);}});assert.equal(result.status,'discussion');assert.equal(calls,1);}
+  // Engine-unsupported timeframe: answered in one call with a 1m alternative.
+  calls=0;const d1Pass=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'d1',requestedDirection:'crosses_above',params:{period:20,threshold:null},unsupportedReason:'日線目前不支援'});
+  const d1Result=await planMonitorCondition('日線站上 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(d1Pass);}});assert.equal(d1Result.status,'discussion');assert.match(d1Result.message,/一分鐘/);assert.equal(calls,1);
+  // Other registry misses on 1m go on to formula planning instead of stopping at a request.
+  calls=0;const rsiBelow=agentOutput({status:'unsupported',indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:14,threshold:30},unsupportedReason:'RSI 下穿目前不支援'});
+  const planDiscussion={status:'discussion',message:'RSI 下穿需要的運算尚未提供，可改用收盤下穿 SMA(20)。',name:'RSI 下穿',timeframe:null,indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[],rootId:null};
+  const rsiResult=await planMonitorCondition('RSI 下穿 30',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?rsiBelow:planDiscussion)});assert.equal(rsiResult.status,'discussion');assert.equal(calls,2);
+  // A registry match that only lacked parameters is applied with defaults instead of asking again.
+  calls=0;const rsiNoThreshold=agentOutput({status:'clarification',indicatorId:'rsi.cross',requestedIndicator:'rsi',params:{period:14,threshold:null},clarificationQuestion:'要用哪個門檻？'});
+  const defaulted=await planMonitorCondition('RSI 14 上穿',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(rsiNoThreshold);}});assert.equal(defaulted.status,'existing');assert.equal(defaulted.proposal.params.threshold,70);assert.match(defaulted.summary,/預設值/);assert.equal(calls,1);
 
   calls=0;const smuggledExisting={status:'existing',message:'',name:'SMA',timeframe:'1m',indicatorId:'sma.cross',version:'1.0.0',params:{period:20,threshold:null},nodes:[],rootId:null};
   await assert.rejects(()=>planMonitorCondition('自訂條件',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:smuggledExisting)}),/FORMULA_PLAN_INVALID/);assert.equal(calls,2);

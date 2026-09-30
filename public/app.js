@@ -301,7 +301,9 @@ function drawAi(){
     if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
     else if(result.status==='formula')body=`<div class="proto-status"><strong>${escapeHtml(result.summary)}</strong><p>計算方式：${escapeHtml(result.formulaSummary)}</p><p class="proto-signature">AI 自訂條件會單獨使用，會取代目前已加入的條件。</p><button class="proto-primary" id="aiUseFormula">使用這個條件</button></div>`;
     else if(result.status==='clarification')body=`<div class="proto-status"><strong>AI 需要多一點資訊</strong><p>${escapeHtml(result.message)}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答上面的問題" aria-label="回答 AI"></label><button class="proto-primary" id="aiSendReply">送出</button></div>`;
-    else body=quickRequestCard(ai,`「${ai.text}」目前還不支援`,result.message||'這個條件超出目前可計算的範圍。');
+    // Not computable yet: keep the user moving with a rephrase (AI already suggests the closest computable
+    // alternative in its message); filing a request is the fallback, not the main action.
+    else body=ai.requested?quickRequestCard(ai,'',''):`<div class="proto-status"><strong>這個條件目前還算不出來</strong><p>${escapeHtml(result.message||'這個條件超出目前可計算的範圍。')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法，例如 AI 建議的寫法" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">還是想要這個指標？送出需求</button><button class="proto-primary" id="aiSendReply">重新解析</button></div></div>`;
   }
   target.className='proto-condition-editor';target.innerHTML=head+body;
   target.querySelector('#aiClose').addEventListener('click',()=>{state.ai=null;save();drawAi();});
@@ -326,7 +328,7 @@ function drawAi(){
     state.conditions=[];state.ai=null;state.requestText='';state.history=null;save();render();
   });
   const reply=target.querySelector('#aiReply');
-  const send=()=>{const text=reply.value.trim();if(!text)return;ai.context=[...ai.context,{request:ai.text,response:ai.result.message}].slice(-4);ai.text=text;ai.result=null;save();runAi();};
+  const send=()=>{const text=reply.value.trim();if(!text)return;ai.context=[...ai.context,{request:ai.text.slice(0,500),response:String(ai.result.message||'').slice(0,500)}].slice(-4);ai.text=text;ai.result=null;save();runAi();};
   target.querySelector('#aiSendReply')?.addEventListener('click',send);
   reply?.addEventListener('keydown',(event)=>{if(event.key==='Enter')send();});
 }
