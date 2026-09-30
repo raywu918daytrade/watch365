@@ -10,10 +10,10 @@
 <body class="proto-body">
   <header class="proto-topbar">
     <button id="homeButton" type="button" class="proto-brand" aria-label="回到首頁">幫你盯盤</button>
-    <span class="proto-mode">台股盤中監控</span>
+    <span id="sessionPill" class="proto-mode" role="status">台股盤中監控</span>
   </header>
-  <main id="app" class="proto-shell" aria-live="polite"></main>
-  <footer class="proto-footer">資料來源：Hugging Face Dataset・一分鐘 K・Asia/Taipei</footer>
+  <main id="app" class="proto-shell"></main>
+  <footer class="proto-footer">一分鐘 K 監控・僅供參考，非投資建議；資料可能延遲</footer>
   <span id="appVersion" class="proto-version" aria-label="版本"></span>
   <script type="module" src="/app.js"></script>
 </body>
