@@ -2,8 +2,8 @@ import { validateFormula, FORMULA_VERSION } from './formulaEngine.js';
 
 // Translates the structured conditions from the new UI into a single backend strategy.
 // Registry executors cover single RSI/SMA upward crosses; everything else (EMA, downward crosses,
-// two combined conditions) becomes a formula_v1 AST. The backend runs one strategy at a time,
-// and formula `all` accepts at most two boolean items, so more than two conditions is rejected.
+// two combined conditions) becomes a formula_v1 AST. The backend runs one strategy at a time.
+// Formula `all` accepts 2–4 boolean items; this structured UI path keeps its own limit of two conditions.
 export const CONDITION_INDICATORS=['rsi','sma','ema'];
 export const CONDITION_DIRECTIONS=['above','below'];
 const MAX_CONDITIONS=2;

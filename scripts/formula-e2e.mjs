@@ -7,12 +7,12 @@ import { createServer as createProbe } from 'node:net';
 
 const root=new URL('../',import.meta.url).pathname;const dir=await mkdtemp(join(tmpdir(),'watch365-formula-e2e-'));const appPort=await freePort();const modelPort=await freePort();
 const nodes=[
-  {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},
-  {id:'fast',op:'ema',field:null,value:null,period:12,inputId:'close',leftId:null,rightId:null},
-  {id:'slow',op:'ema',field:null,value:null,period:26,inputId:'close',leftId:null,rightId:null},
-  {id:'macd',op:'sub',field:null,value:null,period:null,inputId:null,leftId:'fast',rightId:'slow'},
-  {id:'signal',op:'ema',field:null,value:null,period:9,inputId:'macd',leftId:null,rightId:null},
-  {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'macd',rightId:'signal'}
+  {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},
+  {id:'fast',op:'ema',field:null,value:null,period:12,inputId:'close',leftId:null,rightId:null,itemIds:null},
+  {id:'slow',op:'ema',field:null,value:null,period:26,inputId:'close',leftId:null,rightId:null,itemIds:null},
+  {id:'macd',op:'sub',field:null,value:null,period:null,inputId:null,leftId:'fast',rightId:'slow',itemIds:null},
+  {id:'signal',op:'ema',field:null,value:null,period:9,inputId:'macd',leftId:null,rightId:null,itemIds:null},
+  {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'macd',rightId:'signal',itemIds:null}
 ];
 const model=createServer(async(request,response)=>{let body='';for await(const chunk of request)body+=chunk;const payload=JSON.parse(body);const registry=payload.response_format?.json_schema?.name==='submit_indicator_request';const output=registry?{status:'unsupported',indicatorId:null,version:null,timeframe:null,params:{period:null,threshold:null},requestedIndicator:'other',requestedTimeframe:'1m',requestedDirection:'crosses_above',clarificationQuestion:'',unsupportedReason:'需要公式規劃'}:{status:'formula',message:'',name:'MACD 上穿訊號線',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes,rootId:'cross'};response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({choices:[{message:{content:JSON.stringify(output)}}]}));});await new Promise((resolve)=>model.listen(modelPort,'127.0.0.1',resolve));
 let processHandle;

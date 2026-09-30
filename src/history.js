@@ -21,7 +21,7 @@ const MAX_EVENTS = 300;
 const MAX_MONTHS = 3;
 const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const SESSION_OPEN = 9 * 60, SESSION_CLOSE = 13 * 60 + 30;
-const COLUMNS = ['stock_id', 'date', 'close', 'volume'];
+const COLUMNS = ['stock_id', 'date', 'open', 'high', 'low', 'close', 'volume'];
 
 async function listHfTree(directory, pattern, { config, fetchImpl = fetch } = {}) {
   const credentials = config || await loadHfConfig();
@@ -60,7 +60,8 @@ export async function listHfM1Months(options) {
 
 export class BarCollector {
   constructor(symbols) { this.symbols = symbols; this.days = new Map(); }
-  add(symbol, startMs, close, volume) {
+  // open/high/low are optional (formula blocks read them; missing values evaluate as null).
+  add(symbol, startMs, close, volume, open = null, high = null, low = null) {
     const local = startMs + TAIPEI_OFFSET_MS;
     const minute = Math.floor(local / 60000) % 1440;
     const weekday = new Date(local).getUTCDay();
@@ -69,8 +70,8 @@ export class BarCollector {
     let bySymbol = this.days.get(date);
     if (!bySymbol) this.days.set(date, bySymbol = new Map());
     let series = bySymbol.get(symbol);
-    if (!series) bySymbol.set(symbol, series = { t: [], c: [], v: [] });
-    series.t.push(startMs + 60_000); series.c.push(close); series.v.push(volume);
+    if (!series) bySymbol.set(symbol, series = { t: [], o: [], h: [], l: [], c: [], v: [] });
+    series.t.push(startMs + 60_000); series.o.push(open); series.h.push(high); series.l.push(low); series.c.push(close); series.v.push(volume);
   }
   dates() { return [...this.days.keys()].sort(); }
   // Materialises sorted, de-duplicated bar objects for one day.
@@ -81,7 +82,7 @@ export class BarCollector {
       const bars = [];
       for (const index of order) {
         if (bars.length && bars.at(-1).barEnd === series.t[index]) continue;
-        bars.push({ barEnd: series.t[index], close: series.c[index], volume: series.v[index] });
+        bars.push({ barEnd: series.t[index], open: series.o[index], high: series.h[index], low: series.l[index], close: series.c[index], volume: series.v[index] });
       }
       result.set(symbol, bars);
     }
@@ -124,22 +125,25 @@ export function collectRows(rows, collector, state = { shift: null, samples: [] 
     const close = roundPrice(row.close);
     if (!Number.isFinite(start) || !Number.isFinite(close)) continue;
     const volume = row.volume == null ? null : Number(row.volume);
+    const open = finitePrice(row.open), high = finitePrice(row.high), low = finitePrice(row.low);
     if (state.shift === null) {
-      state.samples.push({ symbol, start, close, volume });
+      state.samples.push({ symbol, start, close, volume, open, high, low });
       if (state.samples.length < 500) continue;
       flushSamples(collector, state);
       continue;
     }
-    collector.add(symbol, start + state.shift, close, volume);
+    collector.add(symbol, start + state.shift, close, volume, open, high, low);
   }
   return state;
 }
 
 function flushSamples(collector, state) {
   if (state.shift === null) state.shift = detectShift(state.samples.map((item) => item.start));
-  for (const item of state.samples) collector.add(item.symbol, item.start + state.shift, item.close, item.volume);
+  for (const item of state.samples) collector.add(item.symbol, item.start + state.shift, item.close, item.volume, item.open, item.high, item.low);
   state.samples = [];
 }
+
+function finitePrice(value) { const price = roundPrice(value); return Number.isFinite(price) ? price : null; }
 
 function statValue(stats, key) {
   let value = stats?.[`${key}_value`] ?? stats?.[key];

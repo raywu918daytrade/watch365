@@ -20,12 +20,12 @@ export function evaluateIndicatorBar(state, strategy, bar, evaluatedAt = new Dat
   if (last && new Date(bar.barEnd) <= new Date(last.barEnd)) return finish(result, 'out_of_order');
   const gap = last ? new Date(bar.barStart).getTime() - new Date(last.barEnd).getTime() : 0;
   if (gap > 120_000) {
-    session.bars = [{ barEnd:bar.barEnd, close:bar.close, volume:bar.volume }];
+    session.bars = [sessionBar(bar)];
     state.indicatorSessions[key][bar.symbol] = session;
     return finish(result, 'data_gap');
   }
   if(strategy.executor==='formula_v1'&&session.bars.length>=512)return finish(result,'data_budget_exceeded');
-  session.bars.push({ barEnd:bar.barEnd, close:bar.close, volume:bar.volume });
+  session.bars.push(sessionBar(bar));
   state.indicatorSessions[key][bar.symbol] = session;
   const closes = session.bars.map((item) => item.close);
   let crossed = false;
@@ -59,6 +59,9 @@ export function evaluateIndicatorBar(state, strategy, bar, evaluatedAt = new Dat
   state.dedupe ??= {}; state.dedupe[dedupeKey] = evaluatedAt;
   return result;
 }
+
+// Formula blocks may read open/high/low/close/volume, so the session keeps the full OHLCV of each bar.
+function sessionBar(bar) { return { barEnd:bar.barEnd, open:bar.open, high:bar.high, low:bar.low, close:bar.close, volume:bar.volume }; }
 
 export function sma(values, period) { return SMA.calculate({ period, values }).at(-1) ?? null; }
 

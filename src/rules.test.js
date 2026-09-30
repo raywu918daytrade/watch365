@@ -591,15 +591,15 @@ test('單一規劃器可分流既有條件、公式、補問與討論，運算�
   const definitions=await new IndicatorRegistry().list();
   const common={message:'',name:'一分鐘 MACD 黃金交叉',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null}};
   const nodes=[
-    {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},
-    {id:'fast',op:'ema',field:null,value:null,period:12,inputId:'close',leftId:null,rightId:null},
-    {id:'slow',op:'ema',field:null,value:null,period:26,inputId:'close',leftId:null,rightId:null},
-    {id:'macd',op:'sub',field:null,value:null,period:null,inputId:null,leftId:'fast',rightId:'slow'},
-    {id:'signal',op:'ema',field:null,value:null,period:9,inputId:'macd',leftId:null,rightId:null},
-    {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'macd',rightId:'signal'}
+    {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},
+    {id:'fast',op:'ema',field:null,value:null,period:12,inputId:'close',leftId:null,rightId:null,itemIds:null},
+    {id:'slow',op:'ema',field:null,value:null,period:26,inputId:'close',leftId:null,rightId:null,itemIds:null},
+    {id:'macd',op:'sub',field:null,value:null,period:null,inputId:null,leftId:'fast',rightId:'slow',itemIds:null},
+    {id:'signal',op:'ema',field:null,value:null,period:9,inputId:'macd',leftId:null,rightId:null,itemIds:null},
+    {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'macd',rightId:'signal',itemIds:null}
   ];
-  const formula=validatePlan({...common,status:'formula',nodes,rootId:'cross'},definitions);assert.equal(formula.status,'formula');assert.match(formula.formulaSummary,/EMA/);assert.equal(formula.proposal.warmupBars,35);
-  const numericIds=nodes.map((node,index)=>({...node,id:String(index+1),inputId:node.inputId?String(nodes.findIndex((item)=>item.id===node.inputId)+1):null,leftId:node.leftId?String(nodes.findIndex((item)=>item.id===node.leftId)+1):null,rightId:node.rightId?String(nodes.findIndex((item)=>item.id===node.rightId)+1):null}));assert.equal(validatePlan({...common,status:'formula',nodes:numericIds,rootId:'6'},definitions).proposal.warmupBars,35);
+  const formula=validatePlan({...common,status:'formula',nodes,rootId:'cross'},definitions);assert.equal(formula.status,'formula');assert.match(formula.formulaSummary,/MACD DIF\(12,26\) 向上穿越 MACD DEA\(12,26,9\)/);assert.equal(formula.proposal.warmupBars,35);
+  const numericIds=nodes.map((node,index)=>({...node,id:String(index+1),inputId:node.inputId?String(nodes.findIndex((item)=>item.id===node.inputId)+1):null,leftId:node.leftId?String(nodes.findIndex((item)=>item.id===node.leftId)+1):null,rightId:node.rightId?String(nodes.findIndex((item)=>item.id===node.rightId)+1):null,itemIds:null}));assert.equal(validatePlan({...common,status:'formula',nodes:numericIds,rootId:'6'},definitions).proposal.warmupBars,35);
   const sma=definitions.find((item)=>item.id==='sma.cross');const existing=validatePlan({...common,status:'existing',name:'SMA',indicatorId:sma.id,version:sma.version,params:{period:20,threshold:null},nodes:[],rootId:null},definitions);assert.equal(existing.proposal.params.period,20);
   assert.throws(()=>validatePlan({...common,status:'existing',name:'SMA',indicatorId:sma.id,version:sma.version,params:{period:20,threshold:30},nodes:[],rootId:null},definitions),/FORMULA_PLAN_INVALID/);
   assert.equal(validatePlan({...common,status:'clarification',message:'請問要向上還是向下穿越？',timeframe:null,nodes:[],rootId:null},definitions).status,'clarification');
@@ -619,9 +619,9 @@ test('規劃器補問會把受限對話前文連同本次回答交給同一次�
 test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與公式 fallback', async () => {
   const definitions=await new IndicatorRegistry().list();
   const badRsiFormula={status:'formula',message:'RSI 14 上穿 30',name:'RSI 上穿 30',timeframe:'1m',indicatorId:null,version:null,params:{period:14,threshold:30},nodes:[
-    {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},
-    {id:'sma14',op:'sma',field:null,value:null,period:14,inputId:'close',leftId:null,rightId:null},
-    {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'sma14'}
+    {id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},
+    {id:'sma14',op:'sma',field:null,value:null,period:14,inputId:'close',leftId:null,rightId:null,itemIds:null},
+    {id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'sma14',itemIds:null}
   ],rootId:'cross'};
   assert.throws(()=>validatePlan(badRsiFormula,definitions),/FORMULA_PLAN_INVALID/);
 
@@ -638,7 +638,7 @@ test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與
   const clarification=await planMonitorCondition('30',definitions,{context:[{request:'一分鐘 RSI 14 上穿',response:'請補充上穿門檻。'}],env,fetchImpl:async(_url,options)=>{calls++;clarificationBody=JSON.parse(options.body);return groqResponse(clarificationOutput);}});
   assert.equal(clarification.status,'clarification');assert.equal(clarification.proposal,undefined);assert.equal(calls,1);const conversation=JSON.parse(clarificationBody.messages[1].content);assert.equal(conversation.currentReply,'30');assert.equal(conversation.previousConversation[0].request,'一分鐘 RSI 14 上穿');
 
-  calls=0;const formulaNodes=[{id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null},{id:'ema3',op:'ema',field:null,value:null,period:3,inputId:'close',leftId:null,rightId:null},{id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'ema3'}];
+  calls=0;const formulaNodes=[{id:'close',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},{id:'ema3',op:'ema',field:null,value:null,period:3,inputId:'close',leftId:null,rightId:null,itemIds:null},{id:'cross',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'close',rightId:'ema3',itemIds:null}];
   const unsupported=agentOutput({status:'unsupported',indicatorId:null,version:null,timeframe:null,requestedIndicator:'other',requestedTimeframe:'1m',requestedDirection:'crosses_above',params:{period:null,threshold:null},unsupportedReason:'需要公式規劃'});
   const formulaOutput={status:'formula',message:'',name:'價格上穿 EMA3',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes:formulaNodes,rootId:'cross'};
   const formula=await planMonitorCondition('一分鐘價格上穿 EMA 3',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:formulaOutput)});assert.equal(formula.status,'formula');assert.equal(calls,2);
