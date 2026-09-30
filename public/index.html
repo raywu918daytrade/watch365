@@ -1,80 +1,19 @@
 <!doctype html>
 <html lang="zh-Hant" data-theme="watch365">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>幫你盯盤</title><link rel="stylesheet" href="/styles.css"></head>
-<body>
-  <header class="topbar"><strong>幫你盯盤</strong><div class="top-status"><span id="topDot"></span><span id="topText">設定監控</span></div></header>
-  <main class="shell">
-    <section id="onboarding" class="agent-workspace" hidden>
-      <aside class="flow-rail">
-        <div class="rail-head"><p>建立監控草案</p><strong id="stepLabel">第 1 步，共 3 步</strong><span id="remainingLabel">還剩 2 步</span></div>
-        <nav class="flow-steps" aria-label="草案進度"><button type="button" data-back="1"><span>1</span><div><strong>選目的</strong><small>監控方式</small></div></button><button type="button" data-back="2"><span>2</span><div><strong>設內容</strong><small>股票與條件</small></div></button><button type="button" data-back="3"><span>3</span><div><strong>確認草案</strong><small>未啟用</small></div></button></nav>
-        <button id="returnWorkspaceButton" class="btn btn-ghost btn-sm rail-return" type="button" hidden>返回工作台</button>
-      </aside>
-
-      <section class="agent-column">
-        <header class="agent-head"><div><span class="agent-mark">A</span><div><strong>監控設定 Agent</strong><small>草案模式</small></div></div><span class="badge badge-warning badge-sm">尚未啟用</span></header>
-        <section class="conversation" aria-live="polite">
-          <div class="agent-message"><span class="agent-avatar">A</span><div><h1 id="agentPromptTitle">你想怎麼監控？</h1><p id="agentPromptText">你想盯指定股票，還是用指標找股票？</p></div></div>
-          <div id="canonicalReply" class="user-message" hidden></div>
-          <div id="conversationHistory" class="conversation-history"></div>
-        </section>
-
-        <section id="step1" class="agent-stage">
-          <div class="purpose-grid" role="radiogroup" aria-label="監控目的"><button id="purposeWatchlist" class="purpose-option" type="button" role="radio" aria-checked="false"><strong>盯指定股票</strong><span>指定股票，再設定提醒條件</span></button><button id="purposeScreen" class="purpose-option" type="button" role="radio" aria-checked="false"><strong>用指標找股票</strong><span>套用到 HF 每日最新名單</span></button></div>
-          <div class="stage-actions"><button id="step1Next" class="btn btn-primary" type="button" disabled>繼續設定</button></div>
-        </section>
-
-        <section id="step2" class="agent-stage" hidden>
-          <div class="tools-head"><div><p id="contentKicker">目前這一步</p><h1 id="contentTitle">設定股票與條件</h1></div><span id="contentIntro"></span></div>
-          <div class="chat-compose"><div id="chatToolTabs" class="mode-tabs" role="tablist" aria-label="目前工具"><button id="stockChatTool" class="btn btn-sm mode-tab active" type="button" role="tab" aria-selected="true">股票</button><button id="conditionChatTool" class="btn btn-sm mode-tab" type="button" role="tab" aria-selected="false">條件</button></div><div class="chat-input-row"><textarea id="workspaceAgentInput" class="textarea textarea-bordered" rows="2" maxlength="500" placeholder="輸入股票代號"></textarea><button id="workspaceAgentSend" class="btn btn-primary" type="button">送出</button></div><p id="workspaceAgentStatus" class="agent-status" aria-live="polite"></p></div>
-          <details id="stockSection" class="tool-panel"><summary class="tool-title"><div><span class="tool-icon" aria-hidden="true">+</span><strong>股票工具</strong></div><strong id="draftCount">已選 0 檔</strong></summary><div class="composer"><textarea id="symbolInput" class="textarea textarea-bordered" rows="2" placeholder="輸入代號，例如 2330、2454、6488" spellcheck="false"></textarea><button id="parseButton" class="btn btn-outline" type="button">確認股票</button></div><div class="minor-row"><span id="parseStatus"></span></div><div id="correctionList" class="correction-list"></div></details>
-          <details id="conditionSection" class="tool-panel"><summary class="tool-title"><div><span class="tool-icon" aria-hidden="true">f</span><strong>條件工具</strong></div><span id="conditionCount">0 個條件</span></summary><div class="condition-composer"><div class="mode-tabs" role="tablist" aria-label="條件輸入方式"><button id="manualModeButton" class="btn btn-sm mode-tab" role="tab" aria-selected="true" type="button">手動設定</button><button id="textModeButton" class="btn btn-sm mode-tab" role="tab" aria-selected="false" type="button">文字描述</button></div><section id="manualMode"><label class="form-control strategy-control"><span class="label-text">條件</span><select id="strategySelect" class="select select-bordered" aria-label="條件"></select></label><div id="strategyDescription" class="preset selected"></div><div id="strategyParams" class="strategy-params"></div><p id="strategyError" class="form-error" role="alert"></p><button id="addConditionButton" class="btn btn-secondary" type="button">加入條件</button></section><section id="agentMode" class="agent-composer" aria-labelledby="agentTitle" hidden><div><strong id="agentTitle">描述你要的條件</strong></div><div class="agent-input"><textarea id="agentInput" class="textarea textarea-bordered" maxlength="500" placeholder="例如：一分鐘 RSI 14 上穿 30"></textarea><button id="agentParseButton" class="btn btn-secondary" type="button">解析需求</button></div><div id="agentStatus" class="agent-status" aria-live="polite"></div><div id="agentResult" class="agent-result" hidden><div><strong id="agentResultTitle"></strong><p id="agentResultText"></p></div><button id="agentAddButton" class="btn btn-primary btn-sm" type="button" hidden>加入草案</button></div></section></div><fieldset class="match-mode"><legend>條件組合</legend><label><input class="radio radio-primary" type="radio" name="matchMode" value="all" checked>全部符合</label><label><input class="radio radio-primary" type="radio" name="matchMode" value="any">任一符合</label></fieldset></details>
-          <section id="universeScope" class="tool-panel" hidden><div class="tool-title"><div><span class="tool-icon">◎</span><strong>系統名單</strong></div></div><div id="universeDraftStatus" class="universe-status alert alert-info" aria-live="polite"><span class="loading loading-spinner loading-sm"></span><div><strong>正在確認名單</strong><p>只使用 HF 最新系統名單，不保存當下符合結果。</p></div></div></section>
-          <div class="stage-actions"><button class="btn btn-ghost" data-back="1" type="button">返回目的</button><button id="step2Next" class="btn btn-primary" type="button">查看完整草案</button></div>
-        </section>
-
-        <section id="step3" class="agent-stage" hidden><div class="agent-confirm"><strong>草案內容已整理完成</strong><p>請確認草案中的監控股票與條件。這份草案尚未啟用。</p></div><div class="stage-actions"><button class="btn btn-ghost" data-back="2" type="button">返回修改</button><button id="finishDraftButton" class="btn btn-primary" type="button">保留草案</button></div><div class="preview-result alert alert-warning"><strong>草案 · 尚未啟用</strong><span>沒有執行篩選、建立監控或改動既有任務。</span></div></section>
-      </section>
-
-      <aside class="draft-inspector">
-        <details id="draftDrawer" open><summary><span>目前草案</span><strong id="drawerSummary">尚未選擇目的</strong></summary><div class="inspector-body">
-          <section><div class="inspector-title"><div><p>監控目的</p><strong id="previewPurpose">尚未選擇</strong></div><button class="btn btn-ghost btn-sm" data-back="1" type="button">修改</button></div></section>
-          <section><div class="inspector-title"><div><p>目前股票</p><strong id="previewScope">尚未設定</strong></div></div><div id="draftList" class="stock-list"></div></section>
-          <section><div class="inspector-title"><div><p>提醒條件</p><strong id="previewMatchMode">尚未設定</strong></div><button class="btn btn-ghost btn-sm" data-back="2" type="button">修改</button></div><div id="conditionList" class="condition-list"></div><ol id="previewConditions" class="preview-conditions" hidden></ol></section>
-          <details class="inspector-detail"><summary><span>涵蓋範圍</span><strong id="previewCoverage">尚未確認</strong></summary><div id="draftCoverage" class="coverage-panel" aria-live="polite"><p>加入股票後確認系統名單涵蓋狀態。</p></div><div id="previewCoverageDetails" class="coverage-details"></div></details>
-          <details class="inspector-detail"><summary><span>結果與歷史訊號</span><strong>尚未執行</strong></summary><section class="result-separation"><div><p>目前結果</p><strong>尚未執行</strong><span>草案不會產生篩選結果。</span></div><div><p>歷史訊號</p><strong>正式工作台保留</strong><span>不列入這份草案結果。</span></div></section></details>
-        </div></details>
-      </aside>
-    </section>
-
-    <section id="workspace" hidden>
-      <div class="task-head"><div><p>監控工作台</p><h1 id="taskTitle">台股監控</h1><span id="taskSubtitle"></span></div><div class="task-actions"><button id="openUniverseButton" class="btn btn-ghost btn-sm" type="button">系統監控名單</button><button id="adjustButton" class="btn btn-outline btn-sm" type="button">建立監控草案</button></div></div>
-      <section id="workspaceStatus" class="workspace-status alert" aria-live="polite">
-        <div><span id="taskStatus" class="badge"></span><strong id="statusTitle"></strong><p id="statusMessage"></p></div>
-        <span id="taskUpdated"></span>
-      </section>
-      <section class="monitor-summary" aria-labelledby="summaryTitle">
-        <div class="section-heading"><div><p class="section-kicker">目前設定</p><h2 id="summaryTitle">正在監控什麼</h2></div><button id="toggleButton" class="btn btn-ghost btn-sm" type="button"></button></div>
-        <dl class="workspace-summary"><div><dt>客戶已選</dt><dd id="taskCount"></dd></div><div><dt>系統名單涵蓋</dt><dd id="taskCoverage">確認中</dd></div><div><dt>市場</dt><dd id="taskMarkets"></dd></div><div><dt>篩選條件</dt><dd id="taskRule"></dd></div><div><dt>通知</dt><dd>符合條件時立即通知</dd></div></dl>
-        <div id="workspaceCoverageDetails" class="coverage-details"></div>
-      </section>
-      <div id="waitingBanner" hidden></div>
-      <section class="results"><div class="section-heading"><div><p class="section-kicker">最新檢查</p><h2>目前過濾結果</h2></div><span id="resultTime"></span></div><div class="result-metrics"><div><strong id="checkedCount">0</strong><span>已檢查</span></div><div><strong id="matchedCount">0</strong><span>符合條件</span></div><div><strong id="waitingCount">0</strong><span>等待資料</span></div></div><p id="resultMessage"></p></section>
-      <section class="signals"><div class="section-heading"><div><p class="section-kicker">條件成立</p><h2>最新訊號</h2></div><span id="signalCount" class="badge badge-outline">0</span></div><div id="signalsList"></div><p id="emptySignals"></p></section>
-      <p class="disclaimer">本服務僅供資訊提醒，不構成投資建議。</p>
-    </section>
-
-    <section id="systemUniverse" hidden>
-      <div class="universe-head"><div><p>系統資料範圍</p><h1>系統監控名單</h1><span>系統依這份最新名單收集股票資料；你的個人監控設定不會因此改變。</span></div><button id="closeUniverseButton" class="btn btn-ghost btn-sm" type="button">返回工作台</button></div>
-      <section id="universeStatus" class="universe-status alert" aria-live="polite"><span class="loading loading-spinner loading-sm" aria-hidden="true"></span><div><strong>正在取得系統監控名單</strong><p>確認最新來源版本與股票清單中。</p></div></section>
-      <div id="universeContent" hidden>
-        <dl class="universe-summary"><div><dt>名單更新日期</dt><dd id="universeDate"></dd></div><div><dt>監控名單檔數</dt><dd id="universeTotal"></dd></div></dl>
-        <div class="universe-tools"><label class="input input-bordered"><span class="visually-hidden">搜尋股票</span><input id="universeSearch" type="search" placeholder="搜尋代號或名稱"></label><span id="universeMatches"></span></div>
-        <div class="universe-table-wrap"><table class="table universe-table"><thead><tr><th scope="col">股票代號</th><th scope="col">名稱</th></tr></thead><tbody id="universeRows"></tbody></table></div>
-        <p id="universeEmpty" class="universe-empty" hidden>找不到符合搜尋條件的股票。</p>
-        <nav class="universe-pagination" aria-label="系統監控名單分頁"><button id="universePrev" class="btn btn-ghost btn-sm" type="button">上一頁</button><span id="universePage"></span><button id="universeNext" class="btn btn-ghost btn-sm" type="button">下一頁</button></nav>
-      </div>
-    </section>
-  </main>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>幫你盯盤</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="proto-body">
+  <header class="proto-topbar">
+    <button id="homeButton" type="button" class="proto-brand" aria-label="回到首頁">幫你盯盤</button>
+    <span class="proto-mode">台股盤中監控</span>
+  </header>
+  <main id="app" class="proto-shell" aria-live="polite"></main>
+  <footer class="proto-footer">資料來源：Hugging Face Dataset・一分鐘 K・Asia/Taipei</footer>
   <script type="module" src="/app.js"></script>
-</body></html>
+</body>
+</html>

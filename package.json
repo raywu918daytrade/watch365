@@ -10,8 +10,7 @@
     "start": "node src/server.js",
     "test": "node --test",
     "test:engine": "node scripts/engine-smoke.mjs",
-    "test:formula-e2e": "node scripts/formula-e2e.mjs",
-    "test:ui": "node scripts/ui-smoke.mjs"
+    "test:formula-e2e": "node scripts/formula-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

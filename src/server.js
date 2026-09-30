@@ -17,6 +17,7 @@ import { loadProjectEnv } from './env.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { planMonitorCondition } from './formulaPlanner.js';
+import { conditionsName, parseConditions, planConditionStrategy } from './monitorConditions.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -232,6 +233,46 @@ async function routeApi(request, response) {
     return;
   }
 
+  if (method === 'POST' && url.pathname === '/api/monitor/configure') {
+    let body;
+    try { body = await readJson(request); }
+    catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
+    if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
+    let conditions, strategy, watchlist;
+    try {
+      conditions = parseConditions(body.conditions);
+      const plan = planConditionStrategy(conditions);
+      const current = store.getState().settings.strategy;
+      if (plan.kind === 'registry') {
+        const definition = await indicatorRegistry.resolve(plan.request.id, plan.request.version);
+        const sameIdentity = current?.id === plan.request.id && JSON.stringify(current.params || {}) === JSON.stringify(plan.request.params);
+        strategy = validateStrategy(plan.request, definition, sameIdentity ? current.activatedAt : new Date().toISOString());
+      } else {
+        strategy = validateFormulaStrategy(plan.strategy, current?.definitionFingerprint === plan.strategy.definitionFingerprint ? current.activatedAt : new Date().toISOString());
+      }
+      watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
+    } catch (error) {
+      sendJson(response, error.statusCode || 400, { error:error.code || 'MONITOR_CONFIGURE_FAILED' });
+      return;
+    }
+    await store.update((state) => {
+      const changed = strategyIdentity(state.settings.strategy) !== strategyIdentity(strategy);
+      state.settings.provider = 'hf_dataset';
+      state.settings.scopeMode = purpose === 'screen' ? 'universe' : 'watchlist';
+      state.settings.watchlist = watchlist;
+      state.settings.strategy = strategy;
+      state.settings.conditions = conditions;
+      state.settings.enabled = true;
+      state.settings.monitorTask = { name:`${conditionsName(conditions)}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
+      if (changed) revokePendingDeliveryAuthorizations(state);
+      appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:conditionsName(conditions), symbols:watchlist.length });
+    });
+    syncMonitorTimer();
+    sendJson(response, 200, publicState(store.getState()));
+    return;
+  }
+
   if (method === 'POST' && url.pathname === '/api/monitor/start') {
     await store.update((state) => {
       state.settings.enabled = true;
@@ -371,6 +412,11 @@ async function runMonitor(source = 'scheduler') {
       await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='coverage_unknown';state.runtime.lastError=errorCode;markMonitorScopeUnknown(state,errorCode);state.decisions.unshift(providerFailureDecision(errorCode));appendLog(state,'error','系統監控範圍無法確認，本輪停止',{source,errorCode});});
       return { skipped:true, reason:'coverage_unknown', error:errorCode, state:publicState(store.getState()) };
     }
+    if (settings.scopeMode === 'universe') {
+      const watchlist = await getUniverseWatchlist(universe);
+      await store.update((state) => { state.settings.watchlist = watchlist; });
+      settings.watchlist = watchlist;
+    }
     scope = buildMonitorScope(settings.watchlist, universe);
     await store.update((state)=>{applyMonitorScope(state,scope);appendLog(state,'info','本輪系統監控範圍已確認',{source,revision:scope.revision,selected:scope.selectedCount,effective:scope.effectiveCount,uncovered:scope.uncoveredCount});});
     if (!scope.effectiveCount) {
@@ -441,6 +487,16 @@ async function getLatestSystemUniverse() {
   const data = await readHfSystemUniverse({ version });
   universeCache = { revision:version.revision, data };
   return data;
+}
+
+// 條件選股 uses the latest HF system universe every run; markets come from the ticker master.
+async function getUniverseWatchlist(universe) {
+  const [items, master] = await Promise.all([universe ? universe.items : getLatestSystemUniverse().then((data) => data.items), readHfTickerMaster()]);
+  return items.flatMap((item) => {
+    const metadata = master.metadata.get(item.symbol);
+    if (!metadata || !['TWSE', 'TPEx'].includes(metadata.market) || metadata.supported === false) return [];
+    return [{ symbol:item.symbol, name:metadata.name || item.name || item.symbol, market:metadata.market }];
+  });
 }
 
 async function serveStatic(request, response) {

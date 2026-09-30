@@ -2,9 +2,13 @@
 
 台股第一階段的本機盯盤服務。唯一正式資料來源是 Hugging Face Dataset，沒有其他資料來源或 fallback。
 
-## UI/UX 原型
+## 介面
 
-最新已確認的 UI 流程記錄於 [`docs/ui-prototype-flow.md`](docs/ui-prototype-flow.md)。該流程目前僅為本地示例原型，尚未接上真實監控、Agent 或通知功能；以下 backend 現況說明不因此改變。
+`http://localhost:3650` 是唯一的前端（`public/index.html`、`public/app.js`、`public/app.css`），流程依 [`docs/ui-prototype-flow.md`](docs/ui-prototype-flow.md)：選範圍 → 條件 → 確認，並透過 `POST /api/monitor/configure` 建立真實監控。
+
+- 條件：RSI（僅上穿）、SMA、EMA（上穿／下穿），最多組合 2 個且需同時成立；RSI 不能與其他條件組合。單一 RSI／SMA 上穿使用 registry 策略，其餘轉成 `formula_v1` 公式。
+- 「用條件找股票」會設定 `scopeMode: universe`，每輪依 HF 最新系統名單重建 watchlist，不凍結結果。
+- 30 日 M1 歷史回查尚未實作，介面標示為開發中。
 
 ## HF-only 資料流
 
