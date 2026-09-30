@@ -190,14 +190,17 @@ async function routeApi(request, response) {
       const requestedRevision = String(url.searchParams.get('revision') || '');
       const universe = requestedRevision && universeCache?.revision === requestedRevision ? universeCache.data : await getLatestSystemUniverse();
       const query = String(url.searchParams.get('q') || '').trim().toLocaleLowerCase('zh-Hant');
-      const pageSize = Math.trunc(clampNumber(url.searchParams.get('pageSize'), 10, 100, 50));
-      const filtered = query
-        ? universe.items.filter((item) => item.symbol.includes(query) || String(item.name || '').toLocaleLowerCase('zh-Hant').includes(query))
-        : universe.items;
+      const group = String(url.searchParams.get('group') || '').trim();
+      // A whole sector is returned in one page (largest is ~110 stocks) so it can be selected at once.
+      const pageSize = Math.trunc(clampNumber(url.searchParams.get('pageSize'), 10, group ? 1000 : 100, 50));
+      const filtered = universe.items.filter((item) => (!group || item.group === group) && (!query || item.symbol.includes(query) || String(item.name || '').toLocaleLowerCase('zh-Hant').includes(query)));
+      const groupCounts = new Map();
+      for (const item of universe.items) if (item.group) groupCounts.set(item.group, (groupCounts.get(item.group) || 0) + 1);
+      const groups = [...groupCounts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hant'));
       const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
       const page = Math.trunc(clampNumber(url.searchParams.get('page'), 1, pages, 1));
       const start = (page - 1) * pageSize;
-      sendJson(response, 200, { ...universe, items: filtered.slice(start, start + pageSize), filteredTotal: filtered.length, page, pageSize, pages });
+      sendJson(response, 200, { ...universe, items: filtered.slice(start, start + pageSize), filteredTotal: filtered.length, page, pageSize, pages, groups });
     } catch (error) {
       const code = error.code || 'HF_UNIVERSE_SOURCE_FAILED';
       const status = code === 'HF_UNIVERSE_NOT_FOUND' ? 'missing' : 'error';

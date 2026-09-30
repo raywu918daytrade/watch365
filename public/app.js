@@ -60,21 +60,89 @@ async function home(){
 }
 
 function stocks(){
-  shell({step:'stocks',title:'選擇今天要盯的股票',lead:'名單來自 HF 每日最新系統名單。可搜尋代號或名稱並多選。',back:'home',body:`<label class="proto-search"><input id="stockSearch" type="search" placeholder="搜尋代號或名稱" aria-label="搜尋股票"></label><p id="universeInfo" class="proto-signature">讀取名單中…</p><div class="proto-stock-list" id="stockList"></div><p id="stockError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="stockCount"></span><button id="stocksDone" class="proto-primary">選好了</button></div>`});
-  const list=root.querySelector('#stockList'),search=root.querySelector('#stockSearch'),done=root.querySelector('#stocksDone');
-  const syncCount=()=>{root.querySelector('#stockCount').textContent=`已選 ${state.selected.length} 檔`;done.disabled=!state.selected.length;};
+  shell({step:'stocks',title:'選擇今天要盯的股票',lead:'名單來自 HF 每日最新系統名單。可用類股快速篩選，按住拖曳可以一次圈選一整塊。',back:'home',body:`<label class="proto-search"><input id="stockSearch" type="search" placeholder="搜尋代號或名稱" aria-label="搜尋股票"></label><div class="proto-groups" id="groupChips" role="group" aria-label="類股"></div><div class="proto-list-tools"><p id="universeInfo" class="proto-signature">讀取名單中…</p><span><button class="proto-link" id="selectShown" hidden></button><button class="proto-link" id="clearSelected" hidden>清除已選</button></span></div><div class="proto-stock-list" id="stockList"></div><p class="proto-hint">小技巧：按住一檔拖到另一檔，會圈選兩者之間的整個方框（從未勾選的開始＝全勾，從已勾選的開始＝全取消）；手機請長按後再拖。桌機可用 Shift＋點擊選一整段。</p><p id="stockError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="stockCount"></span><button id="stocksDone" class="proto-primary">選好了</button></div>`});
+  const list=root.querySelector('#stockList'),search=root.querySelector('#stockSearch'),done=root.querySelector('#stocksDone'),chips=root.querySelector('#groupChips'),selectShown=root.querySelector('#selectShown'),clearSelected=root.querySelector('#clearSelected');
+  let shown=[],activeGroup=state.stockGroup||'',showAllGroups=false,groups=[],lastIndex=null;
+  const isSelected=(symbol)=>state.selected.some((item)=>item.symbol===symbol);
+  const syncCount=()=>{
+    root.querySelector('#stockCount').textContent=`已選 ${state.selected.length} 檔`;done.disabled=!state.selected.length;
+    clearSelected.hidden=!state.selected.length;
+    const unselected=shown.filter((item)=>!isSelected(item.symbol)).length;
+    selectShown.hidden=!shown.length||(!activeGroup&&!search.value.trim());
+    selectShown.textContent=unselected?`全選這 ${shown.length} 檔`:`取消這 ${shown.length} 檔`;
+  };
+  const setSelected=(item,on)=>{
+    const has=isSelected(item.symbol);if(has===on)return;
+    state.selected=on?[...state.selected,{symbol:item.symbol,name:item.name||''}]:state.selected.filter((entry)=>entry.symbol!==item.symbol);
+    const input=list.querySelector(`input[value="${CSS.escape(item.symbol)}"]`);if(input)input.checked=on;
+  };
+  const commit=()=>{state.watchlist=[];state.history=null;save();syncCount();};
+  const drawChips=()=>{
+    if(!groups.length){chips.innerHTML='';return;}
+    const limit=12,visible=showAllGroups||groups.length<=limit?groups:groups.slice(0,limit);
+    if(activeGroup&&!visible.some((group)=>group.name===activeGroup))visible.push(groups.find((group)=>group.name===activeGroup)||{name:activeGroup,count:0});
+    chips.innerHTML=`<button class="proto-chip ${activeGroup?'':'active'}" data-group="">全部</button>${visible.map((group)=>`<button class="proto-chip ${group.name===activeGroup?'active':''}" data-group="${escapeHtml(group.name)}">${escapeHtml(group.name)} <small>${group.count}</small></button>`).join('')}${groups.length>limit?`<button class="proto-chip ghost" id="moreGroups">${showAllGroups?'收合':`更多類股（${groups.length-limit}）`}</button>`:''}`;
+    chips.querySelectorAll('[data-group]').forEach((button)=>button.addEventListener('click',()=>{activeGroup=button.dataset.group;state.stockGroup=activeGroup;save();drawChips();draw();}));
+    chips.querySelector('#moreGroups')?.addEventListener('click',()=>{showAllGroups=!showAllGroups;drawChips();});
+  };
   let requestId=0;
   const draw=async()=>{
     const id=++requestId,query=search.value.trim();
     try{
-      const data=await api(`/api/system-universe?pageSize=50&q=${encodeURIComponent(query)}`);
+      const data=await api(`/api/system-universe?pageSize=${activeGroup?1000:50}&q=${encodeURIComponent(query)}&group=${encodeURIComponent(activeGroup)}`);
       if(id!==requestId)return;
-      root.querySelector('#universeInfo').textContent=`系統名單 ${data.total} 檔・更新於 ${data.updatedDate}${query?`・符合 ${data.filteredTotal} 檔`:''}${data.filteredTotal>data.items.length?`（顯示前 ${data.items.length} 檔，請用搜尋縮小範圍）`:''}`;
-      const selected=new Set(state.selected.map((item)=>item.symbol));
-      list.innerHTML=data.items.length?data.items.map((item)=>`<label class="proto-stock"><input type="checkbox" value="${escapeHtml(item.symbol)}" data-name="${escapeHtml(item.name||'')}" ${selected.has(item.symbol)?'checked':''}><span><strong>${escapeHtml(item.symbol)} ${escapeHtml(item.name||'')}</strong></span></label>`).join(''):'<div class="proto-status"><strong>今日系統名單找不到</strong><p>請改用其他代號或名稱搜尋。</p></div>';
-      list.querySelectorAll('input').forEach((input)=>input.addEventListener('change',()=>{state.selected=input.checked?[...state.selected.filter((item)=>item.symbol!==input.value),{symbol:input.value,name:input.dataset.name}]:state.selected.filter((item)=>item.symbol!==input.value);state.watchlist=[];state.history=null;save();syncCount();}));
+      if(!groups.length&&data.groups?.length){groups=data.groups;drawChips();}
+      shown=data.items;lastIndex=null;
+      root.querySelector('#universeInfo').textContent=`系統名單 ${data.total} 檔・更新於 ${data.updatedDate}${activeGroup||query?`・符合 ${data.filteredTotal} 檔`:''}${data.filteredTotal>data.items.length?`（顯示前 ${data.items.length} 檔，可選類股或搜尋縮小範圍）`:''}`;
+      list.innerHTML=shown.length?shown.map((item,index)=>`<label class="proto-stock" data-index="${index}"><input type="checkbox" value="${escapeHtml(item.symbol)}" ${isSelected(item.symbol)?'checked':''}><span><strong>${escapeHtml(item.symbol)} ${escapeHtml(item.name||'')}</strong>${item.group&&!activeGroup?`<small>${escapeHtml(item.group)}</small>`:''}</span></label>`).join(''):'<div class="proto-status"><strong>今日系統名單找不到</strong><p>請改用其他代號、名稱或類股。</p></div>';
+      syncCount();
     }catch(error){if(id!==requestId)return;root.querySelector('#universeInfo').textContent='';list.innerHTML=`<div class="proto-status"><strong>無法讀取系統名單</strong><p>${escapeHtml(errorText(error))}</p></div>`;}
   };
+
+  // 圈選 (box select): press on a card and drag to another; every card inside the rectangle between
+  // them (rows × columns of the grid) takes the mode decided by the first card (select if it was
+  // unchecked, otherwise deselect). Cards leaving the box return to their state before the drag.
+  // Mouse starts immediately; touch needs a short long-press so normal scrolling still works.
+  let drag=null,suppressClick=false;
+  const cardAt=(x,y)=>document.elementFromPoint(x,y)?.closest?.('.proto-stock[data-index]');
+  const columns=()=>Math.max(1,getComputedStyle(list).gridTemplateColumns.split(' ').filter(Boolean).length);
+  const applyBox=(endIndex)=>{
+    if(!drag||endIndex===drag.end)return;drag.end=endIndex;
+    const cols=columns(),[r1,c1]=[Math.floor(drag.start/cols),drag.start%cols],[r2,c2]=[Math.floor(endIndex/cols),endIndex%cols];
+    const [rMin,rMax,cMin,cMax]=[Math.min(r1,r2),Math.max(r1,r2),Math.min(c1,c2),Math.max(c1,c2)];
+    shown.forEach((item,index)=>{const r=Math.floor(index/cols),c=index%cols;const inside=r>=rMin&&r<=rMax&&c>=cMin&&c<=cMax;setSelected(item,inside?drag.mode:drag.original.has(item.symbol));list.querySelector(`[data-index="${index}"]`)?.classList.toggle('in-box',inside);});
+  };
+  const endDrag=()=>{if(!drag)return;const moved=drag.end!==null;if(drag.timer)clearTimeout(drag.timer);list.classList.remove('dragging');list.querySelectorAll('.in-box').forEach((card)=>card.classList.remove('in-box'));drag=null;if(moved){suppressClick=true;commit();}};
+  list.addEventListener('pointerdown',(event)=>{
+    const card=event.target.closest('.proto-stock[data-index]');if(!card||event.button>0)return;
+    const index=Number(card.dataset.index),item=shown[index];
+    if(event.shiftKey&&lastIndex!==null){event.preventDefault();const on=!isSelected(item.symbol);const [from,to]=[Math.min(lastIndex,index),Math.max(lastIndex,index)];for(let i=from;i<=to;i++)setSelected(shown[i],on);lastIndex=index;commit();suppressClick=true;return;}
+    suppressClick=false;drag={mode:!isSelected(item.symbol),original:new Set(state.selected.map((entry)=>entry.symbol)),start:index,end:null,active:event.pointerType==='mouse',x:event.clientX,y:event.clientY};
+    if(event.pointerType==='mouse')event.preventDefault();
+    else drag.timer=setTimeout(()=>{if(!drag)return;drag.active=true;list.classList.add('dragging');navigator.vibrate?.(15);applyBox(index);},280);
+  });
+  list.addEventListener('pointermove',(event)=>{
+    if(!drag)return;
+    if(!drag.active){if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>8){clearTimeout(drag.timer);drag=null;}return;}
+    const card=cardAt(event.clientX,event.clientY);if(!card)return;
+    const index=Number(card.dataset.index);
+    if(drag.end===null&&index===drag.start)return;
+    list.classList.add('dragging');applyBox(index);
+  });
+  // While a touch drag is active, stop the page from scrolling.
+  list.addEventListener('touchmove',(event)=>{if(drag?.active)event.preventDefault();},{passive:false});
+  window.addEventListener('pointerup',endDrag);window.addEventListener('pointercancel',endDrag);
+  list.addEventListener('click',(event)=>{
+    const card=event.target.closest('.proto-stock[data-index]');if(!card)return;
+    if(event.detail===0)return; // keyboard (space on the checkbox): let the change handler run
+    event.preventDefault();
+    if(suppressClick){suppressClick=false;return;}
+    const index=Number(card.dataset.index);setSelected(shown[index],!isSelected(shown[index].symbol));lastIndex=index;commit();
+  });
+  list.addEventListener('change',(event)=>{const input=event.target;if(input.type!=='checkbox')return;const index=Number(input.closest('[data-index]').dataset.index);setSelected(shown[index],input.checked);lastIndex=index;commit();});
+
+  selectShown.addEventListener('click',()=>{const on=shown.some((item)=>!isSelected(item.symbol));shown.forEach((item)=>setSelected(item,on));commit();});
+  clearSelected.addEventListener('click',()=>{state.selected.forEach((item)=>{const input=list.querySelector(`input[value="${CSS.escape(item.symbol)}"]`);if(input)input.checked=false;});state.selected=[];commit();});
   search.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(draw,250);});
   syncCount();draw();
   done.addEventListener('click',async()=>{
@@ -87,7 +155,6 @@ function stocks(){
     }catch(error){root.querySelector('#stockError').textContent=errorText(error);syncCount();}
   });
 }
-
 function conditions(){
   if(!state.purpose)return go('home');
   if(state.purpose==='watchlist'&&!state.watchlist.length)return go('stocks');

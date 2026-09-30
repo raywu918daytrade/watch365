@@ -113,7 +113,9 @@ export async function readHfSystemUniverse({ config, fetchImpl = fetch, version:
   const file = await asyncBufferFromFile(downloaded.cachePath);
   const rows = await parquetReadObjects({ file, compressors, columns: ['stock_id'] });
   const master = await readHfTickerMaster({ config: credentials, fetchImpl, ...options });
-  const items = buildSystemUniverseItems(rows, master.metadata);
+  let groups = new Map();
+  try { groups = await readHfStockGroups({ config: credentials, fetchImpl, ...options }); } catch {}
+  const items = buildSystemUniverseItems(rows, master.metadata, groups);
   const updatedDate = toTaipeiTradingDate(version.updatedAt);
   if (!updatedDate) throw hfError('HF_UNIVERSE_VERSION_INVALID');
   return {
@@ -129,9 +131,26 @@ export async function readHfSystemUniverse({ config, fetchImpl = fetch, version:
   };
 }
 
-export function buildSystemUniverseItems(rows, metadata) {
+export function buildSystemUniverseItems(rows, metadata, groups = new Map()) {
   const symbols = [...new Set(rows.map((row) => normalizeTwSymbol(row.stock_id)).filter(Boolean))];
-  return symbols.map((symbol) => ({ symbol, name: metadata.get(symbol)?.name || null }));
+  return symbols.map((symbol) => ({ symbol, name: metadata.get(symbol)?.name || null, group: groups.get(symbol) || null }));
+}
+
+// TWSE and TPEx name a few sectors differently; fold the pure synonyms into one label.
+const GROUP_ALIASES = new Map([['金融業', '金融保險'], ['其他電子類', '其他電子業']]);
+
+// Sector (類股) per stock from db/info/info.parquet (stock_id, name, market_type, group).
+export async function readHfStockGroups(options = {}) {
+  const downloaded = await downloadHfAsset('db/info/info.parquet', { maxAgeSeconds: 86400, ...options });
+  const file = await asyncBufferFromFile(downloaded.cachePath);
+  const rows = await parquetReadObjects({ file, compressors, columns: ['stock_id', 'group'] });
+  const groups = new Map();
+  for (const row of rows) {
+    const symbol = normalizeTwSymbol(row.stock_id);
+    const group = String(row.group || '').trim();
+    if (symbol && group) groups.set(symbol, GROUP_ALIASES.get(group) || group);
+  }
+  return groups;
 }
 
 export async function readHfAssetVersion(assetPath, { config, fetchImpl = fetch } = {}) {

@@ -21,7 +21,7 @@
 .proto-search { display:flex; align-items:center; margin-bottom:.8rem; border:1px solid #cbdada; border-radius:.4rem; padding:0 .75rem; background:#fff; }
 .proto-search input { width:100%; height:2.8rem; border:0; outline:0; background:transparent; font-size:.9rem; }
 .proto-stock-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.5rem; max-height:24rem; overflow:auto; }
-.proto-stock { display:flex; align-items:center; gap:.7rem; border:1px solid #d3dfdf; border-radius:.4rem; padding:.7rem; background:#fff; cursor:pointer; }
+.proto-stock { -webkit-touch-callout:none; display:flex; align-items:center; gap:.7rem; border:1px solid #d3dfdf; border-radius:.4rem; padding:.7rem; background:#fff; cursor:pointer; }
 .proto-stock:has(input:checked) { border-color:#078777; background:#eaf7f5; }
 .proto-stock input { accent-color:#078777; }
 .proto-stock span { display:grid; min-width:0; }.proto-stock strong { font-size:.85rem; }.proto-stock small { color:#6b7f83; font-size:.72rem; }
@@ -57,6 +57,20 @@
 .proto-resume { margin-top:1.2rem; border:1px solid #cedcdc; border-radius:.5rem; padding:1rem; background:#fff; }.proto-resume p { margin:.35rem 0 .8rem; color:#61767a; font-size:.8rem; }
 .proto-back { display:inline-flex; margin-bottom:1rem; border:0; padding:0; background:transparent; color:#527076; font-size:.78rem; font-weight:750; cursor:pointer; }
 .proto-footer { position:fixed; right:1rem; bottom:.75rem; z-index:12; border:1px solid #d8c78f; border-radius:999px; padding:.35rem .65rem; background:#fff9e8; color:#72591e; font-size:.68rem; font-weight:750; }
+/* Stock picker: sector chips, list tools, drag-select */
+.proto-groups { display:flex; flex-wrap:wrap; gap:.4rem; margin:.2rem 0 .6rem; }
+.proto-chip { border:1px solid #cbdada; border-radius:999px; padding:.3rem .65rem; background:#fff; color:#355257; font-size:.78rem; font-weight:700; cursor:pointer; }
+.proto-chip small { color:#7a8f93; font-weight:600; margin-left:.15rem; }
+.proto-chip.active { border-color:#078777; background:#078777; color:#fff; }
+.proto-chip.active small { color:#d8f1ec; }
+.proto-chip.ghost { border-style:dashed; color:#527076; }
+.proto-list-tools { display:flex; align-items:center; justify-content:space-between; gap:.75rem; }
+.proto-list-tools > span { display:flex; gap:.9rem; white-space:nowrap; }
+.proto-list-tools .proto-link { font-size:.8rem; }
+.proto-hint { color:#7a8f93; font-size:.72rem; margin:.45rem 0 0; }
+.proto-stock-list { user-select:none; -webkit-user-select:none; }
+.proto-stock-list.dragging .proto-stock { cursor:cell; }
+.proto-stock.in-box { box-shadow:0 0 0 2px #078777 inset; }
 /* Status notes and inline link buttons */
 .proto-note { color:#557075; font-weight:700; }
 .proto-note.ok { color:#087f72; }

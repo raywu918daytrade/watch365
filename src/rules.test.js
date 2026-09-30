@@ -180,11 +180,11 @@ test('HF adapter 使用 cache，並將 404/授權錯誤轉成不洩密錯誤碼'
 test('系統監控名單去重並以 ticker master 補名稱，缺名稱仍保留合法股票', () => {
   const items = buildSystemUniverseItems([
     { stock_id:'2330' }, { stock_id:'6488' }, { stock_id:'2330' }, { stock_id:'BAD' }, { stock_id:'9999' }
-  ], new Map([['2330',{ name:'台積電' }],['6488',{ name:'環球晶' }]]));
+  ], new Map([['2330',{ name:'台積電' }],['6488',{ name:'環球晶' }]]), new Map([['2330','半導體業']]));
   assert.deepEqual(items, [
-    { symbol:'2330', name:'台積電' },
-    { symbol:'6488', name:'環球晶' },
-    { symbol:'9999', name:null }
+    { symbol:'2330', name:'台積電', group:'半導體業' },
+    { symbol:'6488', name:'環球晶', group:null },
+    { symbol:'9999', name:null, group:null }
   ]);
 });
 
