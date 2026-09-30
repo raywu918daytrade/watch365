@@ -7,13 +7,13 @@ const TIMEFRAMES=['1m','d1','other'];
 const INPUT_KEYS=['sourceText','indicatorName','timeframe','customTimeframe','parameterDescription','triggerCondition'];
 
 export class IndicatorRequestStore {
-  constructor(filePath){this.filePath=filePath;this.data={version:1,requests:[]};this.queue=Promise.resolve();}
-  async load(){await mkdir(dirname(this.filePath),{recursive:true});try{const raw=JSON.parse(await readFile(this.filePath,'utf8'));if(raw.version!==1||!Array.isArray(raw.requests)||!raw.requests.every(validStoredRequest))throw requestError('INDICATOR_REQUEST_STORE_INVALID',500);this.data={version:1,requests:raw.requests};}catch(error){if(error.code!=='ENOENT')throw error;await this.save();}return this.list();}
+  constructor(filePath,{backend=null,key='indicator-requests'}={}){this.filePath=filePath;this.backend=backend;this.key=key;this.data={version:1,requests:[]};this.queue=Promise.resolve();}
+  async load(){if(!this.backend)await mkdir(dirname(this.filePath),{recursive:true});try{const raw=this.backend?await this.backend.read(this.key):JSON.parse(await readFile(this.filePath,'utf8'));if(raw===null)throw Object.assign(new Error('missing'),{code:'ENOENT'});if(raw.version!==1||!Array.isArray(raw.requests)||!raw.requests.every(validStoredRequest))throw requestError('INDICATOR_REQUEST_STORE_INVALID',500);this.data={version:1,requests:raw.requests};}catch(error){if(error.code!=='ENOENT')throw error;await this.save();}return this.list();}
   list(){return structuredClone(this.data.requests.slice().sort((a,b)=>b.createdAt.localeCompare(a.createdAt)));}
   get(id){const item=this.data.requests.find((request)=>request.id===id);return item?structuredClone(item):null;}
   submit(input){const operation=this.queue.then(()=>this.submitLocked(input));this.queue=operation.catch(()=>{});return operation;}
   async submitLocked(input){const normalized=validateIndicatorRequest(input);const fingerprint=createHash('sha256').update(JSON.stringify(normalized.dedupe)).digest('hex');const existing=this.data.requests.find((item)=>item.fingerprint===fingerprint);if(existing)return{request:structuredClone(existing),duplicate:true};if(this.data.requests.length>=500)throw requestError('INDICATOR_REQUEST_LIMIT_REACHED',409);const now=new Date().toISOString();const request={id:randomUUID(),status:'pending_evaluation',sourceText:normalized.sourceText,indicatorName:normalized.indicatorName,timeframe:normalized.timeframe,customTimeframe:normalized.customTimeframe,parameterDescription:normalized.parameterDescription,triggerCondition:normalized.triggerCondition,createdAt:now,updatedAt:now,fingerprint};const next={version:1,requests:[request,...this.data.requests]};await this.save(next);this.data=next;return{request:structuredClone(request),duplicate:false};}
-  async save(data=this.data){const temporary=`${this.filePath}.${process.pid}.tmp`;await writeFile(temporary,`${JSON.stringify(data,null,2)}\n`,{encoding:'utf8',mode:0o600});await rename(temporary,this.filePath);}
+  async save(data=this.data){if(this.backend)return this.backend.write(this.key,data);const temporary=`${this.filePath}.${process.pid}.tmp`;await writeFile(temporary,`${JSON.stringify(data,null,2)}\n`,{encoding:'utf8',mode:0o600});await rename(temporary,this.filePath);}
 }
 
 export function validateIndicatorRequest(input){

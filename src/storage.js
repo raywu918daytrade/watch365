@@ -57,13 +57,21 @@ const DEFAULT_STATE = {
 };
 
 export class JsonStore {
-  constructor(filePath) {
+  constructor(filePath, { backend = null, key = 'state' } = {}) {
     this.filePath = filePath;
+    this.backend = backend;
+    this.key = key;
     this.state = structuredClone(DEFAULT_STATE);
     this.updateQueue = Promise.resolve();
   }
 
   async load() {
+    if (this.backend) {
+      const stored = await this.backend.read(this.key);
+      if (stored) this.state = mergeState(DEFAULT_STATE, stored);
+      else await this.save();
+      return this.state;
+    }
     await mkdir(dirname(this.filePath), { recursive: true });
     try {
       const raw = await readFile(this.filePath, 'utf8');
@@ -93,6 +101,7 @@ export class JsonStore {
   }
 
   async save(state = this.state) {
+    if (this.backend) return this.backend.write(this.key, state);
     const temporary=`${this.filePath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     try{await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');await rename(temporary,this.filePath);}
     catch(error){await rm(temporary,{force:true}).catch(()=>{});throw error;}
