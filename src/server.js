@@ -15,6 +15,7 @@ import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateS
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
 import { createDocumentBackend, dbConfigFromEnv } from './db.js';
+import { HISTORY_DAYS, listHfM1Dates, runHistory } from './history.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { planMonitorCondition } from './formulaPlanner.js';
@@ -41,6 +42,10 @@ const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE, { b
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
+// History lookups read up to 30 daily files each, so they run one at a time and results are cached briefly.
+const historyCache = new Map();
+let historyQueue = Promise.resolve();
+const HISTORY_CACHE_MS = 10 * 60 * 1000;
 
 await Promise.all([store.load(),indicatorRequests.load()]);
 syncMonitorTimer();
@@ -68,6 +73,43 @@ async function routeApi(request, response) {
 
   if (method === 'GET' && url.pathname === '/api/version') {
     sendJson(response, 200, { version: APP_VERSION, deployedAt: BOOTED_AT.toISOString(), commit: APP_COMMIT });
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/api/history/availability') {
+    try {
+      const files = await listHfM1Dates();
+      const recent = files.slice(-HISTORY_DAYS);
+      sendJson(response, 200, { totalDays:files.length, days:recent.map((file) => ({ date:file.date, size:file.size })) });
+    } catch (error) {
+      sendJson(response, error.statusCode || 503, { error:error.code || 'HISTORY_SOURCE_FAILED' });
+    }
+    return;
+  }
+
+  // POST with the same body as /api/monitor/configure; GET ?spec=<json> is accepted for quick checks.
+  if ((method === 'POST' || method === 'GET') && url.pathname === '/api/history/backtest') {
+    let body;
+    try { body = method === 'POST' ? await readJson(request) : JSON.parse(url.searchParams.get('spec') || 'null'); }
+    catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
+    if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
+    try {
+      const { strategy } = await strategyFromRequest(body, null);
+      const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
+      const key = `${strategyIdentity(strategy)}|${watchlist.map((item) => item.symbol).sort().join(',')}`;
+      const cached = historyCache.get(key);
+      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { sendJson(response, 200, { ...cached.result, cached:true }); return; }
+      const job = historyQueue.then(() => runHistory(strategy, watchlist));
+      historyQueue = job.catch(() => {});
+      const result = await job;
+      historyCache.set(key, { at:Date.now(), result });
+      if (historyCache.size > 20) historyCache.delete(historyCache.keys().next().value);
+      sendJson(response, 200, { ...result, cached:false });
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_FAILED' });
+    }
     return;
   }
 
@@ -251,18 +293,9 @@ async function routeApi(request, response) {
     catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
     if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
-    let conditions, strategy, watchlist;
+    let conditions, strategy, watchlist, taskName;
     try {
-      conditions = parseConditions(body.conditions);
-      const plan = planConditionStrategy(conditions);
-      const current = store.getState().settings.strategy;
-      if (plan.kind === 'registry') {
-        const definition = await indicatorRegistry.resolve(plan.request.id, plan.request.version);
-        const sameIdentity = current?.id === plan.request.id && JSON.stringify(current.params || {}) === JSON.stringify(plan.request.params);
-        strategy = validateStrategy(plan.request, definition, sameIdentity ? current.activatedAt : new Date().toISOString());
-      } else {
-        strategy = validateFormulaStrategy(plan.strategy, current?.definitionFingerprint === plan.strategy.definitionFingerprint ? current.activatedAt : new Date().toISOString());
-      }
+      ({ strategy, conditions, name: taskName } = await strategyFromRequest(body, store.getState().settings.strategy));
       watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
     } catch (error) {
       sendJson(response, error.statusCode || 400, { error:error.code || 'MONITOR_CONFIGURE_FAILED' });
@@ -276,9 +309,9 @@ async function routeApi(request, response) {
       state.settings.strategy = strategy;
       state.settings.conditions = conditions;
       state.settings.enabled = true;
-      state.settings.monitorTask = { name:`${conditionsName(conditions)}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
+      state.settings.monitorTask = { name:`${taskName}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
       if (changed) revokePendingDeliveryAuthorizations(state);
-      appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:conditionsName(conditions), symbols:watchlist.length });
+      appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:taskName, symbols:watchlist.length });
     });
     syncMonitorTimer();
     sendJson(response, 200, publicState(store.getState()));
@@ -382,6 +415,32 @@ async function routeApi(request, response) {
     return;
   }
 
+  // The browser reports a delivery it could not complete (permission revoked, Notification() threw),
+  // so the dashboard can offer a retry instead of the notification silently staying pending.
+  const failMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/fail$/);
+  if (method === 'POST' && failMatch) {
+    const id = decodeURIComponent(failMatch[1]);
+    let body = {};
+    try { body = await readJson(request); } catch {}
+    const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 80) : 'browser_delivery_failed';
+    let result = { failed:false, reason:'not_found' };
+    await store.update((state) => {
+      const notification = state.notifications.find((item) => item.id === id);
+      if (notification?.status === 'pending') {
+        notification.status = 'failed';
+        notification.failedAt = new Date().toISOString();
+        notification.failedReason = reason;
+        notification.deliveryAuthorizedAt = null; notification.deliveryAuthorizedRevision = null;
+        appendLog(state, 'warn', '瀏覽器通知送出失敗', { notificationId: id, reason });
+        result = { failed:true, reason:null };
+      } else if (notification) {
+        result = { failed:false, reason:'not_pending' };
+      }
+    });
+    sendJson(response, 200, result);
+    return;
+  }
+
   const retryMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/retry$/);
   if (method === 'POST' && retryMatch) {
     const id = decodeURIComponent(retryMatch[1]);
@@ -403,6 +462,27 @@ async function routeApi(request, response) {
   }
 
   sendJson(response, 404, { error: 'Not found' });
+}
+
+// Builds the strategy for a monitor or a history lookup from either the structured UI conditions
+// or an AI-planned formula (signed proposal token from /api/indicator-agent/parse).
+async function strategyFromRequest(body, current) {
+  if (typeof body?.formulaToken === 'string') {
+    const payload = verifyFormulaToken(body.formulaToken, formulaTokenSecret);
+    const strategy = validateFormulaStrategy({ id:'formula.custom', version:payload.capabilityRevision, executor:'formula_v1', name:payload.name, timeframe:'1m', source:'db/m1_live/{tradingDate}.parquet', definitionFingerprint:payload.fingerprint, params:{}, formula:{ ast:payload.ast } }, current?.definitionFingerprint === payload.fingerprint ? current.activatedAt : new Date().toISOString());
+    return { strategy, conditions:[], name:payload.name };
+  }
+  const conditions = parseConditions(body?.conditions);
+  const plan = planConditionStrategy(conditions);
+  let strategy;
+  if (plan.kind === 'registry') {
+    const definition = await indicatorRegistry.resolve(plan.request.id, plan.request.version);
+    const sameIdentity = current?.id === plan.request.id && JSON.stringify(current.params || {}) === JSON.stringify(plan.request.params);
+    strategy = validateStrategy(plan.request, definition, sameIdentity ? current.activatedAt : new Date().toISOString());
+  } else {
+    strategy = validateFormulaStrategy(plan.strategy, current?.definitionFingerprint === plan.strategy.definitionFingerprint ? current.activatedAt : new Date().toISOString());
+  }
+  return { strategy, conditions, name:conditionsName(conditions) };
 }
 
 async function runMonitor(source = 'scheduler') {

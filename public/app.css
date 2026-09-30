@@ -57,6 +57,12 @@
 .proto-resume { margin-top:1.2rem; border:1px solid #cedcdc; border-radius:.5rem; padding:1rem; background:#fff; }.proto-resume p { margin:.35rem 0 .8rem; color:#61767a; font-size:.8rem; }
 .proto-back { display:inline-flex; margin-bottom:1rem; border:0; padding:0; background:transparent; color:#527076; font-size:.78rem; font-weight:750; cursor:pointer; }
 .proto-footer { position:fixed; right:1rem; bottom:.75rem; z-index:12; border:1px solid #d8c78f; border-radius:999px; padding:.35rem .65rem; background:#fff9e8; color:#72591e; font-size:.68rem; font-weight:750; }
+/* Status notes and inline link buttons */
+.proto-note { color:#557075; font-weight:700; }
+.proto-note.ok { color:#087f72; }
+.proto-note.bad { color:#b3261e; }
+.proto-link { border:0; padding:0; background:transparent; color:#087f72; font:inherit; font-weight:800; text-decoration:underline; cursor:pointer; }
+.proto-link:disabled { color:#8a9da0; cursor:default; }
 /* Deploy version label, bottom-left corner */
 .proto-version { position:fixed; left:.75rem; bottom:.6rem; z-index:11; color:#8a9da0; font-size:.66rem; font-variant-numeric:tabular-nums; letter-spacing:.02em; pointer-events:auto; user-select:all; }
 .proto-version:empty { display:none; }
