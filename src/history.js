@@ -1,8 +1,13 @@
-// 30-trading-day M1 history lookup: replays a strategy over the HF daily one-minute files
-// (db/m1_live/YYYY-MM-DD.parquet) with the same rules as the live engine:
+// 30-trading-day M1 history lookup. Replays a strategy with the same rules as the live engine:
 // regular session only, no warm-up across days, data gaps > 2 minutes restart the series,
 // and a 30-minute cooldown per stock per day.
-import { asyncBufferFromFile, parquetReadObjects } from 'hyparquet';
+//
+// Data sources on the HF dataset:
+//   db/m1_live/YYYY-MM-DD.parquet  one file per day, only the most recent few days are kept
+//   db/m1/YYYY_MM.parquet          one file per month, full history
+// Recent days come from m1_live; older days are filled from the monthly files, newest month first,
+// until 30 trading days are covered.
+import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
 import { downloadHfAsset, loadHfConfig } from './hfAdapter.js';
 import { evaluateFormulaSeries } from './formulaEngine.js';
@@ -12,71 +17,173 @@ export const HISTORY_DAYS = 30;
 const COOLDOWN_MS = 30 * 60 * 1000;
 const GAP_MS = 120_000;
 const MAX_EVENTS = 300;
+const MAX_MONTHS = 3;
 const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const SESSION_OPEN = 9 * 60, SESSION_CLOSE = 13 * 60 + 30;
-const DATE_FILE = /^db\/m1_live\/(\d{4}-\d{2}-\d{2})\.parquet$/;
+const COLUMNS = ['stock_id', 'date', 'close', 'volume'];
 
-export async function listHfM1Dates({ config, fetchImpl = fetch } = {}) {
+async function listHfTree(directory, pattern, { config, fetchImpl = fetch } = {}) {
   const credentials = config || await loadHfConfig();
   const encodedRepo = credentials.repoId.split('/').map(encodeURIComponent).join('/');
-  let next = `https://huggingface.co/api/datasets/${encodedRepo}/tree/main/${encodeURIComponent('db/m1_live')}?limit=1000`;
+  let next = `https://huggingface.co/api/datasets/${encodedRepo}/tree/main/${encodeURIComponent(directory)}?limit=1000`;
   const files = [];
   for (let page = 0; next && page < 20; page++) {
     let response;
     try { response = await fetchImpl(next, { headers: { Authorization: `Bearer ${credentials.token}` } }); }
     catch { throw historyError('HISTORY_SOURCE_FAILED', 503); }
     if (response.status === 401 || response.status === 403) throw historyError('HF_UNAUTHORIZED', 503);
+    if (response.status === 404) return [];
     if (!response.ok) throw historyError('HISTORY_SOURCE_FAILED', 503);
-    const entries = await response.json().catch(() => { throw historyError('HISTORY_SOURCE_FAILED', 503); });
+    let entries;
+    try { entries = await response.json(); } catch { throw historyError('HISTORY_SOURCE_FAILED', 503); }
     for (const entry of entries) {
-      const match = typeof entry?.path === 'string' && entry.path.match(DATE_FILE);
-      if (match) files.push({ date: match[1], path: entry.path, size: entry.size ?? null });
+      const match = typeof entry?.path === 'string' && entry.path.match(pattern);
+      if (match) files.push({ key: match[1], path: entry.path, size: entry.size ?? null });
     }
     next = response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] || null;
   }
-  return files.sort((a, b) => a.date.localeCompare(b.date));
+  return files.sort((a, b) => a.key.localeCompare(b.key));
 }
 
-// Minutes since midnight in Taipei (UTC+8, no DST) and weekday, without Intl per bar.
-function taipeiMinute(ms) {
-  const local = ms + TAIPEI_OFFSET_MS;
-  const minute = Math.floor(local / 60000) % 1440;
-  const weekday = new Date(local).getUTCDay();
-  return { minute, weekday };
+export async function listHfM1Dates(options) {
+  return (await listHfTree('db/m1_live', /^db\/m1_live\/(\d{4}-\d{2}-\d{2})\.parquet$/, options)).map((file) => ({ date: file.key, path: file.path, size: file.size }));
 }
 
-function parseBarStart(value) {
+export async function listHfM1Months(options) {
+  return (await listHfTree('db/m1', /^db\/m1\/(\d{4}_\d{2})\.parquet$/, options)).map((file) => ({ month: file.key.replace('_', '-'), path: file.path, size: file.size }));
+}
+
+// ---- Bar collection -------------------------------------------------------------------------
+// Bars are kept as flat number arrays per (trading date, symbol) to keep memory low when the
+// scope is the whole system universe (hundreds of stocks × 30 days × 270 bars).
+
+export class BarCollector {
+  constructor(symbols) { this.symbols = symbols; this.days = new Map(); }
+  add(symbol, startMs, close, volume) {
+    const local = startMs + TAIPEI_OFFSET_MS;
+    const minute = Math.floor(local / 60000) % 1440;
+    const weekday = new Date(local).getUTCDay();
+    if (weekday === 0 || weekday === 6 || minute < SESSION_OPEN || minute > SESSION_CLOSE) return;
+    const date = new Date(local).toISOString().slice(0, 10);
+    let bySymbol = this.days.get(date);
+    if (!bySymbol) this.days.set(date, bySymbol = new Map());
+    let series = bySymbol.get(symbol);
+    if (!series) bySymbol.set(symbol, series = { t: [], c: [], v: [] });
+    series.t.push(startMs + 60_000); series.c.push(close); series.v.push(volume);
+  }
+  dates() { return [...this.days.keys()].sort(); }
+  // Materialises sorted, de-duplicated bar objects for one day.
+  barsFor(date) {
+    const result = new Map();
+    for (const [symbol, series] of this.days.get(date) || []) {
+      const order = series.t.map((_, index) => index).sort((a, b) => series.t[a] - series.t[b]);
+      const bars = [];
+      for (const index of order) {
+        if (bars.length && bars.at(-1).barEnd === series.t[index]) continue;
+        bars.push({ barEnd: series.t[index], close: series.c[index], volume: series.v[index] });
+      }
+      result.set(symbol, bars);
+    }
+    return result;
+  }
+  drop(date) { this.days.delete(date); }
+}
+
+// Timestamps may arrive as Date, string (naive strings are Taipei time) or epoch numbers.
+export function toMs(value) {
   if (value instanceof Date) return value.getTime();
+  if (typeof value === 'bigint') value = Number(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return NaN;
+    if (value > 1e17) return value / 1e6;
+    if (value > 1e14) return value / 1e3;
+    if (value > 1e11) return value;
+    return value * 1000;
+  }
   const text = String(value);
-  return (text.includes('T') ? new Date(text) : new Date(`${text.replace(' ', 'T')}+08:00`)).getTime();
+  if (/[T]/.test(text) && /(Z|[+-]\d{2}:?\d{2})$/.test(text)) return new Date(text).getTime();
+  return new Date(`${text.replace(' ', 'T')}+08:00`).getTime();
 }
 
-// Returns Map<symbol, [{barEnd, close, volume}]> restricted to the regular session.
-export async function readDayBars(file, symbols, { today, downloadImpl = downloadHfAsset } = {}) {
-  const downloaded = await downloadImpl(file.path, { maxAgeSeconds: file.date === today ? 60 : 7 * 86400 });
-  const buffer = await asyncBufferFromFile(downloaded.cachePath);
-  const rows = await parquetReadObjects({ file: buffer, compressors, columns: ['stock_id', 'date', 'close', 'volume'] });
-  return groupRows(rows, symbols);
+// Some exports store Taipei wall-clock time as if it were UTC. Detect that from a sample:
+// if almost nothing lands in the 09:00–13:30 session but shifting by -8h fixes it, shift.
+export function detectShift(samples) {
+  if (samples.length < 50) return 0;
+  const inSession = (ms) => { const minute = Math.floor((ms + TAIPEI_OFFSET_MS) / 60000) % 1440; return minute >= SESSION_OPEN && minute <= SESSION_CLOSE; };
+  const raw = samples.filter(inSession).length / samples.length;
+  const shifted = samples.filter((ms) => inSession(ms - TAIPEI_OFFSET_MS)).length / samples.length;
+  return raw < 0.5 && shifted > 0.8 ? -TAIPEI_OFFSET_MS : 0;
 }
 
-export function groupRows(rows, symbols) {
-  const bySymbol = new Map();
+export function collectRows(rows, collector, state = { shift: null, samples: [] }) {
   for (const row of rows) {
     const symbol = String(row.stock_id);
-    if (!symbols.has(symbol)) continue;
-    const start = parseBarStart(row.date);
-    if (!Number.isFinite(start)) continue;
-    const { minute, weekday } = taipeiMinute(start);
-    if (weekday === 0 || weekday === 6 || minute < SESSION_OPEN || minute > SESSION_CLOSE) continue;
-    const close = Number(row.close), volume = Number(row.volume);
-    if (!Number.isFinite(close)) continue;
-    let list = bySymbol.get(symbol);
-    if (!list) bySymbol.set(symbol, list = []);
-    list.push({ barEnd: start + 60_000, close, volume: Number.isFinite(volume) ? volume : null });
+    if (!collector.symbols.has(symbol)) continue;
+    const start = toMs(row.date);
+    const close = Number(row.close);
+    if (!Number.isFinite(start) || !Number.isFinite(close)) continue;
+    const volume = row.volume == null ? null : Number(row.volume);
+    if (state.shift === null) {
+      state.samples.push({ symbol, start, close, volume });
+      if (state.samples.length < 500) continue;
+      flushSamples(collector, state);
+      continue;
+    }
+    collector.add(symbol, start + state.shift, close, volume);
   }
-  for (const list of bySymbol.values()) list.sort((a, b) => a.barEnd - b.barEnd);
-  return bySymbol;
+  return state;
 }
+
+function flushSamples(collector, state) {
+  if (state.shift === null) state.shift = detectShift(state.samples.map((item) => item.start));
+  for (const item of state.samples) collector.add(item.symbol, item.start + state.shift, item.close, item.volume);
+  state.samples = [];
+}
+
+function statValue(stats, key) {
+  let value = stats?.[`${key}_value`] ?? stats?.[key];
+  if (value instanceof Uint8Array) value = new TextDecoder().decode(value);
+  if (typeof value === 'bigint') value = Number(value);
+  return value ?? null;
+}
+
+// Uses row-group min/max statistics on stock_id to skip groups that cannot hold a wanted symbol.
+export function rowGroupRanges(metadata, symbols) {
+  const ranges = [];
+  let start = 0;
+  const wanted = [...symbols];
+  for (const group of metadata.row_groups || []) {
+    const rows = Number(group.num_rows);
+    const column = group.columns?.find((item) => (item.meta_data?.path_in_schema || []).join('.') === 'stock_id');
+    const min = statValue(column?.meta_data?.statistics, 'min');
+    const max = statValue(column?.meta_data?.statistics, 'max');
+    let keep = true;
+    if (min !== null && max !== null) {
+      const numeric = typeof min === 'number';
+      keep = wanted.some((symbol) => {
+        const value = numeric ? Number(symbol) : symbol;
+        return numeric && !Number.isFinite(value) ? true : value >= min && value <= max;
+      });
+    }
+    if (keep && rows > 0) ranges.push({ rowStart: start, rowEnd: start + rows });
+    start += rows;
+  }
+  return ranges;
+}
+
+export async function readParquetInto(path, collector, { maxAgeSeconds, downloadImpl = downloadHfAsset } = {}) {
+  const downloaded = await downloadImpl(path, { maxAgeSeconds });
+  const file = await asyncBufferFromFile(downloaded.cachePath);
+  const metadata = await parquetMetadataAsync(file);
+  const state = { shift: null, samples: [] };
+  for (const range of rowGroupRanges(metadata, collector.symbols)) {
+    const rows = await parquetReadObjects({ file, metadata, compressors, columns: COLUMNS, ...range });
+    collectRows(rows, collector, state);
+  }
+  flushSamples(collector, state);
+}
+
+// ---- Evaluation ---------------------------------------------------------------------------
 
 // Indexes of bars where the strategy fires, before cooldown.
 export function crossingIndexes(strategy, bars) {
@@ -121,35 +228,63 @@ export function dayEvents(strategy, bars) {
   return events;
 }
 
-export async function runHistory(strategy, watchlist, { days = HISTORY_DAYS, listImpl = listHfM1Dates, readImpl = readDayBars, now = new Date() } = {}) {
+function taipeiDate(date) { return new Date(date.getTime() + TAIPEI_OFFSET_MS).toISOString().slice(0, 10); }
+
+export async function collectHistory(symbols, { days = HISTORY_DAYS, now = new Date(), listDates = listHfM1Dates, listMonths = listHfM1Months, readImpl = readParquetInto } = {}) {
+  const today = taipeiDate(now);
+  const collector = new BarCollector(symbols);
+  const failed = [];
+  const liveDays = (await listDates()).filter((file) => file.date <= today);
+  const liveDates = new Set();
+  for (const file of liveDays) {
+    const day = new BarCollector(symbols);
+    try { await readImpl(file.path, day, { maxAgeSeconds: file.date === today ? 60 : 7 * 86400 }); }
+    catch { failed.push(file.date); continue; }
+    liveDates.add(file.date);
+    for (const [date, bySymbol] of day.days) if (date === file.date) collector.days.set(date, bySymbol);
+  }
+  const months = (await listMonths()).filter((file) => file.month <= today.slice(0, 7)).reverse().slice(0, MAX_MONTHS);
+  const monthsRead = [];
+  for (const file of months) {
+    if (collector.days.size >= days) break;
+    const month = new BarCollector(symbols);
+    try { await readImpl(file.path, month, { maxAgeSeconds: file.month === today.slice(0, 7) ? 3600 : 7 * 86400 }); }
+    catch { failed.push(file.month); continue; }
+    monthsRead.push(file.month);
+    for (const [date, bySymbol] of month.days) if (!liveDates.has(date) && date <= today && !collector.days.has(date)) collector.days.set(date, bySymbol);
+  }
+  const dates = collector.dates();
+  for (const date of dates.slice(0, Math.max(0, dates.length - days))) collector.drop(date);
+  return { collector, failed, sources: { liveDays: [...liveDates].sort(), months: monthsRead } };
+}
+
+export async function runHistory(strategy, watchlist, options = {}) {
   const started = Date.now();
-  const today = new Date(now.getTime() + TAIPEI_OFFSET_MS).toISOString().slice(0, 10);
-  const files = (await listImpl()).filter((file) => file.date <= today).slice(-days);
   const names = new Map(watchlist.map((item) => [item.symbol, item.name || item.symbol]));
-  const symbols = new Set(names.keys());
+  const { collector, failed, sources } = await collectHistory(new Set(names.keys()), options);
   const summary = [], events = [];
-  let total = 0, failedDays = 0;
-  for (const file of files) {
-    let bySymbol;
-    try { bySymbol = await readImpl(file, symbols, { today }); }
-    catch { failedDays++; summary.push({ date: file.date, count: null }); continue; }
+  let total = 0;
+  for (const date of collector.dates()) {
     let count = 0;
-    for (const [symbol, bars] of bySymbol) {
+    for (const [symbol, bars] of collector.barsFor(date)) {
       for (const bar of dayEvents(strategy, bars)) {
         count++;
-        events.push({ date: file.date, at: new Date(bar.barEnd).toISOString(), symbol, name: names.get(symbol), price: bar.close });
+        events.push({ date, at: new Date(bar.barEnd).toISOString(), symbol, name: names.get(symbol), price: bar.close });
       }
     }
     total += count;
-    summary.push({ date: file.date, count });
+    summary.push({ date, count });
+    collector.drop(date);
   }
   events.sort((a, b) => b.at.localeCompare(a.at) || a.symbol.localeCompare(b.symbol));
   return {
     strategyName: strategy.name,
-    symbolsCount: symbols.size,
+    symbolsCount: names.size,
     days: summary.reverse(),
-    availableDays: files.length,
-    failedDays,
+    availableDays: summary.length,
+    failedDays: failed.length,
+    failedSources: failed,
+    sources,
     totalEvents: total,
     truncated: events.length > MAX_EVENTS,
     events: events.slice(0, MAX_EVENTS),

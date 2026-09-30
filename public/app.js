@@ -175,7 +175,7 @@ async function drawHistory(options={}){
   const head=(right)=>`<div class="proto-history-head"><div><p class="proto-eyebrow">過去 30 個交易日</p><h2>M1 歷史觸發時間點</h2></div>${right}</div>`;
   if(!hasConditions()){target.innerHTML=head('')+'<div class="proto-status"><strong>先加入條件</strong><p>加入條件後，可以回查這組條件在過去 30 個交易日的觸發時間點。</p></div>';return;}
   const history=historyFresh();
-  if(options.loading){target.innerHTML=head('<span>回查中…</span>')+'<div class="proto-status"><strong>回查中…</strong><p>第一次需要下載每日一分鐘資料，可能要 30 秒以上；之後會快很多。</p></div>';return;}
+  if(options.loading){target.innerHTML=head('<span>回查中…</span>')+'<div class="proto-status"><strong>回查中…</strong><p>第一次需要下載近兩個月的一分鐘資料（每月約 40MB），可能要 1 分鐘左右；10 分鐘內重查同一組條件會直接用快取。</p></div>';return;}
   if(options.error){target.innerHTML=head('')+`<div class="proto-status"><strong>回查失敗</strong><p>${escapeHtml(options.error)}</p><button class="proto-secondary" id="runHistory">再試一次</button></div>`;}
   else if(!history){target.innerHTML=head('')+'<div class="proto-status"><strong>看看這組條件過去的表現</strong><p>用真實 HF 一分鐘 K，套用和盤中監控相同的規則（每檔每天 30 分鐘冷卻）。</p><button class="proto-secondary" id="runHistory">回查過去 30 個交易日</button></div>';}
   else{
@@ -187,7 +187,7 @@ async function drawHistory(options={}){
   target.querySelector('#showAllHistory')?.addEventListener('click',()=>drawHistory({all:true}));
   target.querySelector('#runHistory')?.addEventListener('click',async()=>{
     const signature=historySignature();drawHistory({loading:true});
-    try{const result=await withFormula(['/api/history/backtest',monitorSpec()]);state.history={signature,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();if(node()==='conditions')drawHistory();}
+    try{const result=await withFormula(['/api/history/backtest',monitorSpec()]);state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();if(node()==='conditions')drawHistory();}
     catch(error){if(node()==='conditions')drawHistory({error:errorText(error)});}
   });
 }

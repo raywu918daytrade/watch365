@@ -15,7 +15,7 @@ import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateS
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
 import { createDocumentBackend, dbConfigFromEnv } from './db.js';
-import { HISTORY_DAYS, listHfM1Dates, runHistory } from './history.js';
+import { HISTORY_DAYS, listHfM1Dates, listHfM1Months, runHistory } from './history.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { planMonitorCondition } from './formulaPlanner.js';
@@ -78,9 +78,8 @@ async function routeApi(request, response) {
 
   if (method === 'GET' && url.pathname === '/api/history/availability') {
     try {
-      const files = await listHfM1Dates();
-      const recent = files.slice(-HISTORY_DAYS);
-      sendJson(response, 200, { totalDays:files.length, days:recent.map((file) => ({ date:file.date, size:file.size })) });
+      const [live, months] = await Promise.all([listHfM1Dates(), listHfM1Months()]);
+      sendJson(response, 200, { historyDays:HISTORY_DAYS, liveDays:live.map((file) => ({ date:file.date, size:file.size })), months:months.slice(-4).map((file) => ({ month:file.month, size:file.size })), totalMonths:months.length });
     } catch (error) {
       sendJson(response, error.statusCode || 503, { error:error.code || 'HISTORY_SOURCE_FAILED' });
     }
