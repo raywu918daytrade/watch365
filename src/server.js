@@ -28,6 +28,10 @@ const INDICATOR_REQUESTS_FILE = process.env.WATCH365_INDICATOR_REQUESTS_FILE || 
 const PORT = Number(process.env.PORT || 3650);
 const indicatorRegistry = new IndicatorRegistry();
 const formulaTokenSecret=randomBytes(32).toString('base64url');
+// Deploy-time version: Railway starts a fresh process for every deployment, so boot time ≈ deploy time.
+const BOOTED_AT = new Date();
+const APP_VERSION = formatVersion(BOOTED_AT);
+const APP_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || null;
 
 const store = new JsonStore(DATA_FILE);
 const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE);
@@ -58,6 +62,11 @@ server.listen(PORT, () => {
 async function routeApi(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const method = request.method || 'GET';
+
+  if (method === 'GET' && url.pathname === '/api/version') {
+    sendJson(response, 200, { version: APP_VERSION, deployedAt: BOOTED_AT.toISOString(), commit: APP_COMMIT });
+    return;
+  }
 
   if (method === 'GET' && url.pathname === '/api/state') {
     sendJson(response, 200, publicState(store.getState()));
@@ -562,4 +571,10 @@ function revokePendingDeliveryAuthorizations(state) {
     notification.deliveryAuthorizedAt = null;
     notification.deliveryAuthorizedRevision = null;
   }
+}
+
+function formatVersion(date) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(date).map((part) => [part.type, part.value]));
+  return `v${parts.year}.${parts.month}.${parts.day}-${parts.hour}${parts.minute}`;
 }

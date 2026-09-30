@@ -57,6 +57,9 @@
 .proto-resume { margin-top:1.2rem; border:1px solid #cedcdc; border-radius:.5rem; padding:1rem; background:#fff; }.proto-resume p { margin:.35rem 0 .8rem; color:#61767a; font-size:.8rem; }
 .proto-back { display:inline-flex; margin-bottom:1rem; border:0; padding:0; background:transparent; color:#527076; font-size:.78rem; font-weight:750; cursor:pointer; }
 .proto-footer { position:fixed; right:1rem; bottom:.75rem; z-index:12; border:1px solid #d8c78f; border-radius:999px; padding:.35rem .65rem; background:#fff9e8; color:#72591e; font-size:.68rem; font-weight:750; }
+/* Deploy version label, bottom-left corner */
+.proto-version { position:fixed; left:.75rem; bottom:.6rem; z-index:11; color:#8a9da0; font-size:.66rem; font-variant-numeric:tabular-nums; letter-spacing:.02em; pointer-events:auto; user-select:all; }
+.proto-version:empty { display:none; }
 @keyframes proto-in { from { opacity:.55; transform:translateY(4px); } to { opacity:1; transform:none; } }
 @media (max-width:640px) {
   .proto-shell { padding:1.25rem .9rem 5.5rem; }.proto-frame h1 { font-size:1.55rem; }.proto-stock-list { grid-template-columns:1fr; max-height:none; }.proto-preview-grid div { padding:.65rem .5rem; }.proto-summary div { grid-template-columns:1fr; gap:.2rem; }.proto-inline-actions { flex-direction:column-reverse; }.proto-inline-actions button { width:100%; }.proto-dashboard-head { align-items:stretch; flex-direction:column; }.proto-footer { right:.55rem; bottom:.5rem; max-width:calc(100vw - 1.1rem); text-align:center; }.proto-sticky-action { margin-inline:-.9rem; padding:1rem .9rem; }.proto-library-card { grid-template-columns:1fr; }.proto-library-card button { justify-self:start; }
