@@ -1,6 +1,6 @@
 // Three-step flow (選範圍 → 條件 → 確認) documented in docs/ui-prototype-flow.md, wired to /api
 // for stock lists, indicator requests and monitor creation.
-// Also: AI parsing of new indicators, 30-trading-day M1 history lookup, request progress and notification retry.
+// Also: AI parsing of new indicators, 7-trading-day M1 history lookup, request progress and notification retry.
 const KEY='watch365_ui_v2';
 const INDICATORS=[
   {id:'rsi',name:'RSI',desc:'Wilder RSI 由下往上穿越門檻',directions:['above'],periodMax:100,threshold:true,defaults:{period:14,threshold:30}},
@@ -166,18 +166,19 @@ function drawAi(){
   target.querySelector('#aiSendReply')?.addEventListener('click',send);
   reply?.addEventListener('keydown',(event)=>{if(event.key==='Enter')send();});
 }
-// 30-day M1 history: replays the current conditions over HF daily one-minute files on the server.
-function historySignature(){return JSON.stringify([monitorSpec(),state.formula?.summary||null]);}
+// 7-day M1 history: replays the current conditions over HF daily one-minute files on the server.
+const HISTORY_WINDOW=7;
+function historySignature(){return JSON.stringify([HISTORY_WINDOW,monitorSpec(),state.formula?.summary||null]);}
 function historyFresh(){return state.history&&state.history.signature===historySignature()?state.history:null;}
 function historySummaryText(history){return`過去 ${history.availableDays} 個交易日，${history.symbolsCount} 檔股票共觸發 ${history.totalEvents} 次${history.failedDays?`（${history.failedDays} 天資料讀取失敗）`:''}`;}
 async function drawHistory(options={}){
   const target=root.querySelector('#historyPanel');if(!target)return;
-  const head=(right)=>`<div class="proto-history-head"><div><p class="proto-eyebrow">過去 30 個交易日</p><h2>M1 歷史觸發時間點</h2></div>${right}</div>`;
-  if(!hasConditions()){target.innerHTML=head('')+'<div class="proto-status"><strong>先加入條件</strong><p>加入條件後，可以回查這組條件在過去 30 個交易日的觸發時間點。</p></div>';return;}
+  const head=(right)=>`<div class="proto-history-head"><div><p class="proto-eyebrow">過去 7 個交易日</p><h2>M1 歷史觸發時間點</h2></div>${right}</div>`;
+  if(!hasConditions()){target.innerHTML=head('')+'<div class="proto-status"><strong>先加入條件</strong><p>加入條件後，可以回查這組條件在過去 7 個交易日的觸發時間點。</p></div>';return;}
   const history=historyFresh();
   if(options.loading){target.innerHTML=head('<span>回查中…</span>')+'<div class="proto-status"><strong>回查中…</strong><p>第一次需要下載近兩個月的一分鐘資料（每月約 40MB），可能要 1 分鐘左右；10 分鐘內重查同一組條件會直接用快取。</p></div>';return;}
   if(options.error){target.innerHTML=head('')+`<div class="proto-status"><strong>回查失敗</strong><p>${escapeHtml(options.error)}</p><button class="proto-secondary" id="runHistory">再試一次</button></div>`;}
-  else if(!history){target.innerHTML=head('')+'<div class="proto-status"><strong>看看這組條件過去的表現</strong><p>用真實 HF 一分鐘 K，套用和盤中監控相同的規則（每檔每天 30 分鐘冷卻）。</p><button class="proto-secondary" id="runHistory">回查過去 30 個交易日</button></div>';}
+  else if(!history){target.innerHTML=head('')+'<div class="proto-status"><strong>看看這組條件過去的表現</strong><p>用真實 HF 一分鐘 K，套用和盤中監控相同的規則（每檔每天 30 分鐘冷卻）。</p><button class="proto-secondary" id="runHistory">回查過去 7 個交易日</button></div>';}
   else{
     const limit=options.all?history.events.length:30;
     const rows=history.events.slice(0,limit).map((event)=>`<div class="proto-history-row"><span><strong>${escapeHtml(event.symbol)}</strong> ${escapeHtml(event.name||'')}</span><time>${formatTime(event.at)}</time><span>收盤 ${escapeHtml(formatPrice(event.price))}</span></div>`).join('');
@@ -223,7 +224,7 @@ function request(){
 function confirm(){
   if(!hasConditions())return go('conditions');
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'每日最新系統名單（每輪重新套用，不凍結結果）';
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，並取代目前正在運作的監控（系統一次只跑一組監控）。',back:'conditions',body:`<dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>條件</dt><dd>${state.formula?`${escapeHtml(state.formula.name)}<br><small>${escapeHtml(state.formula.summary)}</small>`:state.conditions.map((item)=>escapeHtml(conditionLabel(item))).join('；')}</dd></div><div><dt>條件組合</dt><dd>${state.formula?'AI 自訂條件':state.conditions.length>1?'全部同時成立':'單一條件'}</dd></div><div><dt>30 日回查</dt><dd>${historyFresh()?escapeHtml(historySummaryText(historyFresh())):'尚未回查（可返回條件頁回查）'}</dd></div><div><dt>資料</dt><dd>HF 一分鐘 K・台股 09:00–13:30</dd></div><div><dt>通知</dt><dd>本機瀏覽器通知</dd></div></dl><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span>建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，並取代目前正在運作的監控（系統一次只跑一組監控）。',back:'conditions',body:`<dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>條件</dt><dd>${state.formula?`${escapeHtml(state.formula.name)}<br><small>${escapeHtml(state.formula.summary)}</small>`:state.conditions.map((item)=>escapeHtml(conditionLabel(item))).join('；')}</dd></div><div><dt>條件組合</dt><dd>${state.formula?'AI 自訂條件':state.conditions.length>1?'全部同時成立':'單一條件'}</dd></div><div><dt>7 日回查</dt><dd>${historyFresh()?escapeHtml(historySummaryText(historyFresh())):'尚未回查（可返回條件頁回查）'}</dd></div><div><dt>資料</dt><dd>HF 一分鐘 K・台股 09:00–13:30</dd></div><div><dt>通知</dt><dd>本機瀏覽器通知</dd></div></dl><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span>建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   root.querySelector('#createMonitor').addEventListener('click',async(event)=>{
     const button=event.currentTarget;button.disabled=true;button.textContent='建立中…';
     try{

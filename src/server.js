@@ -42,7 +42,7 @@ const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE, { b
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
-// History lookups read up to 30 daily files each, so they run one at a time and results are cached briefly.
+// History lookups read up to HISTORY_DAYS daily files each, so they run one at a time and results are cached briefly.
 const historyCache = new Map();
 let historyQueue = Promise.resolve();
 const HISTORY_CACHE_MS = 10 * 60 * 1000;

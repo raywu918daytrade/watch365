@@ -1,4 +1,4 @@
-// 30-trading-day M1 history lookup. Replays a strategy with the same rules as the live engine:
+// HISTORY_DAYS-trading-day M1 history lookup. Replays a strategy with the same rules as the live engine:
 // regular session only, no warm-up across days, data gaps > 2 minutes restart the series,
 // and a 30-minute cooldown per stock per day.
 //
@@ -6,7 +6,7 @@
 //   db/m1_live/YYYY-MM-DD.parquet  one file per day, only the most recent few days are kept
 //   db/m1/YYYY_MM.parquet          one file per month, full history
 // Recent days come from m1_live; older days are filled from the monthly files, newest month first,
-// until 30 trading days are covered.
+// until HISTORY_DAYS trading days are covered.
 import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
 import { downloadHfAsset, loadHfConfig } from './hfAdapter.js';
@@ -14,7 +14,7 @@ import { evaluateFormulaSeries } from './formulaEngine.js';
 import { wilderRsi } from './indicatorEngine.js';
 import { roundPrice } from './marketBar.js';
 
-export const HISTORY_DAYS = 30;
+export const HISTORY_DAYS = 7;
 const COOLDOWN_MS = 30 * 60 * 1000;
 const GAP_MS = 120_000;
 const MAX_EVENTS = 300;
