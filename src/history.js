@@ -7,7 +7,7 @@
 //   db/m1/YYYY_MM.parquet          one file per month, full history
 // Recent days come from m1_live; older days are filled from the monthly files, newest month first,
 // until HISTORY_DAYS trading days are covered.
-import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects } from 'hyparquet';
+import { asyncBufferFromFile, parquetMetadataAsync, parquetRead, parquetReadObjects } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
 import { downloadHfAsset, loadHfConfig } from './hfAdapter.js';
 import { evaluateFormulaSeries } from './formulaEngine.js';
@@ -59,7 +59,9 @@ export async function listHfM1Months(options) {
 // scope is the whole system universe (hundreds of stocks × 30 days × 270 bars).
 
 export class BarCollector {
-  constructor(symbols) { this.symbols = symbols; this.days = new Map(); }
+  // fromDate (YYYY-MM-DD, optional) drops bars before that day at ingest, so a whole month file
+  // doesn't have to sit in memory when only the last few trading days are wanted.
+  constructor(symbols, { fromDate = null } = {}) { this.symbols = symbols; this.days = new Map(); this.fromDate = fromDate; }
   // open/high/low are optional (formula blocks read them; missing values evaluate as null).
   add(symbol, startMs, close, volume, open = null, high = null, low = null) {
     const local = startMs + TAIPEI_OFFSET_MS;
@@ -67,6 +69,7 @@ export class BarCollector {
     const weekday = new Date(local).getUTCDay();
     if (weekday === 0 || weekday === 6 || minute < SESSION_OPEN || minute > SESSION_CLOSE) return;
     const date = new Date(local).toISOString().slice(0, 10);
+    if (this.fromDate && date < this.fromDate) return;
     let bySymbol = this.days.get(date);
     if (!bySymbol) this.days.set(date, bySymbol = new Map());
     let series = bySymbol.get(symbol);
@@ -118,23 +121,26 @@ export function detectShift(samples) {
 }
 
 export function collectRows(rows, collector, state = { shift: null, samples: [] }) {
-  for (const row of rows) {
-    const symbol = String(row.stock_id);
-    if (!collector.symbols.has(symbol)) continue;
-    const start = toMs(row.date);
-    const close = roundPrice(row.close);
-    if (!Number.isFinite(start) || !Number.isFinite(close)) continue;
-    const volume = row.volume == null ? null : Number(row.volume);
-    const open = finitePrice(row.open), high = finitePrice(row.high), low = finitePrice(row.low);
+  for (const row of rows) collectRow(row.stock_id, row.date, row.open, row.high, row.low, row.close, row.volume, collector, state);
+  return state;
+}
+function collectRow(stockId, dateValue, openValue, highValue, lowValue, closeValue, volumeValue, collector, state) {
+  {
+    const symbol = String(stockId);
+    if (!collector.symbols.has(symbol)) return;
+    const start = toMs(dateValue);
+    const close = roundPrice(closeValue);
+    if (!Number.isFinite(start) || !Number.isFinite(close)) return;
+    const volume = volumeValue == null ? null : Number(volumeValue);
+    const open = finitePrice(openValue), high = finitePrice(highValue), low = finitePrice(lowValue);
     if (state.shift === null) {
       state.samples.push({ symbol, start, close, volume, open, high, low });
-      if (state.samples.length < 500) continue;
+      if (state.samples.length < 500) return;
       flushSamples(collector, state);
-      continue;
+      return;
     }
     collector.add(symbol, start + state.shift, close, volume, open, high, low);
   }
-  return state;
 }
 
 function flushSamples(collector, state) {
@@ -176,16 +182,35 @@ export function rowGroupRanges(metadata, symbols) {
   return ranges;
 }
 
+// Reads one row group at a time as columns (hyparquet onChunk, no onComplete) instead of materialising
+// millions of row objects: a month file for the whole universe used to exhaust the heap.
 export async function readParquetInto(path, collector, { maxAgeSeconds, downloadImpl = downloadHfAsset } = {}) {
   const downloaded = await downloadImpl(path, { maxAgeSeconds });
   const file = await asyncBufferFromFile(downloaded.cachePath);
   const metadata = await parquetMetadataAsync(file);
   const state = { shift: null, samples: [] };
   for (const range of rowGroupRanges(metadata, collector.symbols)) {
-    const rows = await parquetReadObjects({ file, metadata, compressors, columns: COLUMNS, ...range });
-    collectRows(rows, collector, state);
+    const chunks = new Map(COLUMNS.map((name) => [name, []]));
+    await parquetRead({ file, metadata, compressors, columns: COLUMNS, ...range, onChunk: (chunk) => { chunks.get(chunk.columnName)?.push(chunk); } });
+    const column = Object.fromEntries(COLUMNS.map((name) => [name, columnAccessor(chunks.get(name), range.rowStart)]));
+    for (let row = range.rowStart; row < range.rowEnd; row++) {
+      collectRow(column.stock_id(row), column.date(row), column.open(row), column.high(row), column.low(row), column.close(row), column.volume(row), collector, state);
+    }
+    chunks.clear();
   }
   flushSamples(collector, state);
+}
+// Sequential reader over a column's chunks (each {rowStart,rowEnd,columnData}); chunk.rowStart is file-absolute.
+function columnAccessor(chunkList, rangeStart) {
+  const sorted = [...(chunkList || [])].sort((a, b) => a.rowStart - b.rowStart);
+  let index = 0;
+  return (row) => {
+    while (index < sorted.length && row >= sorted[index].rowEnd) index++;
+    while (index > 0 && row < sorted[index - 1].rowEnd && row >= sorted[index - 1].rowStart) index--;
+    const chunk = sorted[index];
+    if (!chunk || row < chunk.rowStart) return undefined;
+    return chunk.columnData[row - chunk.rowStart];
+  };
 }
 
 // ---- Evaluation ---------------------------------------------------------------------------
@@ -252,9 +277,11 @@ export async function collectHistory(symbols, { days = HISTORY_DAYS, now = new D
   }
   const months = (await listMonths()).filter((file) => file.month <= today.slice(0, 7)).reverse().slice(0, MAX_MONTHS);
   const monthsRead = [];
+  // Only the trailing window can matter: 7 trading days fit in ~3 calendar weeks even around holidays.
+  const fromDate = taipeiDate(new Date(now.getTime() - (days * 3 + 7) * 86_400_000));
   for (const file of months) {
     if (collector.days.size >= days) break;
-    const month = new BarCollector(symbols);
+    const month = new BarCollector(symbols, { fromDate });
     onProgress({ stage: 'month', message: `讀取 ${file.month} 月資料（約 ${Math.max(1, Math.round((file.size || 0) / 1048576))} MB）`, sizeBytes: file.size });
     try { await readImpl(file.path, month, { maxAgeSeconds: file.month === today.slice(0, 7) ? 3600 : 7 * 86400 }); }
     catch { failed.push(file.month); continue; }

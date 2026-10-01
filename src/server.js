@@ -15,7 +15,8 @@ import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateS
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
 import { createDocumentBackend, createFormulaLibraryBackend, dbConfigFromEnv } from './db.js';
-import { HISTORY_DAYS, listHfM1Dates, listHfM1Months, runHistory } from './history.js';
+import { HISTORY_DAYS, listHfM1Dates, listHfM1Months } from './history.js';
+import { fork } from 'node:child_process';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
@@ -59,7 +60,7 @@ function startHistoryJob(key, strategy, watchlist) {
   historyJobs.set(key, job); historyJobs.set(job.id, job);
   job.promise = historyQueue.then(async () => {
     job.status = 'running';
-    const result = await runHistory(strategy, watchlist, { onProgress: (progress) => { job.progress = progress; } });
+    const result = await runHistoryInWorker(strategy, watchlist, (progress) => { job.progress = progress; });
     historyCache.set(key, { at: Date.now(), result });
     if (historyCache.size > 20) historyCache.delete(historyCache.keys().next().value);
     job.result = result; job.status = 'done';
@@ -73,6 +74,31 @@ function startHistoryJob(key, strategy, watchlist) {
   });
   historyQueue = job.promise.catch(() => {});
   return job;
+}
+// Child heap cap: the container has ~1 GB and the monitor itself needs a share of it.
+// (worker_threads resourceLimits proved unreliable on Node 22; a forked process with a V8 flag is not.)
+const HISTORY_WORKER_HEAP_MB = Number(process.env.HISTORY_WORKER_HEAP_MB || 640);
+const HISTORY_WORKER_TIMEOUT_MS = Number(process.env.HISTORY_WORKER_TIMEOUT_MS || 10 * 60 * 1000);
+function runHistoryInWorker(strategy, watchlist, onProgress) {
+  return new Promise((resolve, reject) => {
+    const child = fork(fileURLToPath(new URL('./historyWorker.js', import.meta.url)), [JSON.stringify({ strategy, watchlist })], { execArgv: [`--max-old-space-size=${HISTORY_WORKER_HEAP_MB}`], stdio: ['ignore', 'inherit', 'pipe', 'ipc'] });
+    let settled = false, stderr = '';
+    child.stderr?.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4000); });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); fail('HISTORY_TIMEOUT', 'history worker timed out', 504); }, HISTORY_WORKER_TIMEOUT_MS);
+    const fail = (code, message, statusCode = 503) => { if (settled) return; settled = true; clearTimeout(timer); reject(Object.assign(new Error(message), { code, statusCode })); };
+    child.on('message', (message) => {
+      if (message.type === 'progress') onProgress(message.progress);
+      else if (message.type === 'done') { settled = true; clearTimeout(timer); resolve(message.result); }
+      else if (message.type === 'error') fail(message.code || 'HISTORY_FAILED', message.message, message.statusCode || 500);
+    });
+    child.on('error', (error) => fail('HISTORY_FAILED', error.message));
+    child.on('exit', (code, signal) => {
+      if (settled) return;
+      const oom = /heap out of memory/i.test(stderr) || signal === 'SIGABRT';
+      if (!oom) console.error('history worker exited', code, signal, stderr.slice(-500));
+      fail(oom ? 'HISTORY_OUT_OF_MEMORY' : 'HISTORY_FAILED', `history worker exited (${signal || code})`);
+    });
+  });
 }
 function historyJobView(job) {
   if (job.status === 'done') return { status: 'done', jobId: job.id, cached: false, ...job.result };
