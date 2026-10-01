@@ -15,14 +15,26 @@ export const AGENT_OUTPUT_SCHEMA={
   required:['status','indicatorId','version','timeframe','params','requestedIndicator','requestedTimeframe','requestedDirection','clarificationQuestion','unsupportedReason']
 };
 
+const PROVIDERS=['anthropic','openai','gemini','groq','openrouter'];
+const DEFAULT_KEY_ENV={anthropic:'ANTHROPIC_API_KEY',openai:'OPENAI_API_KEY',gemini:'GEMINI_API_KEY',groq:'GROQ_API_KEY',openrouter:'OPENROUTER_API_KEY'};
+// Errors that mean "this provider cannot answer right now" and justify moving on to the next key/provider.
+const SWITCH_CODES=['INDICATOR_AGENT_RATE_LIMITED','INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_OUTPUT_INVALID','INDICATOR_AGENT_SCHEMA_MISSING','INDICATOR_AGENT_CREDENTIALS_REJECTED','INDICATOR_AGENT_ACCESS_DENIED','INDICATOR_AGENT_TIMEOUT'];
+
 export function indicatorAgentStatus(env=process.env){
   const provider=String(env.INDICATOR_AGENT_PROVIDER||'').trim().toLowerCase();
   const model=String(env.INDICATOR_AGENT_MODEL||'').trim();
-  if(!provider||!model)return{configured:false,provider:provider||null,model:model||null,reason:'INDICATOR_AGENT_NOT_CONFIGURED'};
-  if(!['anthropic','openai','gemini','groq'].includes(provider))return{configured:false,provider,model,reason:'INDICATOR_AGENT_PROVIDER_UNSUPPORTED'};
-  const key={anthropic:env.ANTHROPIC_API_KEY,openai:env.OPENAI_API_KEY,gemini:env.GEMINI_API_KEY,groq:env.GROQ_API_KEY}[provider];
-  if(!key)return{configured:false,provider,model,reason:'INDICATOR_AGENT_KEY_UNAVAILABLE'};
-  return{configured:true,provider,model,reason:null};
+  const fallbacks=parseFallbacks(env).map(({provider,model,keyEnv})=>({provider,model,keyConfigured:Boolean(env[keyEnv])}));
+  if(!provider||!model)return{configured:false,provider:provider||null,model:model||null,reason:'INDICATOR_AGENT_NOT_CONFIGURED',fallbacks};
+  if(!PROVIDERS.includes(provider))return{configured:false,provider,model,reason:'INDICATOR_AGENT_PROVIDER_UNSUPPORTED',fallbacks};
+  if(!env[DEFAULT_KEY_ENV[provider]])return{configured:false,provider,model,reason:'INDICATOR_AGENT_KEY_UNAVAILABLE',fallbacks};
+  return{configured:true,provider,model,reason:null,fallbacks};
+}
+// INDICATOR_AGENT_FALLBACKS="provider:KEY_ENV_NAME:model,..." — the model keeps any further colons (openrouter ids).
+export function parseFallbacks(env=process.env){
+  return String(env.INDICATOR_AGENT_FALLBACKS||'').split(',').map((entry)=>entry.trim()).filter(Boolean).map((entry)=>{
+    const [provider,keyEnv,...rest]=entry.split(':');const model=rest.join(':').trim();
+    return{provider:String(provider||'').trim().toLowerCase(),keyEnv:String(keyEnv||'').trim(),model};
+  }).filter(({provider,keyEnv,model})=>PROVIDERS.includes(provider)&&keyEnv&&model);
 }
 
 export async function analyzeIndicatorRequest(text,definitions,{env=process.env,fetchImpl=fetch,context=[]}={}){
@@ -44,23 +56,42 @@ export async function analyzeIndicatorRequest(text,definitions,{env=process.env,
   ].join('\n');
   const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
   const {raw,status}=await requestStructuredAgent(system,user,AGENT_OUTPUT_SCHEMA,TOOL_NAME,{env,fetchImpl,maxTokens:1200});
-  return validateAgentOutput(raw,definitions,status);
+  return validateAgentOutput(normalizeAgentOutput(raw),definitions,status);
 }
 
 export async function requestStructuredAgent(system,user,schema,name,{env=process.env,fetchImpl=fetch,maxTokens=2400}={}){
   const status=indicatorAgentStatus(env);if(!status.configured)throw agentError(status.reason,503);
-  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),clampTimeout(env.INDICATOR_AGENT_TIMEOUT_MS));
-  const call=()=>status.provider==='anthropic'?callAnthropic(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='gemini'?callGemini(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='groq'?callGroq(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):callOpenAI(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens);
-  try{
-    try{return{raw:await call(),status};}
+  // Primary first, then each configured fallback (entries without a key are skipped). Each target gets its own timeout.
+  const chain=[{provider:status.provider,model:status.model,key:env[DEFAULT_KEY_ENV[status.provider]],baseUrl:env.INDICATOR_AGENT_BASE_URL||null},...parseFallbacks(env).filter(({keyEnv})=>env[keyEnv]).map(({provider,model,keyEnv})=>({provider,model,key:env[keyEnv],baseUrl:null}))];
+  let last=null,retryAfter=null,rateLimited=false;
+  for(const [index,target] of chain.entries()){
+    try{return{raw:await requestFromProvider(system,user,schema,name,target,{env,fetchImpl,maxTokens,allowWait:chain.length===1}),status:{configured:true,provider:target.provider,model:target.model,reason:null,fallbacks:status.fallbacks}};}
     catch(error){
-      // A model that emits JSON failing the provider's schema check (or a 5xx) usually succeeds on a second try.
-      // A short per-minute rate limit is waited out once; a long one is reported with the wait time.
+      if(!SWITCH_CODES.includes(error.code))throw error;
+      last=error;
+      if(error.code==='INDICATOR_AGENT_RATE_LIMITED'){rateLimited=true;if(error.retryAfterSeconds&&(retryAfter===null||error.retryAfterSeconds<retryAfter))retryAfter=error.retryAfterSeconds;}
+      const next=chain[index+1];
+      if(next)console.warn(`indicator-agent: ${name} ${target.provider}/${target.model}→${next.provider}/${next.model} ${error.code}${error.retryAfterSeconds?` retryAfter=${error.retryAfterSeconds}s`:''}`);
+    }
+  }
+  if(rateLimited){const error=agentError('INDICATOR_AGENT_RATE_LIMITED',429);if(retryAfter)error.retryAfterSeconds=retryAfter;throw error;}
+  throw last;
+}
+
+async function requestFromProvider(system,user,schema,name,target,{env,fetchImpl,maxTokens,allowWait}){
+  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),clampTimeout(env.INDICATOR_AGENT_TIMEOUT_MS));
+  const callers={anthropic:callAnthropic,gemini:callGemini,groq:callGroq,openrouter:callOpenRouter,openai:callOpenAI};
+  const call=()=>callers[target.provider](system,user,target,fetchImpl,controller.signal,schema,name,maxTokens);
+  try{
+    try{return await call();}
+    catch(error){
+      // A model that emits invalid JSON (or a 5xx) usually succeeds on a second try. A short per-minute rate limit
+      // is waited out once only when there is nothing to fail over to; otherwise the chain moves on at once.
       if(controller.signal.aborted)throw error;
-      if(error.code==='INDICATOR_AGENT_RATE_LIMITED'){if(!(error.retryAfterSeconds<=15))throw error;console.warn(`indicator-agent: ${name} rate limited, waiting ${error.retryAfterSeconds}s`);await new Promise((resolve)=>setTimeout(resolve,error.retryAfterSeconds*1000+250));return{raw:await call(),status};}
+      if(error.code==='INDICATOR_AGENT_RATE_LIMITED'){if(!allowWait||!(error.retryAfterSeconds<=15))throw error;console.warn(`indicator-agent: ${name} rate limited, waiting ${error.retryAfterSeconds}s`);await new Promise((resolve)=>setTimeout(resolve,error.retryAfterSeconds*1000+250));return await call();}
       if(!['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_OUTPUT_INVALID','INDICATOR_AGENT_SCHEMA_MISSING'].includes(error.code))throw error;
-      console.warn(`indicator-agent: ${name} retrying after ${error.code}`);
-      return{raw:await call(),status};
+      console.warn(`indicator-agent: ${name} ${target.provider} retrying after ${error.code}`);
+      return await call();
     }
   }
   catch(error){if(error.name==='AbortError')throw agentError('INDICATOR_AGENT_TIMEOUT',504);if(error.code)throw error;throw agentError('INDICATOR_AGENT_PROVIDER_FAILED',502);}finally{clearTimeout(timer);}
@@ -94,30 +125,59 @@ export function validateAgentProposal(input,definitions){
   return{id:strategy.id,version:strategy.version,timeframe:strategy.timeframe,definitionFingerprint:definition.fingerprint,params:strategy.params};
 }
 
-async function callAnthropic(system,user,status,env,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
-  const base=String(env.INDICATOR_AGENT_BASE_URL||'https://api.anthropic.com').replace(/\/$/,'');
-  const response=await fetchImpl(`${base}/v1/messages`,{method:'POST',signal,headers:{'content-type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:status.model,max_tokens:maxTokens,system:`${system}\nReturn exactly one ${name} tool call.`,messages:[{role:'user',content:user}],tools:[{name,description:'Return the validated interpretation of a monitoring request.',strict:true,input_schema:schema}],tool_choice:{type:'tool',name}})});
+async function callAnthropic(system,user,target,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
+  const base=String(target.baseUrl||'https://api.anthropic.com').replace(/\/$/,'');
+  const response=await fetchImpl(`${base}/v1/messages`,{method:'POST',signal,headers:{'content-type':'application/json','x-api-key':target.key,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:target.model,max_tokens:maxTokens,system:`${system}\nReturn exactly one ${name} tool call.`,messages:[{role:'user',content:user}],tools:[{name,description:'Return the validated interpretation of a monitoring request.',strict:true,input_schema:schema}],tool_choice:{type:'tool',name}})});
   const body=await providerJson(response); const tool=body.content?.find((item)=>item.type==='tool_use'&&item.name===name); if(!tool)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); return tool.input;
 }
 
-async function callOpenAI(system,user,status,env,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
-  const base=String(env.INDICATOR_AGENT_BASE_URL||'https://api.openai.com').replace(/\/$/,'');
-  const response=await fetchImpl(`${base}/v1/responses`,{method:'POST',signal,headers:{'content-type':'application/json',authorization:`Bearer ${env.OPENAI_API_KEY}`},body:JSON.stringify({model:status.model,store:false,instructions:system,input:user,max_output_tokens:maxTokens,text:{format:{type:'json_schema',name,strict:true,schema}}})});
+async function callOpenAI(system,user,target,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
+  const base=String(target.baseUrl||'https://api.openai.com').replace(/\/$/,'');
+  const response=await fetchImpl(`${base}/v1/responses`,{method:'POST',signal,headers:{'content-type':'application/json',authorization:`Bearer ${target.key}`},body:JSON.stringify({model:target.model,store:false,instructions:system,input:user,max_output_tokens:maxTokens,text:{format:{type:'json_schema',name,strict:true,schema}}})});
   const body=await providerJson(response); const text=body.output?.flatMap((item)=>item.content||[]).find((item)=>item.type==='output_text')?.text||body.output_text; if(!text)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); try{return JSON.parse(text);}catch{throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',502);}
 }
 
-async function callGemini(system,user,status,env,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
-  const base=String(env.INDICATOR_AGENT_BASE_URL||'https://generativelanguage.googleapis.com').replace(/\/$/,'');
-  const model=String(status.model).replace(/^models\//,'');
-  const response=await fetchImpl(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',signal,headers:{'content-type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents:[{role:'user',parts:[{text:user}]}],generationConfig:{responseMimeType:'application/json',responseJsonSchema:schema,maxOutputTokens:maxTokens,thinkingConfig:{thinkingBudget:0}}})});
+async function callGemini(system,user,target,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
+  const base=String(target.baseUrl||'https://generativelanguage.googleapis.com').replace(/\/$/,'');
+  const model=String(target.model).replace(/^models\//,'');
+  const response=await fetchImpl(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',signal,headers:{'content-type':'application/json','x-goog-api-key':target.key},body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents:[{role:'user',parts:[{text:user}]}],generationConfig:{responseMimeType:'application/json',responseJsonSchema:schema,maxOutputTokens:maxTokens,thinkingConfig:{thinkingBudget:0}}})});
   const body=await providerJson(response); const text=body.candidates?.[0]?.content?.parts?.map((part)=>part.text||'').join(''); if(!text)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); try{return JSON.parse(text);}catch{throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',502);}
 }
 
-async function callGroq(system,user,status,env,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
-  const base=String(env.INDICATOR_AGENT_BASE_URL||'https://api.groq.com/openai').replace(/\/$/,'');
-  const response=await fetchImpl(`${base}/v1/chat/completions`,{method:'POST',signal,headers:{'content-type':'application/json',authorization:`Bearer ${env.GROQ_API_KEY}`},body:JSON.stringify({model:status.model,messages:[{role:'system',content:system},{role:'user',content:user}],response_format:{type:'json_schema',json_schema:{name,strict:true,schema}},reasoning_effort:'low',temperature:0,max_completion_tokens:maxTokens})});
-  const body=await providerJson(response); const text=body.choices?.[0]?.message?.content; if(!text)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); try{return JSON.parse(text);}catch{throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',502);}
+// Groq's strict json_schema mode rejects (400 json_validate_failed) any reply that omits a null-valued required
+// key, which gpt-oss does constantly. json_object mode plus a short field list in the system prompt accepts the
+// reply; the caller's normalizer then fills what is missing and the strict validator judges the result.
+async function callGroq(system,user,target,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
+  const base=String(target.baseUrl||'https://api.groq.com/openai').replace(/\/$/,'');
+  return callChatCompletions(`${base}/v1/chat/completions`,{authorization:`Bearer ${target.key}`},system,user,target,fetchImpl,signal,schema,maxTokens);
 }
+async function callOpenRouter(system,user,target,fetchImpl,signal,schema=AGENT_OUTPUT_SCHEMA,name=TOOL_NAME,maxTokens=1200){
+  const base=String(target.baseUrl||'https://openrouter.ai/api').replace(/\/$/,'');
+  return callChatCompletions(`${base}/v1/chat/completions`,{authorization:`Bearer ${target.key}`,'HTTP-Referer':'https://watch365.just1stock.com','X-Title':'watch365'},system,user,target,fetchImpl,signal,schema,maxTokens);
+}
+async function callChatCompletions(url,headers,system,user,target,fetchImpl,signal,schema,maxTokens){
+  const response=await fetchImpl(url,{method:'POST',signal,headers:{'content-type':'application/json',...headers},body:JSON.stringify({model:target.model,messages:[{role:'system',content:`${system}\n${schemaHint(schema)}`},{role:'user',content:user}],response_format:{type:'json_object'},reasoning_effort:'low',temperature:0,max_completion_tokens:maxTokens})});
+  const body=await providerJson(response); const text=body.choices?.[0]?.message?.content; if(!text)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); try{return JSON.parse(stripFence(text));}catch{throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',502);}
+}
+// One line per top-level field, e.g. "status(existing|formula|…)", "nodes(array of {id,op,…})": enough for json_object mode.
+export function schemaHint(schema){
+  const describe=(item)=>{const types=[].concat(item.type||[]);if(item.enum)return item.enum.filter((value)=>value!==null).join('|')+(item.enum.includes(null)?'|null':'');if(item.properties)return `{${Object.keys(item.properties).join(',')}}`;if(types.includes('array'))return `array of ${item.items?describe(item.items):'string'}${types.includes('null')?'|null':''}`;return types.join('|');};
+  return `輸出一個 JSON 物件，欄位：${Object.entries(schema.properties).map(([key,item])=>`${key}(${describe(item)})`).join('、')}。所有欄位都要輸出，不適用填 null；不得多加其他欄位。`;
+}
+function stripFence(text){return String(text).replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'');}
+
+// Lenient repair before the strict validator: fills required keys the model dropped and coerces numeric strings.
+// Unknown keys are kept so the validator still rejects smuggled fields.
+export function normalizeAgentOutput(raw){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return raw;
+  const out={...raw};
+  for(const key of ['indicatorId','version','timeframe'])out[key]=out[key]??null;
+  for(const key of ['clarificationQuestion','unsupportedReason'])if(out[key]==null)out[key]='';
+  const params=out.params&&typeof out.params==='object'&&!Array.isArray(out.params)?out.params:{};
+  out.params={period:coerceNumber(params.period),threshold:coerceNumber(params.threshold)};
+  return out;
+}
+function coerceNumber(value){if(typeof value==='string'&&value.trim()!==''){const number=Number(value);if(Number.isFinite(number))return number;}return value??null;}
 
 function validateShape(value){
   const keys=Object.keys(AGENT_OUTPUT_SCHEMA.properties); if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some((key)=>!keys.includes(key))||keys.some((key)=>!Object.hasOwn(value,key)))throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',422);

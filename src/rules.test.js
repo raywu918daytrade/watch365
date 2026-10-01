@@ -409,13 +409,13 @@ test('registry 可在運行中讀到新增版本，拒絕未知 executor 與非�
 });
 
 test('Agent 必須明確設定 provider/model，不因主機有 Anthropic key 自動啟用', () => {
-  assert.deepEqual(indicatorAgentStatus({ANTHROPIC_API_KEY:'present-but-not-authorized'}),{configured:false,provider:null,model:null,reason:'INDICATOR_AGENT_NOT_CONFIGURED'});
+  assert.deepEqual(indicatorAgentStatus({ANTHROPIC_API_KEY:'present-but-not-authorized'}),{configured:false,provider:null,model:null,reason:'INDICATOR_AGENT_NOT_CONFIGURED',fallbacks:[]});
   assert.equal(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'anthropic',INDICATOR_AGENT_MODEL:'test-model'}).reason,'INDICATOR_AGENT_KEY_UNAVAILABLE');
-  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'anthropic',INDICATOR_AGENT_MODEL:'test-model',ANTHROPIC_API_KEY:'secret'}),{configured:true,provider:'anthropic',model:'test-model',reason:null});
+  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'anthropic',INDICATOR_AGENT_MODEL:'test-model',ANTHROPIC_API_KEY:'secret'}),{configured:true,provider:'anthropic',model:'test-model',reason:null,fallbacks:[]});
   assert.equal(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'gemini',INDICATOR_AGENT_MODEL:'test-model'}).reason,'INDICATOR_AGENT_KEY_UNAVAILABLE');
-  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'gemini',INDICATOR_AGENT_MODEL:'test-model',GEMINI_API_KEY:'secret'}),{configured:true,provider:'gemini',model:'test-model',reason:null});
+  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'gemini',INDICATOR_AGENT_MODEL:'test-model',GEMINI_API_KEY:'secret'}),{configured:true,provider:'gemini',model:'test-model',reason:null,fallbacks:[]});
   assert.equal(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'test-model'}).reason,'INDICATOR_AGENT_KEY_UNAVAILABLE');
-  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'test-model',GROQ_API_KEY:'secret'}),{configured:true,provider:'groq',model:'test-model',reason:null});
+  assert.deepEqual(indicatorAgentStatus({INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'test-model',GROQ_API_KEY:'secret'}),{configured:true,provider:'groq',model:'test-model',reason:null,fallbacks:[]});
 });
 
 test('專案 env 不覆蓋外部環境，且可載入缺少的設定', async () => {
@@ -453,7 +453,7 @@ test('Agent 將 provider 401/403 映射為安全且明確的錯誤碼', async ()
   await assert.rejects(()=>analyzeIndicatorRequest('一分鐘SMA20價格上穿',definitions,{env,fetchImpl:async()=>new Response('project denied detail',{status:403})}),{code:'INDICATOR_AGENT_ACCESS_DENIED',statusCode:503});
 });
 
-test('Groq adapter 使用 strict structured output 並分離 system/user 訊息', async () => {
+test('Groq adapter 使用 json_object 模式、system 附欄位說明並分離 system/user 訊息', async () => {
   const definitions=await new IndicatorRegistry().list(); let captured;
   const fetchImpl=async(url,options)=>{captured={url,options,body:JSON.parse(options.body)};return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(agentOutput({indicatorId:'rsi.cross',requestedIndicator:'rsi',params:{period:14,threshold:30}}))}}]}),{status:200,headers:{'content-type':'application/json'}});};
   const result=await analyzeIndicatorRequest('一分鐘RSI14上穿30',definitions,{env:{INDICATOR_AGENT_PROVIDER:'groq',INDICATOR_AGENT_MODEL:'openai/gpt-oss-20b',GROQ_API_KEY:'not-in-body'},fetchImpl});
@@ -466,8 +466,9 @@ test('Groq adapter 使用 strict structured output 並分離 system/user 訊息'
   assert.match(captured.body.messages[0].content,/「我要RSI」應回 status=clarification/);
   assert.match(captured.body.messages[0].content,/必須使用繁體中文/);
   assert.equal(captured.body.messages[1].content,'一分鐘RSI14上穿30');
-  assert.equal(captured.body.response_format.json_schema.strict,true);
-  assert.deepEqual(captured.body.response_format.json_schema.schema,AGENT_OUTPUT_SCHEMA);
+  assert.deepEqual(captured.body.response_format,{type:'json_object'});
+  assert.match(captured.body.messages[0].content,/輸出一個 JSON 物件，欄位：status\(matched\|clarification\|unsupported\)/);
+  assert.match(captured.body.messages[0].content,/params\(\{period,threshold\}\)/);
   assert.match(AGENT_OUTPUT_SCHEMA.properties.clarificationQuestion.description,/Never null/);
   assert.equal(captured.body.reasoning_effort,'low'); assert.equal(captured.body.temperature,0); assert.equal(captured.body.max_completion_tokens,1200);
   assert.equal(JSON.stringify(captured.body).includes('not-in-body'),false);

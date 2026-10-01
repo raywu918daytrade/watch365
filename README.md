@@ -37,10 +37,11 @@
 
 Agent 預設停用，必須明確設定 `INDICATOR_AGENT_PROVIDER` 與 `INDICATOR_AGENT_MODEL` 才會嘗試呼叫模型；不會因主機剛好存在 API key 而自動啟用。
 
-- `INDICATOR_AGENT_PROVIDER`：`anthropic`、`openai`、`gemini` 或 `groq`
+- `INDICATOR_AGENT_PROVIDER`：`anthropic`、`openai`、`gemini`、`groq` 或 `openrouter`
 - `INDICATOR_AGENT_MODEL`：由部署者指定並固定的模型 ID，專案不猜測最新版
-- `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 或 `GROQ_API_KEY`：依 provider 使用，彼此不共用，也不使用 `HF_TOKEN`
-- `INDICATOR_AGENT_BASE_URL`：選填；未設定時使用 provider 官方 API
+- `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GROQ_API_KEY` 或 `OPENROUTER_API_KEY`：依 provider 使用，彼此不共用，也不使用 `HF_TOKEN`
+- `INDICATOR_AGENT_FALLBACKS`：選填；逗號分隔的 `provider:KEY_ENV_NAME:model`（例如 `groq:GROQ_API_KEY_JUST1STOCK:openai/gpt-oss-20b,gemini:GEMINI_API_KEY:gemini-2.5-flash`），主要 provider 回 429／5xx／逾時／輸出無效時依序切換，全部 429 時回報最小等待秒數
+- `INDICATOR_AGENT_BASE_URL`：選填；只套用在主要 provider，未設定時使用 provider 官方 API
 - `INDICATOR_AGENT_TIMEOUT_MS`：選填，限制在 1–30 秒，預設 10 秒
 
 Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的變數維持優先，不會被檔案覆蓋。Gemini 使用官方 `generativelanguage.googleapis.com` REST API；Groq 使用官方 `api.groq.com/openai` chat completions API。兩者都要求結構化 JSON 輸出，且 provider 之間不會自動 fallback。

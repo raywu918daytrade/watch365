@@ -288,11 +288,11 @@ async function drawLibrary(startAi){
 }
 async function runAi(){
   const ai=state.ai;if(!ai)return;
-  ai.loading=true;ai.error=null;drawAi();
+  ai.loading=true;ai.error=null;ai.errorCode=null;drawAi();
   const cacheable=!ai.context.length,cached=cacheable?aiCache.get(ai.text):null;
   if(cached){ai.result=cached;ai.loading=false;save();drawAi();return;}
   try{const result=await api('/api/indicator-agent/parse',{text:ai.text,context:ai.context});if(cacheable)aiCache.set(ai.text,result);if(state.ai!==ai)return;ai.result=result;}
-  catch(error){if(state.ai!==ai)return;ai.result=null;ai.error=errorText(error);}
+  catch(error){if(state.ai!==ai)return;ai.result=null;ai.error=errorText(error);ai.errorCode=error?.code||null;}
   ai.loading=false;save();drawAi();
 }
 function registryCondition(proposal){
@@ -313,7 +313,8 @@ function drawAi(){
   const head=`<div class="proto-history-head"><div><p class="proto-eyebrow">AI 解析</p><h2>${escapeHtml(ai.text)}</h2></div><button class="proto-link" id="aiClose">關閉</button></div>`;
   let body;
   if(ai.loading)body='<div class="proto-status"><strong>AI 解析中…</strong><p>通常需要幾秒鐘。</p></div>';
-  else if(ai.error)body=`<div class="proto-status"><strong>這次沒有解析成功</strong><p>${escapeHtml(ai.error)}</p><p class="proto-signature">可以換個更具體的說法，例如寫出指標名稱、期數和方向：「KD 黃金交叉」「收盤上穿 SMA(60)」「成交量大於 20 根均量 2 倍」。</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法重新描述" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">送出需求</button><button class="proto-secondary" id="aiRetry">同樣文字再試一次</button><button class="proto-primary" id="aiSendReply">重新解析</button></div></div>`;
+  else if(ai.error){const systemSide=['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_RATE_LIMITED','INDICATOR_AGENT_TIMEOUT','INDICATOR_AGENT_CREDENTIALS_REJECTED','INDICATOR_AGENT_ACCESS_DENIED','INDICATOR_AGENT_NOT_CONFIGURED','INDICATOR_AGENT_SCHEMA_MISSING'].includes(ai.errorCode);
+    body=`<div class="proto-status"><strong>${systemSide?'AI 服務這次沒有回應':'這次沒有解析成功'}</strong><p>${escapeHtml(ai.error)}</p><p class="proto-signature">${systemSide?'這是服務端的問題，和你的描述無關；稍等幾秒按「同樣文字再試一次」通常就好。':'可以換個更具體的說法，例如寫出指標名稱、期數和方向：「KD 黃金交叉」「收盤上穿 SMA(60)」「成交量大於 20 根均量 2 倍」。'}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法重新描述" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">送出需求</button><button class="${systemSide?'proto-primary':'proto-secondary'}" id="aiRetry">同樣文字再試一次</button><button class="${systemSide?'proto-secondary':'proto-primary'}" id="aiSendReply">重新解析</button></div></div>`;}
   else{
     const result=ai.result||{};
     if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
