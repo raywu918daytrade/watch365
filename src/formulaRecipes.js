@@ -30,6 +30,10 @@ export function ichimokuSenkouB(b = 52, shift = 26) { return win('prev', ichimok
 export function ichimokuCloudTop() { return bin('max', ichimokuSenkouA(), ichimokuSenkouB()); }
 export function ichimokuCloudBottom() { return bin('min', ichimokuSenkouA(), ichimokuSenkouB()); }
 
+// VWAP since the session open: Σ(typical price × volume) ÷ Σ volume, typical price = (high+low+close)/3.
+export function typicalPrice() { return bin('div', bin('add', bin('add', src('high'), src('low')), src('close')), num(3)); }
+export function vwap() { return bin('div', { op:'cumsum', input:bin('mul', typicalPrice(), src('volume')) }, { op:'cumsum', input:src('volume') }); }
+
 // Wilder RSI: RMA of gains / (RMA of gains + RMA of losses) × 100.
 export function wilderRsi(period = 14) {
   const change = bin('sub', src('close'), win('prev', src('close'), 1));
@@ -65,5 +69,8 @@ export const FORMULA_RECIPES = Object.freeze([
   { key:'pct_rise', name:'收盤價相對前5根收盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', win('prev', src('close'), 5), num(1.02))) },
   { key:'ichimoku_above_cloud', name:'一目均衡表(9,26,52) 收盤價向上穿越雲層上緣', ast:bin('crosses_above', src('close'), ichimokuCloudTop()) },
   { key:'ichimoku_below_cloud', name:'一目均衡表(9,26,52) 收盤價向下穿越雲層下緣', ast:bin('crosses_below', src('close'), ichimokuCloudBottom()) },
-  { key:'ichimoku_tk_cross', name:'一目均衡表 轉換線(9) 向上穿越 基準線(26)', ast:bin('crosses_above', ichimokuTenkan(), ichimokuKijun()) }
+  { key:'ichimoku_tk_cross', name:'一目均衡表 轉換線(9) 向上穿越 基準線(26)', ast:bin('crosses_above', ichimokuTenkan(), ichimokuKijun()) },
+  { key:'vwap_above', name:'收盤價向上穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_above', src('close'), vwap()) },
+  { key:'vwap_below', name:'收盤價向下穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_below', src('close'), vwap()) },
+  { key:'open_gain', name:'收盤價相對當日開盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', { op:'first', input:src('open') }, num(1.02))) }
 ]);

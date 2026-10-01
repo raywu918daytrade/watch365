@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import technicalIndicators from 'technicalindicators';
-import { bollinger, ichimokuCloudBottom, ichimokuCloudTop, ichimokuMid, kdD, kdK, macdLine, macdSignal, wilderRsi, williamsR } from './formulaRecipes.js';
+import { bollinger, ichimokuCloudBottom, ichimokuCloudTop, ichimokuMid, kdD, kdK, macdLine, macdSignal, vwap, wilderRsi, williamsR } from './formulaRecipes.js';
 
 const { SMA, EMA } = technicalIndicators;
 
@@ -18,7 +18,10 @@ const COMPARE=['crosses_above','crosses_below','gte','lte','gt','lt'];
 const LOGIC=['all','any'];
 // 'tr' is Wilder's true range max(high−low, |high−prev close|, |low−prev close|) as one block, so the model
 // cannot get the definition wrong (a live test produced a plausible-looking ATR with a wrong TR).
-export const FORMULA_OPS=Object.freeze(['source','constant','tr',...ARITH,'abs',...WINDOW,'prev',...COMPARE,...LOGIC]);
+// Session blocks: the engine evaluates one trading day at a time, so cumsum(x) is the running total since the
+// first bar of the day (VWAP = cumsum(price×volume) ÷ cumsum(volume)) and first(x) is today's first value.
+const UNARY=['abs','cumsum','first'];
+export const FORMULA_OPS=Object.freeze(['source','constant','tr',...ARITH,...UNARY,...WINDOW,'prev',...COMPARE,...LOGIC]);
 const MIN_PERIOD=2,MAX_PERIOD=200,MAX_PREV=60,MIN_ITEMS=2,MAX_ITEMS=4;
 const MAX_SOURCE_TEXT=200;
 
@@ -40,7 +43,7 @@ function visit(node,depth,budget){
   if(node.op==='constant'){exact(keys,['op','value']);if(typeof node.value!=='number'||!Number.isFinite(node.value)||Math.abs(node.value)>1e9)throw formulaError('FORMULA_NUMBER_INVALID');return'number';}
   if(node.op==='tr'){exact(keys,['op']);return'number';}
   if(ARITH.includes(node.op)){exact(keys,['op','left','right']);number(node.left);number(node.right);return'number';}
-  if(node.op==='abs'){exact(keys,['op','input']);number(node.input);return'number';}
+  if(UNARY.includes(node.op)){exact(keys,['op','input']);number(node.input);return'number';}
   if(WINDOW.includes(node.op)){exact(keys,['op','input','period']);if(!Number.isInteger(node.period)||node.period<MIN_PERIOD||node.period>MAX_PERIOD)throw formulaError('FORMULA_PERIOD_INVALID');number(node.input);return'number';}
   if(node.op==='prev'){exact(keys,['op','input','period']);if(!Number.isInteger(node.period)||node.period<1||node.period>MAX_PREV)throw formulaError('FORMULA_PERIOD_INVALID');number(node.input);return'number';}
   if(COMPARE.includes(node.op)){exact(keys,['op','left','right']);number(node.left);number(node.right);return'boolean';}
@@ -52,7 +55,7 @@ function warmupBars(node){
   if(['source','constant'].includes(node.op))return 1;
   if(node.op==='tr')return 2;
   if(ARITH.includes(node.op)||COMPARE.includes(node.op))return Math.max(warmupBars(node.left),warmupBars(node.right))+(node.op.startsWith('crosses_')?1:0);
-  if(node.op==='abs')return warmupBars(node.input);
+  if(UNARY.includes(node.op))return warmupBars(node.input);
   if(WINDOW.includes(node.op))return warmupBars(node.input)+node.period-1;
   if(node.op==='prev')return warmupBars(node.input)+node.period;
   if(LOGIC.includes(node.op))return Math.max(...node.items.map(warmupBars));
@@ -71,6 +74,8 @@ function compute(node,context){
   if(node.op==='tr')return bars.map((bar,index)=>{const high=finite(bar?.high),low=finite(bar?.low),prevClose=index>0?finite(bars[index-1]?.close):null;if(high==null||low==null||prevClose==null)return null;return Math.max(high-low,Math.abs(high-prevClose),Math.abs(low-prevClose));});
   if(ARITH.includes(node.op)){const a=series(node.left,context),b=series(node.right,context);return a.map((value,index)=>arith(node.op,value,b[index]));}
   if(node.op==='abs')return series(node.input,context).map((value)=>value==null?null:Math.abs(value));
+  if(node.op==='cumsum'){let total=0,seen=false;return series(node.input,context).map((value)=>{if(value==null)return seen?total:null;seen=true;total+=value;return total;});}
+  if(node.op==='first'){const input=series(node.input,context);const head=input.find((value)=>value!=null)??null;return input.map((value)=>value==null&&head==null?null:head);}
   if(WINDOW.includes(node.op))return rolling(node.op,series(node.input,context),node.period);
   if(node.op==='prev'){const values=series(node.input,context);return values.map((_,index)=>index<node.period?null:values[index-node.period]);}
   if(['gte','lte','gt','lt'].includes(node.op)){const a=series(node.left,context),b=series(node.right,context);return a.map((value,index)=>!Number.isFinite(value)||!Number.isFinite(b[index])?null:compare(node.op,value,b[index]));}
@@ -116,7 +121,7 @@ function staticValue(node){
   const left=staticValue(node.left),right=staticValue(node.right);if(left==null||right==null)return null;return arith(node.op,left,right);
 }
 export function formulaChildren(node){return children(node);}
-function children(node){if(ARITH.includes(node.op)||COMPARE.includes(node.op))return[node.left,node.right];if(node.op==='abs'||node.op==='prev'||WINDOW.includes(node.op))return[node.input];if(LOGIC.includes(node.op))return node.items;return[];}
+function children(node){if(ARITH.includes(node.op)||COMPARE.includes(node.op))return[node.left,node.right];if(UNARY.includes(node.op)||node.op==='prev'||WINDOW.includes(node.op))return[node.input];if(LOGIC.includes(node.op))return node.items;return[];}
 function canonical(value){if(Array.isArray(value))return value.map(canonical);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map((key)=>[key,canonical(value[key])]));return value;}
 const SOURCE_LABEL={open:'開盤價',high:'最高價',low:'最低價',close:'收盤價',volume:'成交量'};
 const WINDOW_LABEL={sma:'SMA',ema:'EMA',rma:'Wilder平滑',highest:'最高值',lowest:'最低值',stddev:'標準差'};
@@ -138,6 +143,7 @@ function knownLabel(node){
   if(node.op==='ema'){const f=node.input?.left?.period,l=node.input?.right?.period;if(Number.isInteger(f)&&Number.isInteger(l)&&same(macdSignal(f,l,node.period)))return `MACD DEA(${f},${l},${node.period})`;}
   if(node.op==='add'||node.op==='sub'){const p=node.left?.period,k=node.right?.right?.value;if(node.left?.op==='sma'&&Number.isInteger(p)&&typeof k==='number'&&same(bollinger(p,k,node.op==='add'?'upper':'lower')))return `布林${node.op==='add'?'上軌':'下軌'}(${p}, ${k}σ)`;}
   if(node.op==='rma'&&node.input?.op==='tr')return `ATR(${node.period})`;
+  if(node.op==='div'&&same(vwap()))return 'VWAP(當日成交量加權均價)';
   if(node.op==='max'&&same(ichimokuCloudTop()))return '一目雲層上緣(9,26,52)';
   if(node.op==='min'&&same(ichimokuCloudBottom()))return '一目雲層下緣(9,26,52)';
   if(node.op==='div'){const n=node.left?.left?.period;if(Number.isInteger(n)&&same(ichimokuMid(n)))return n===9?'一目轉換線(9)':n===26?'一目基準線(26)':`一目中值線(${n})`;}
@@ -151,6 +157,8 @@ function summarize(node){
   if(WINDOW.includes(node.op))return `${WINDOW_LABEL[node.op]}(${summarize(node.input)}, ${node.period})`;
   if(node.op==='prev')return `前${node.period}根的${summarize(node.input)}`;
   if(node.op==='abs')return `|${summarize(node.input)}|`;
+  if(node.op==='cumsum')return `當日累計(${summarize(node.input)})`;
+  if(node.op==='first')return `當日第一根的${summarize(node.input)}`;
   if(node.op==='max'||node.op==='min')return `${node.op==='max'?'較大值':'較小值'}(${summarize(node.left)}, ${summarize(node.right)})`;
   if(['add','sub','mul','div'].includes(node.op))return `(${summarize(node.left)} ${ {add:'+',sub:'-',mul:'×',div:'÷'}[node.op]} ${summarize(node.right)})`;
   if(LOGIC.includes(node.op))return node.items.map((item)=>LOGIC.includes(item.op)?`（${summarize(item)}）`:summarize(item)).join(node.op==='all'?' 且 ':' 或 ');

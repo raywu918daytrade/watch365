@@ -88,7 +88,7 @@ test('planMonitorCondition 用 json_object 回覆、正規化後回 formula，�
   assert.equal(result.status, 'formula'); assert.equal(result.proposal.warmupBars, 2); assert.deepEqual(result.provider, { configured:true, provider:'groq', model:'openai/gpt-oss-20b', reason:null, fallbacks:[] });
   assert.deepEqual(body.response_format, { type:'json_object' }); assert.equal(body.reasoning_effort, 'low'); assert.equal(body.temperature, 0);
   const system = body.messages[0].content;
-  assert.match(system, /每個 node 一律輸出 9 個 key/); assert.match(system, /完整範例「收盤上穿 SMA 20」/); assert.match(system, /可改用：/); assert.match(system, /連續N根紅K/); assert.match(system, /乖離率/); assert.match(system, /CCI/); assert.match(system, /VWAP、OBV/);
+  assert.match(system, /每個 node 一律輸出 9 個 key/); assert.match(system, /完整範例「收盤上穿 SMA 20」/); assert.match(system, /可改用：/); assert.match(system, /連續N根紅K/); assert.match(system, /乖離率/); assert.match(system, /CCI/); assert.match(system, /VWAP=cumsum/);
   assert.ok(system.indexOf('每個 node 一律輸出 9 個 key') < system.indexOf('Registry:'), 'format rules come first');
   assert.match(system, /輸出一個 JSON 物件，欄位：status\(existing\|formula\|clarification\|discussion\)/);
   assert.ok(buildPlannerSystem(definitions).length + schemaHint(FORMULA_PLAN_SCHEMA).length <= 4500, `system too long: ${system.length}`);

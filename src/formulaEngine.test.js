@@ -105,7 +105,7 @@ test('指紋與 canonical 涵蓋新積木：鍵序無關、參數不同即不同
   const c = validateFormula(bin('gt', close, win('prev', win('highest', src('high'), 20), 2)));
   assert.equal(a.fingerprint, b.fingerprint);
   assert.notEqual(a.fingerprint, c.fingerprint);
-  assert.deepEqual([...FORMULA_OPS].sort(), ['abs', 'add', 'all', 'any', 'constant', 'crosses_above', 'crosses_below', 'div', 'ema', 'gt', 'gte', 'highest', 'lowest', 'lt', 'lte', 'max', 'min', 'mul', 'prev', 'rma', 'sma', 'source', 'stddev', 'sub', 'tr']);
+  assert.deepEqual([...FORMULA_OPS].sort(), ['abs', 'add', 'all', 'any', 'constant', 'crosses_above', 'crosses_below', 'cumsum', 'div', 'ema', 'first', 'gt', 'gte', 'highest', 'lowest', 'lt', 'lte', 'max', 'min', 'mul', 'prev', 'rma', 'sma', 'source', 'stddev', 'sub', 'tr']);
 });
 
 // ---- Reference implementations (plain loops, independent of the engine) ----------------------
@@ -270,4 +270,20 @@ test('tr block equals Wilder true range and ATR labels readably', () => {
   const atr = validateFormula({ op:'gt', left:{ op:'rma', input:{ op:'tr' }, period:14 }, right:{ op:'constant', value:1 } });
   assert.equal(atr.warmupBars, 15);
   assert.match(formulaSummary(atr.ast), /ATR\(14\)/);
+});
+
+test('cumsum/first are session blocks: VWAP and open-relative gain', () => {
+  const bars = [
+    { open:100, high:102, low:99, close:100, volume:100 },
+    { open:101, high:104, low:100, close:103, volume:300 },
+    { open:103, high:103, low:101, close:102, volume:100 }
+  ];
+  const vwapSeries = evaluateFormulaSeries({ op:'gt', left:recipe('vwap_above').right, right:{ op:'constant', value:0 } }, bars);
+  assert.deepEqual(vwapSeries, [true, true, true]);
+  // bar 1: close 100 < TP 100.33 (= VWAP); bar 2: VWAP ≈ 101.83, close 103 crosses above
+  const above = evaluateFormulaSeries(recipe('vwap_above'), bars);
+  assert.equal(above[0], null); assert.equal(above[1], true);
+  const gain = evaluateFormulaSeries(recipe('open_gain'), bars); // first(open)=100 → close ≥ 102
+  assert.deepEqual(gain, [false, true, true]);
+  assert.match(formulaSummary(validateFormula(recipe('vwap_above')).ast), /VWAP/);
 });
