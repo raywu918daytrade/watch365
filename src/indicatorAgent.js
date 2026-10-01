@@ -50,7 +50,16 @@ export async function analyzeIndicatorRequest(text,definitions,{env=process.env,
 export async function requestStructuredAgent(system,user,schema,name,{env=process.env,fetchImpl=fetch,maxTokens=2400}={}){
   const status=indicatorAgentStatus(env);if(!status.configured)throw agentError(status.reason,503);
   const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),clampTimeout(env.INDICATOR_AGENT_TIMEOUT_MS));
-  try{const raw=status.provider==='anthropic'?await callAnthropic(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='gemini'?await callGemini(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='groq'?await callGroq(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):await callOpenAI(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens);return{raw,status};}
+  const call=()=>status.provider==='anthropic'?callAnthropic(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='gemini'?callGemini(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):status.provider==='groq'?callGroq(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens):callOpenAI(system,user,status,env,fetchImpl,controller.signal,schema,name,maxTokens);
+  try{
+    try{return{raw:await call(),status};}
+    catch(error){
+      // A model that emits JSON failing the provider's schema check (or a 5xx) usually succeeds on a second try.
+      if(!['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_OUTPUT_INVALID','INDICATOR_AGENT_SCHEMA_MISSING'].includes(error.code)||controller.signal.aborted)throw error;
+      console.warn(`indicator-agent: ${name} retrying after ${error.code}`);
+      return{raw:await call(),status};
+    }
+  }
   catch(error){if(error.name==='AbortError')throw agentError('INDICATOR_AGENT_TIMEOUT',504);if(error.code)throw error;throw agentError('INDICATOR_AGENT_PROVIDER_FAILED',502);}finally{clearTimeout(timer);}
 }
 
@@ -120,6 +129,9 @@ async function providerJson(response){
   if(!response.ok){
     const errors={401:['INDICATOR_AGENT_CREDENTIALS_REJECTED',502],403:['INDICATOR_AGENT_ACCESS_DENIED',503],429:['INDICATOR_AGENT_RATE_LIMITED',429]};
     const [code,statusCode]=errors[response.status]||['INDICATOR_AGENT_PROVIDER_FAILED',502];
+    // Log the provider's reason (status + a short body excerpt, never credentials) so failures can be diagnosed.
+    let excerpt='';try{excerpt=(await response.text()).replace(/\s+/g,' ').slice(0,400);}catch{}
+    console.error(`indicator-agent: provider responded ${response.status} ${excerpt}`);
     throw agentError(code,statusCode);
   }
   try{return await response.json();}catch{throw agentError('INDICATOR_AGENT_PROVIDER_FAILED',502);}

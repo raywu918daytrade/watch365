@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import technicalIndicators from 'technicalindicators';
-import { bollinger, kdD, kdK, macdLine, macdSignal, wilderRsi, williamsR } from './formulaRecipes.js';
+import { bollinger, ichimokuCloudBottom, ichimokuCloudTop, ichimokuMid, kdD, kdK, macdLine, macdSignal, wilderRsi, williamsR } from './formulaRecipes.js';
 
 const { SMA, EMA } = technicalIndicators;
 
@@ -132,6 +132,9 @@ function knownLabel(node){
   if(node.op==='sub'){const f=node.left?.period,l=node.right?.period;if(Number.isInteger(f)&&Number.isInteger(l)&&same(macdLine(f,l)))return `MACD DIF(${f},${l})`;}
   if(node.op==='ema'){const f=node.input?.left?.period,l=node.input?.right?.period;if(Number.isInteger(f)&&Number.isInteger(l)&&same(macdSignal(f,l,node.period)))return `MACD DEA(${f},${l},${node.period})`;}
   if(node.op==='add'||node.op==='sub'){const p=node.left?.period,k=node.right?.right?.value;if(node.left?.op==='sma'&&Number.isInteger(p)&&typeof k==='number'&&same(bollinger(p,k,node.op==='add'?'upper':'lower')))return `布林${node.op==='add'?'上軌':'下軌'}(${p}, ${k}σ)`;}
+  if(node.op==='max'&&same(ichimokuCloudTop()))return '一目雲層上緣(9,26,52)';
+  if(node.op==='min'&&same(ichimokuCloudBottom()))return '一目雲層下緣(9,26,52)';
+  if(node.op==='div'){const n=node.left?.left?.period;if(Number.isInteger(n)&&same(ichimokuMid(n)))return n===9?'一目轉換線(9)':n===26?'一目基準線(26)':`一目中值線(${n})`;}
   return null;
 }
 function summarize(node){

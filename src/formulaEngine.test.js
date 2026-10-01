@@ -253,3 +253,12 @@ test('盤中 session 與 7 日回查的 bar 都帶 open/high/low，新積木可�
   const reasons = [{}, {}, {}, {}, { high:10.8, close:10.6 }].map((values, minute) => evaluateIndicatorBar(state, live, liveBar(minute, values), liveBar(minute, values).barEnd).reasonCode);
   assert.deepEqual(reasons, ['warmup', 'warmup', 'warmup', 'warmup', 'triggered']);
 });
+
+test('Ichimoku recipes validate, warm up within a session and label readably', () => {
+  const above = validateFormula(recipe('ichimoku_above_cloud'));
+  assert.equal(above.warmupBars, 79);
+  assert.match(formulaSummary(above.ast), /一目雲層上緣\(9,26,52\)/);
+  const tk = validateFormula(recipe('ichimoku_tk_cross'));
+  assert.equal(tk.warmupBars, 27);
+  assert.match(formulaSummary(tk.ast), /轉換線\(9\).*基準線\(26\)/);
+});

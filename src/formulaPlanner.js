@@ -50,8 +50,10 @@ export async function planMonitorCondition(text,definitions,{context=[],...optio
   ].join('\n');
   const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
   // Graphs such as KD or RSI need ~15–20 nodes, so allow more output tokens than the registry pass.
-  const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:4000,...options});
-  const result=validatePlan(raw,definitions,status);
+  const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,...options});
+  let result;
+  try{result=validatePlan(raw,definitions,status);}
+  catch(error){console.warn(`formula-planner: rejected model plan (${error.code}) status=${raw?.status} nodes=${Array.isArray(raw?.nodes)?raw.nodes.length:'?'} root=${raw?.rootId} name=${String(raw?.name||'').slice(0,60)}`);throw error;}
   if(result.status==='existing')throw plannerError('FORMULA_PLAN_INVALID',422);
   return result;
 }

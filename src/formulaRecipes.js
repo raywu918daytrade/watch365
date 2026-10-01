@@ -19,6 +19,17 @@ export function kdRsv(n = 9) {
 export function kdK(n = 9, smooth = 3) { return win('rma', kdRsv(n), smooth); }
 export function kdD(n = 9, smooth = 3) { return win('rma', kdK(n, smooth), smooth); }
 
+// Ichimoku (一目均衡表): 轉換線 = (highest(high,9)+lowest(low,9))/2, 基準線 = same with 26,
+// 先行帶A = prev((轉換線+基準線)/2, 26), 先行帶B = prev((highest(high,52)+lowest(low,52))/2, 26).
+// The cloud at the current bar is the band between A and B, so 雲層上緣 = max(A,B), 雲層下緣 = min(A,B).
+export function ichimokuMid(n) { return bin('div', bin('add', win('highest', src('high'), n), win('lowest', src('low'), n)), num(2)); }
+export function ichimokuTenkan(n = 9) { return ichimokuMid(n); }
+export function ichimokuKijun(n = 26) { return ichimokuMid(n); }
+export function ichimokuSenkouA(t = 9, k = 26, shift = 26) { return win('prev', bin('div', bin('add', ichimokuMid(t), ichimokuMid(k)), num(2)), shift); }
+export function ichimokuSenkouB(b = 52, shift = 26) { return win('prev', ichimokuMid(b), shift); }
+export function ichimokuCloudTop() { return bin('max', ichimokuSenkouA(), ichimokuSenkouB()); }
+export function ichimokuCloudBottom() { return bin('min', ichimokuSenkouA(), ichimokuSenkouB()); }
+
 // Wilder RSI: RMA of gains / (RMA of gains + RMA of losses) × 100.
 export function wilderRsi(period = 14) {
   const change = bin('sub', src('close'), win('prev', src('close'), 1));
@@ -51,5 +62,8 @@ export const FORMULA_RECIPES = Object.freeze([
   { key:'rsi_up', name:'RSI(14, Wilder) 向上穿越 30', ast:bin('crosses_above', wilderRsi(14), num(30)) },
   { key:'rsi_down', name:'RSI(14, Wilder) 向下穿越 70', ast:bin('crosses_below', wilderRsi(14), num(70)) },
   { key:'williams_r', name:'威廉 %R(14) 向上穿越 -80', ast:bin('crosses_above', williamsR(14), num(-80)) },
-  { key:'pct_rise', name:'收盤價相對前5根收盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', win('prev', src('close'), 5), num(1.02))) }
+  { key:'pct_rise', name:'收盤價相對前5根收盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', win('prev', src('close'), 5), num(1.02))) },
+  { key:'ichimoku_above_cloud', name:'一目均衡表(9,26,52) 收盤價向上穿越雲層上緣', ast:bin('crosses_above', src('close'), ichimokuCloudTop()) },
+  { key:'ichimoku_below_cloud', name:'一目均衡表(9,26,52) 收盤價向下穿越雲層下緣', ast:bin('crosses_below', src('close'), ichimokuCloudBottom()) },
+  { key:'ichimoku_tk_cross', name:'一目均衡表 轉換線(9) 向上穿越 基準線(26)', ast:bin('crosses_above', ichimokuTenkan(), ichimokuKijun()) }
 ]);

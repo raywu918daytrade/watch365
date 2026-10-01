@@ -34,7 +34,7 @@ function drawSessionPill(){const target=document.querySelector('#sessionPill');i
 const ERROR_TEXT={
   HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',HF_DOWNLOAD_TIMEOUT:'資料下載逾時，來源暫時較慢，請稍後再試。',HF_DOWNLOAD_FAILED:'資料下載失敗，請稍後再試。',HISTORY_JOB_NOT_FOUND:'這次回查已過期，請重新回查。',HISTORY_TIMEOUT:'回查超過 10 分鐘仍未完成，已停止。請縮小股票範圍再試。',HISTORY_OUT_OF_MEMORY:'這次回查的資料量太大，無法完成。請縮小股票範圍（例如先選一個類股）再試。',
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
-  INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
+  INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_PROVIDER_FAILED:'AI 服務這次沒有回應成功，請再試一次。',INDICATOR_AGENT_RATE_LIMITED:'AI 服務目前請求較多，請稍等幾秒再試。',INDICATOR_AGENT_OUTPUT_INVALID:'AI 回覆的格式有誤，請再試一次或換個說法。',INDICATOR_AGENT_SCHEMA_MISSING:'AI 回覆的格式有誤，請再試一次。',INDICATOR_AGENT_CREDENTIALS_REJECTED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_ACCESS_DENIED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
   FORMULA_WITH_OTHER_CONDITIONS:'AI 自訂條件目前不能與其他條件組合，請先移除。',
   retry_not_allowed:'只有送出失敗的通知可以重送。',not_found:'找不到這則通知。',
   CONDITIONS_REQUIRED:'請至少加入一個條件。',CONDITIONS_TOO_MANY:'目前最多只能組合 2 個條件。',
