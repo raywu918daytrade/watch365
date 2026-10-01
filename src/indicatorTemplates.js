@@ -69,7 +69,7 @@ export function instantiateTemplate(ast, template, values = {}, direction = null
 // order is FAMILY_ORDER (PM decision).
 const FAMILIES = [
   ['RSI', /RSI/], ['KD', /K值|D值|KD/], ['MACD', /MACD/], ['布林', /布林/], ['VWAP', /VWAP/], ['一目', /一目/], ['威廉', /威廉/], ['ATR', /ATR/],
-  ['量能', /成交量/], ['均線', /SMA|EMA|均線|移動平均/], ['漲跌幅', /(收盤價|開盤價).*[×÷]/]
+  ['量能', /成交量|OBV|能量潮/], ['均線', /SMA|EMA|均線|移動平均/], ['漲跌幅', /(收盤價|開盤價).*[×÷]/]
 ];
 const CATEGORY = { 均線: '趨勢', MACD: '趨勢', 一目: '趨勢', RSI: '擺盪', KD: '擺盪', 威廉: '擺盪', 布林: '通道', ATR: '通道', VWAP: '量價', 量能: '量價', 漲跌幅: '量價' };
 export const FAMILY_ORDER = Object.freeze(['均線', 'MACD', 'KD', 'RSI', '布林', 'VWAP', '一目', '威廉', 'ATR', '量能', '漲跌幅', '其他']);
@@ -139,6 +139,9 @@ function constantLabel(node, parent, role) {
   const sibling = role === 'left' ? parent.right : role === 'right' ? parent.left : null;
   if (parent.op === 'div' && role === 'right') return null;
   if (parent.op === 'mul' && Math.abs(node.value) === 100) return null;
+  // sign() scaling and the ±1 clamp inside min/max are structure, not parameters.
+  if (parent.op === 'mul' && Math.abs(node.value) >= 1e5) return null;
+  if ((parent.op === 'max' || parent.op === 'min') && Math.abs(node.value) === 1) return null;
   if (COMPARE.includes(parent.op) && role === 'right' && parent.left?.op !== 'constant') return '門檻';
   if (parent.op === 'mul') return sibling?.op === 'stddev' ? '標準差倍數' : '倍數';
   if ((parent.op === 'add' || parent.op === 'sub') && sibling?.op === 'stddev') return '標準差倍數';

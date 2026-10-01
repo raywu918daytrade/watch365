@@ -59,13 +59,13 @@ export async function analyzeIndicatorRequest(text,definitions,{env=process.env,
   return validateAgentOutput(normalizeAgentOutput(raw),definitions,status);
 }
 
-export async function requestStructuredAgent(system,user,schema,name,{env=process.env,fetchImpl=fetch,maxTokens=2400}={}){
+export async function requestStructuredAgent(system,user,schema,name,{env=process.env,fetchImpl=fetch,maxTokens=2400,reasoningEffort='low'}={}){
   const status=indicatorAgentStatus(env);if(!status.configured)throw agentError(status.reason,503);
   // Primary first, then each configured fallback (entries without a key are skipped). Each target gets its own timeout.
   const chain=[{provider:status.provider,model:status.model,key:env[DEFAULT_KEY_ENV[status.provider]],baseUrl:env.INDICATOR_AGENT_BASE_URL||null},...parseFallbacks(env).filter(({keyEnv})=>env[keyEnv]).map(({provider,model,keyEnv})=>({provider,model,key:env[keyEnv],baseUrl:null}))];
   let last=null,retryAfter=null,rateLimited=false;
   for(const [index,target] of chain.entries()){
-    try{return{raw:await requestFromProvider(system,user,schema,name,target,{env,fetchImpl,maxTokens,allowWait:chain.length===1}),status:{configured:true,provider:target.provider,model:target.model,reason:null,fallbacks:status.fallbacks}};}
+    try{return{raw:await requestFromProvider(system,user,schema,name,{...target,reasoningEffort},{env,fetchImpl,maxTokens,allowWait:chain.length===1}),status:{configured:true,provider:target.provider,model:target.model,reason:null,fallbacks:status.fallbacks}};}
     catch(error){
       if(!SWITCH_CODES.includes(error.code))throw error;
       last=error;
@@ -156,7 +156,7 @@ async function callOpenRouter(system,user,target,fetchImpl,signal,schema=AGENT_O
   return callChatCompletions(`${base}/v1/chat/completions`,{authorization:`Bearer ${target.key}`,'HTTP-Referer':'https://watch365.just1stock.com','X-Title':'watch365'},system,user,target,fetchImpl,signal,schema,maxTokens);
 }
 async function callChatCompletions(url,headers,system,user,target,fetchImpl,signal,schema,maxTokens){
-  const response=await fetchImpl(url,{method:'POST',signal,headers:{'content-type':'application/json',...headers},body:JSON.stringify({model:target.model,messages:[{role:'system',content:`${system}\n${schemaHint(schema)}`},{role:'user',content:user}],response_format:{type:'json_object'},reasoning_effort:'low',temperature:0,max_completion_tokens:maxTokens})});
+  const response=await fetchImpl(url,{method:'POST',signal,headers:{'content-type':'application/json',...headers},body:JSON.stringify({model:target.model,messages:[{role:'system',content:`${system}\n${schemaHint(schema)}`},{role:'user',content:user}],response_format:{type:'json_object'},reasoning_effort:target.reasoningEffort||'low',temperature:0,max_completion_tokens:maxTokens})});
   const body=await providerJson(response); const text=body.choices?.[0]?.message?.content; if(!text)throw agentError('INDICATOR_AGENT_SCHEMA_MISSING',502); try{return JSON.parse(stripFence(text));}catch{throw agentError('INDICATOR_AGENT_OUTPUT_INVALID',502);}
 }
 // One line per top-level field, e.g. "status(existing|formula|…)", "nodes(array of {id,op,…})": enough for json_object mode.

@@ -657,7 +657,8 @@ test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與
   // Other registry misses on 1m go on to formula planning instead of stopping at a request.
   calls=0;const rsiBelow=agentOutput({status:'unsupported',indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:14,threshold:30},unsupportedReason:'RSI 下穿目前不支援'});
   const planDiscussion={status:'discussion',message:'RSI 下穿需要的運算尚未提供，可改用收盤下穿 SMA(20)。',name:'RSI 下穿',timeframe:null,indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[],rootId:null};
-  const rsiResult=await planMonitorCondition('RSI 下穿 30',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?rsiBelow:planDiscussion)});assert.equal(rsiResult.status,'discussion');assert.equal(calls,2);
+  // A discussion on a request that names no hard limit is retried once with an approximation instruction (3 calls).
+  const rsiResult=await planMonitorCondition('RSI 下穿 30',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?rsiBelow:planDiscussion)});assert.equal(rsiResult.status,'discussion');assert.equal(calls,3);
   // A registry match that only lacked parameters is applied with defaults instead of asking again.
   calls=0;const rsiNoThreshold=agentOutput({status:'clarification',indicatorId:'rsi.cross',requestedIndicator:'rsi',params:{period:14,threshold:null},clarificationQuestion:'要用哪個門檻？'});
   const defaulted=await planMonitorCondition('RSI 14 上穿',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(rsiNoThreshold);}});assert.equal(defaulted.status,'existing');assert.equal(defaulted.proposal.params.threshold,70);assert.match(defaulted.summary,/預設值/);assert.equal(calls,1);

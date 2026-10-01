@@ -34,6 +34,11 @@ export function ichimokuCloudBottom() { return bin('min', ichimokuSenkouA(), ich
 export function typicalPrice() { return bin('div', bin('add', bin('add', src('high'), src('low')), src('close')), num(3)); }
 export function vwap() { return bin('div', { op:'cumsum', input:bin('mul', typicalPrice(), src('volume')) }, { op:'cumsum', input:src('volume') }); }
 
+// OBV: running total of volume signed by the close-to-close direction. sign(x) is built from the blocks as
+// min(max(x × 1e6, −1), 1), which is exactly −1/0/1 for any price step ≥ 0.000001.
+export function sign(node) { return bin('min', bin('max', bin('mul', node, num(1_000_000)), num(-1)), num(1)); }
+export function obv() { return { op:'cumsum', input:bin('mul', sign(bin('sub', src('close'), win('prev', src('close'), 1))), src('volume')) }; }
+
 // Wilder RSI: RMA of gains / (RMA of gains + RMA of losses) × 100.
 export function wilderRsi(period = 14) {
   const change = bin('sub', src('close'), win('prev', src('close'), 1));
@@ -72,6 +77,8 @@ export const FORMULA_RECIPES = Object.freeze([
   { key:'ichimoku_tk_cross', name:'一目均衡表 轉換線(9) 向上穿越 基準線(26)', ast:bin('crosses_above', ichimokuTenkan(), ichimokuKijun()) },
   { key:'vwap_above', name:'收盤價向上穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_above', src('close'), vwap()) },
   { key:'vwap_below', name:'收盤價向下穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_below', src('close'), vwap()) },
+  { key:'obv_high', name:'OBV 向上穿越前20根 OBV 最高值', ast:bin('crosses_above', obv(), win('prev', win('highest', obv(), 20), 1)) },
+  { key:'obv_up', name:'OBV 向上穿越 OBV 的 SMA(20)', ast:bin('crosses_above', obv(), win('sma', obv(), 20)) },
   { key:'open_gain', name:'收盤價相對當日開盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', { op:'first', input:src('open') }, num(1.02))) },
   // Moving-average family: close crossing one MA, and a fast/slow MA cross.
   { key:'close_above_sma', name:'收盤價向上穿越 SMA(20)', ast:bin('crosses_above', src('close'), win('sma', src('close'), 20)) },

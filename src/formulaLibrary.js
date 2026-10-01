@@ -80,6 +80,8 @@ export const PRESET_ALIASES = Object.freeze({
   ichimoku_tk_cross: ['一目均衡表黃金交叉', '轉換線上穿基準線', '一目雲黃金交叉', '轉換線向上穿越基準線', 'ichimoku黃金交叉', '一目均衡表金叉'],
   vwap_above: ['vwap', '站上vwap', '收盤站上vwap', '收盤價站上vwap', '突破vwap', '收盤上穿vwap', '成交量加權平均價', '股價站上vwap', '站上成交量加權均價'],
   vwap_below: ['跌破vwap', '收盤跌破vwap', '收盤價下穿vwap', '股價跌破vwap', '跌破成交量加權均價'],
+  obv_high: ['obv', 'obv創新高', 'obv突破前高', '能量潮創新高', 'obv突破20根新高', 'on balance volume'],
+  obv_up: ['obv上穿均線', 'obv站上均線', 'obv向上', '能量潮上穿均線', 'obv翻多'],
   open_gain: ['開盤漲幅2%', '相對開盤漲2%', '今日漲幅2%', '當日漲幅超過2%', '比開盤價高2%', '開盤以來漲幅2%'],
   close_above_sma: ['站上20日均線', '收盤站上SMA20', '收盤價上穿SMA20', '突破20均線', '站上MA20', '收盤上穿20均線'],
   close_above_ema: ['站上EMA20', '收盤站上EMA20', '收盤價上穿EMA20', '突破EMA20', '收盤上穿指數移動平均20'],

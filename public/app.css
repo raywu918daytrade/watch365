@@ -252,3 +252,7 @@
 .proto-filter-summary { display:grid; gap:.35rem; justify-items:start; }
 .proto-filter-summary small { color:#566b70; font-weight:600; }
 .proto-filter-summary .proto-and-pill { margin:.1rem 0; }
+.proto-family-soon summary small { color:#8a6d1f; }
+.proto-preset.soon strong { color:#566b70; }
+.proto-preset.soon .proto-add[disabled] { border-style:dashed; }
+.proto-soon-note { margin:.4rem .75rem .2rem; }

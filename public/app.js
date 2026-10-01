@@ -210,6 +210,15 @@ function stocks(){
 // fallback for indicators the list doesn't have; once such a formula is used it enters the library and
 // shows up in the list next time.
 let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[];
+// Daily chart patterns (日線型態) come from a precomputed HF dataset that is not wired up yet. The family is shown so the
+// place is reserved; rows are disabled until the data source is connected.
+const PATTERN_FAMILY='型態（日線）';
+const PATTERNS=['三角收斂','M 頭','W 底','頭肩頂','頭肩底','上升旗形','下降旗形','上升楔形','下降楔形','箱型整理'];
+function patternSection(tokens,value){
+  const rows=PATTERNS.filter((name)=>!tokens.length||tokens.every((token)=>normalizeQuery(name).includes(token)));
+  if(!rows.length)return'';
+  return`<details class="proto-family proto-family-soon" name="indicator-family" data-family="${PATTERN_FAMILY}" data-was-open="${value?'1':'0'}" ${value?'open':''}><summary><span>${PATTERN_FAMILY}</span><small>${rows.length} 種・即將推出</small></summary><div class="proto-preset-list"><p class="proto-signature proto-soon-note">以日線型態篩出今天帶型態的股票，再搭配一分鐘 K 的條件通知。資料接上後開放。</p>${rows.map((name)=>`<div class="proto-preset soon"><span class="proto-preset-text"><strong>${escapeHtml(name)}</strong></span><button type="button" class="proto-add" disabled title="資料接上後開放">即將推出</button></div>`).join('')}</div></details>`;
+}
 function normalizeQuery(text){let value=String(text||'').normalize('NFKC').toLowerCase().replace(/\s+/g,'');for(const [pattern,replacement]of SYNONYMS)value=value.replace(pattern,replacement);return value;}
 function queryTokens(text){return String(text||'').normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean).map(normalizeQuery).filter(Boolean);}
 async function loadTemplates(){if(!templateCache){try{templateCache=((await api('/api/indicator-templates')).items||[]).filter((item)=>item&&item.shapeKey);templateError='';}catch(error){templateCache=[];templateError=errorText(error);}}return templateCache;}
@@ -359,7 +368,9 @@ function drawTemplates(){
   aiRow.innerHTML=showAi?(value.length>=2?`<button type="button" class="proto-row proto-row-ai" id="aiCreateRow"><strong><span class="proto-ai-tag" aria-hidden="true">AI</span>清單沒有這個指標，用 AI 建立：『${escapeHtml(value)}』</strong><small>按 Enter 也可以</small></button>`:'<p class="proto-dropdown-head">再多打一個字</p>'):'';
   aiRow.querySelector('#aiCreateRow')?.addEventListener('click',()=>startAi(value));
   if(!templateCache.length){target.hidden=false;target.innerHTML=`<p class="proto-eyebrow">指標清單</p><div class="proto-status"><strong>${templateError?'無法讀取指標清單':'清單還是空的'}</strong><p>${escapeHtml(templateError||'描述你要的指標，AI 會建立並加進清單。')}</p></div>`;return;}
-  if(value&&!templateRows.length){target.innerHTML='';target.hidden=true;return;} // the AI row says it
+  const patterns=patternSection(tokens,value);
+  if(value&&!templateRows.length&&!patterns){target.innerHTML='';target.hidden=true;return;} // the AI row says it
+  if(value&&!templateRows.length){aiRow.hidden=true;aiRow.innerHTML='';}
   const block=addBlockReason(),full=Boolean(block),families=[...groups.keys()];
   if(!value&&(openFamily===null||!groups.has(openFamily)))openFamily=families[0]||null;
   let index=0;
@@ -369,7 +380,7 @@ function drawTemplates(){
     return`<details class="proto-family" name="indicator-family" data-family="${escapeHtml(family)}" data-was-open="${open?'1':'0'}" ${open?'open':''}><summary><span>${escapeHtml(family)}</span><small>${value?`符合 ${rows.length} 個`:`${totals.get(family)||rows.length} 個變體`}</small></summary><div class="proto-preset-list">${body}</div></details>`;
   }).join('');
   target.hidden=false;
-  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}`;
+  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}${patterns}`;
   // Chrome also fires toggle for details parsed with the open attribute, so only a real change (open !== the rendered state) counts.
   target.querySelectorAll('details.proto-family').forEach((details)=>details.addEventListener('toggle',()=>{const was=details.dataset.wasOpen==='1';if(details.open===was)return;details.dataset.wasOpen=details.open?'1':'0';if(value)return;if(details.open)openFamily=details.dataset.family;else if(openFamily===details.dataset.family)openFamily=null;}));
   target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
@@ -424,7 +435,7 @@ function drawAi(){
     else if(result.status==='clarification'){eyebrow='AI 想確認一件事';body=`<div class="proto-ai-body"><strong>AI 想確認一件事</strong><p>${escapeHtml(result.message||result.question||'')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答這裡" aria-label="回答 AI 的問題"></label><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiSendReply">送出</button></div></div>`;}
     else if(ai.requested)body=requestedCard(ai);
     else{const message=result.message||'這個條件超出目前可計算的範圍。',alternative=alternativeOf(message);eyebrow='這個目前還算不出來';
-      body=`<div class="proto-ai-body"><strong>這個目前還算不出來</strong><p>${escapeHtml(message)}</p>${alternative?`<div class="proto-chip-row proto-alt-row"><button type="button" class="proto-chip" data-alt="${escapeHtml(alternative)}">改用：『${escapeHtml(alternative)}』</button></div>`:''}<div class="proto-inline-actions"><button type="button" class="${alternative?'proto-secondary':'proto-primary'}" id="aiQuickRequest">送出需求，之後通知我</button>${alternative?`<button type="button" class="proto-primary" data-alt="${escapeHtml(alternative)}">改用：『${escapeHtml(alternative)}』</button>`:''}</div></div>`;}
+      body=`<div class="proto-ai-body"><p>${escapeHtml(message)}</p>${alternative?`<p class="proto-signature">可改用：${escapeHtml(alternative)}</p>`:''}<div class="proto-inline-actions"><button type="button" class="${alternative?'proto-secondary':'proto-primary'}" id="aiQuickRequest">送出需求，之後通知我</button>${alternative?`<button type="button" class="proto-primary" data-alt="${escapeHtml(alternative)}">改用這個條件</button>`:''}</div></div>`;}
   }
   target.hidden=false;target.className='proto-ai-card';
   target.innerHTML=`<div class="proto-history-head"><div><p class="proto-eyebrow">${escapeHtml(eyebrow)}</p><h2>『${escapeHtml(ai.text)}』</h2></div><button type="button" class="proto-link" id="aiClose">關閉</button></div>${body}`;

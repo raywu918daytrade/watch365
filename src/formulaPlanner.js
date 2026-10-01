@@ -44,8 +44,17 @@ export async function planMonitorCondition(text,definitions,{context=[],...optio
   const system=buildPlannerSystem(definitions);
   const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
   // Graphs such as KD or RSI need ~15–20 nodes, so allow more output tokens than the registry pass.
-  const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,...options});
-  const plan=normalizePlan(raw);
+  // Formula planning is the one place the model has to reason (decompose an indicator into blocks), so it gets
+  // medium effort. A premature "無法表達" on a request that names none of the hard limits is retried once with an
+  // explicit instruction to attempt an approximation; the model's own general knowledge of the indicator is the input.
+  const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,reasoningEffort:'medium',...options});
+  let plan=normalizePlan(raw);
+  if(plan.status==='discussion'&&!mentionsHardLimit(request)&&!history.length){
+    console.warn(`formula-planner: premature discussion for "${request.slice(0,40)}", retrying with an approximation instruction`);
+    const push=`${user}\n\n（系統提示：這個需求沒有用到昨收、日線、籌碼等不可得資料。請先用你對這個指標的一般知識寫出它的數學定義，再用允許的積木組出等價或近似的條件並回 formula；近似時在 name 標「近似」。只有真的做不到才回 discussion，並說明是哪一步做不到。）`;
+    try{const second=await requestStructuredAgent(system,push,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,reasoningEffort:'medium',...options});const candidate=normalizePlan(second.raw);if(candidate.status==='formula'){try{validatePlan(candidate,definitions,second.status);plan=candidate;}catch(error){console.warn(`formula-planner: retry plan rejected (${error.detail||error.code}), keeping discussion`);}}}
+    catch(error){console.warn(`formula-planner: retry failed ${error.code||error.message}`);}
+  }
   let result;
   try{result=validatePlan(plan,definitions,status);}
   catch(error){console.warn(`formula-planner: rejected model plan (${error.code}) detail=${error.detail||'-'} status=${plan?.status} nodes=${Array.isArray(plan?.nodes)?plan.nodes.length:'?'} root=${plan?.rootId} name=${String(plan?.name||'').slice(0,60)}`);throw error;}
@@ -61,14 +70,14 @@ export function buildPlannerSystem(definitions){
     '你是台股盤中監控條件規劃器，只輸出一個 JSON 物件，不得執行程式，說明一律繁體中文。',
     '輸出格式（硬性規定）：頂層欄位 status/message/name/timeframe/indicatorId/version/params/nodes/rootId 都要有。每個 node 一律輸出 9 個 key：id,op,field,value,period,inputId,leftId,rightId,itemIds，不適用的填 null，不可省略。status=formula 時 params 一律 {"period":null,"threshold":null}、indicatorId/version 為 null，數字只寫在 node 的 period/value。status=discussion/clarification 時 nodes 必須是空陣列 []、rootId 為 null。',
     `完整範例「收盤上穿 SMA 20」：${JSON.stringify({status:'formula',message:'',name:'收盤上穿 SMA 20',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[{id:'n1',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},{id:'n2',op:'sma',field:null,value:null,period:20,inputId:'n1',leftId:null,rightId:null,itemIds:null},{id:'n3',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'n1',rightId:'n2',itemIds:null}],rootId:'n3'})}`,
-    '系統只有一分鐘K；沒講週期一律視為一分鐘K，timeframe填1m，絕不為週期追問。只用當日已完成的一分鐘K。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、cumsum(當日開盤以來累計)、first(當日第一根的值)、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
+    '系統只有一分鐘K；沒講週期視為一分鐘K，timeframe填1m，不為週期追問。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、cumsum(當日開盤以來累計)、first(當日第一根的值)、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
     'nodes依相依順序排列、id唯一、可重複引用。source填field；constant填value；sma/ema/rma/highest/lowest/stddev/prev填inputId+period；abs/cumsum/first填inputId；算術與比較填leftId/rightId；all/any填itemIds。rootId指向最後一個布林節點。',
     '更多範例（只列非null欄位，實際輸出其餘填null）：',
     ...FORMULA_RECIPES.filter((recipe)=>PROMPT_EXAMPLE_KEYS.includes(recipe.key)).map((recipe)=>`- ${recipe.name}：${compactGraph(toGraph(recipe.ast))}`),
-    '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1), …)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」先highest再prev 1。「量增／爆量」未指定用volume≥sma(volume,20)×2。ATR(14)=rma(tr,14)（tr 是現成積木，不要自己組真實波幅）。DMI/ADX 無法表達，回discussion。CCI以stddev近似平均絕對偏差：(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。威廉%R=(highest−close)÷(highest−lowest)×(−100)。',
-    'VWAP=cumsum(((high+low+close)÷3)×volume)÷cumsum(volume)。「相對開盤漲幅X%」=close≥first(open)×(1+X/100)。OBV=cumsum(方向×volume) 需要正負方向判斷，無法表達。需要昨日收盤（跳空、相對昨收漲跌幅）的條件無法表達：回discussion並建議改用相對當日開盤 first(open)。',
-    '這是公式階段，只能回formula、clarification或discussion，禁止existing。只要能用積木組出就回formula。參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。要求其他週期、跨股票、籌碼、財報、新聞、未完成K、超過270根暖機或積木組不出時回discussion：message一句話說原因，並且必須包含一句「可改用：…」寫出一個可用一分鐘K計算、最接近的具體替代條件；替代條件要和原需求同類（量能→量能、趨勢→均線或 MACD、波動→ATR 或布林、動能→RSI 或 KD），不要每次都寫同一組。',
-    'name與message只描述條件，用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。',
+    '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1)…)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」=highest後prev 1。ATR(14)=rma(tr,14)（tr 是現成積木，不要自己組真實波幅）。DMI/ADX 無法表達，回discussion。CCI≈(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。',
+    'VWAP=cumsum(((high+low+close)÷3)×volume)÷cumsum(volume)。「相對開盤漲幅X%」=close≥first(open)×(1+X/100)。OBV=cumsum(sign×volume)，sign=min(max((close−prev(close,1))×1000000,−1),1)。替代條件用白話（如「量 ≥ 均量 2 倍」），不要寫函數式。需要昨日收盤（跳空、相對昨收漲跌幅）的條件無法表達：回discussion並建議改用相對當日開盤 first(open)。',
+    '這是公式階段，只能回formula、clarification或discussion，禁止existing。沒有現成組法的指標，先依一般技術分析知識寫出數學定義，再用積木組出等價或近似條件並回formula（近似時name標「近似」）；參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。其他週期、跨股票、籌碼、財報、新聞、超過270根暖機或積木組不出時回discussion：message一句話說原因，並包含「可改用：…」一個同類、可用一分鐘K計算的具體替代條件（量能→量能、趨勢→均線/MACD、波動→ATR/布林、動能→RSI/KD）。',
+    'name與message用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。',
     `Registry: ${JSON.stringify(registry)}`
   ].join('\n');
 }
@@ -142,6 +151,8 @@ export function detectOtherTimeframe(text){
 // free-tier token-per-minute limits.
 const PROMPT_EXAMPLE_KEYS=['macd_golden','volume_surge'];
 export function needsRegistryPass(text){return /rsi|sma|ema|\bma\d*\b|均線|移動平均|相對強弱|突破今日|前高|量能放大|突破.*量|量.*突破/i.test(String(text).normalize('NFKC'));}
+// Requests that genuinely need data the engine lacks (previous close, other timeframes, non-price data).
+export function mentionsHardLimit(text){return /昨收|昨日|前一日|跳空|日線|日k|週線|周線|月線|季線|年線|\d+\s*分(鐘|k|線)|小時|外資|投信|自營|法人|融資|融券|借券|籌碼|財報|營收|eps|本益比|新聞|公告|股東|除權|除息|大盤|加權指數|其他股票|跨股/i.test(String(text).normalize('NFKC'));}
 function knownUnsupportedFormula(result,definitions){const draft=result.requestDraft;if(!draft||draft.requestedIndicator!=='sma'||!['1m','unknown'].includes(draft.requestedTimeframe)||draft.requestedDirection!=='crosses_below'||(draft.params?.period!=null&&!Number.isFinite(draft.params.period))||draft.params?.threshold!=null)return null;const definition=definitions.find((item)=>item.executor==='sma_cross');if(!definition)return null;const period=draft.params?.period??definition.params.find((item)=>item.key==='period')?.default;let strategy;try{strategy=validateStrategy({id:definition.id,version:definition.version,timeframe:'1m',params:{period}},definition);}catch{return null;}const ast={op:'crosses_below',left:{op:'source',field:'close'},right:{op:'sma',input:{op:'source',field:'close'},period:strategy.params.period}};const validated=validateFormula(ast);return{status:'formula',summary:`價格下穿 SMA ${strategy.params.period} · 一分鐘`,formulaSummary:formulaSummary(validated.ast),proposal:{name:`價格下穿 SMA ${strategy.params.period}`,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider:result.provider};}
 
 function compileGraph(nodes,rootId){

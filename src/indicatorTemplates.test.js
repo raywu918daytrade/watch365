@@ -131,13 +131,13 @@ test('templateSummaryName：不含參數的具體數字、含 N、方向詞中�
   assert.deepEqual([templateSummaryName(recipe('breakout_high')).family, templateSummaryName(recipe('breakout_high')).category], ['其他', '其他']);
 });
 
-test('FormulaLibrary.templates()：24 個 recipes 分成 19 個指標、不含 ast、pending 公式會列入並與 preset 同組', async () => {
+test('FormulaLibrary.templates()：26 個 recipes 分成 21 個指標、不含 ast、pending 公式會列入並與 preset 同組', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'indicator-templates-'));
   try {
     const library = await new FormulaLibrary(join(dir, 'formula-library.json'), { log: quiet }).load();
     const templates = library.templates();
-    assert.equal(FORMULA_RECIPES.length, 24);
-    assert.equal(templates.length, 19);
+    assert.equal(FORMULA_RECIPES.length, 26);
+    assert.equal(templates.length, 21);
     const pairs = templates.filter((template) => template.members.length === 2).map((template) => template.members.map((member) => member.name).sort().join(' / '));
     assert.equal(pairs.length, 5, 'MACD 金叉/死叉、RSI 上穿/下穿、VWAP 上穿/下穿、前N根漲/跌、開盤漲/跌 各合為一個指標');
     for (const template of templates) {
@@ -156,12 +156,12 @@ test('FormulaLibrary.templates()：24 個 recipes 分成 19 個指標、不含 a
     const after = library.templates().find((template) => template.shapeKey === rsi.shapeKey);
     assert.equal(after.members.length, 3); assert.equal(after.hitCount, rsi.hitCount + 1);
     assert.deepEqual(after.members.find((member) => member.status === 'pending_review').aliases, ['RSI21跌破65']);
-    assert.equal(library.templates().length, 19);
+    assert.equal(library.templates().length, 21);
     assert.equal(library.templates({ includePending:false }).find((template) => template.shapeKey === rsi.shapeKey).members.length, 2);
     // 新形狀（EMA 交叉）成為新指標
     await library.recordActivation({ ast: { op:'crosses_above', left:close, right:{ op:'ema', input:{ op:'abs', input:close }, period:20 } }, name: '收盤上穿EMA20' });
-    assert.equal(library.templates().length, 20);
-    assert.equal(library.templates({ includePending:false }).length, 19);
+    assert.equal(library.templates().length, 22);
+    assert.equal(library.templates({ includePending:false }).length, 21);
   } finally { await rm(dir, { recursive:true, force:true }); }
 });
 
@@ -211,7 +211,8 @@ test('presets：每個 family 的粗刻度變體、label 中性具體；每個 p
     assert.deepEqual(labels((t) => t.family === '一目').sort(), ['收盤站上一目雲', '收盤跌破一目雲', '轉換線上穿基準線'].sort());
     assert.deepEqual(labels((t) => t.family === '威廉'), ['威廉%R(14) 上穿 -80', '威廉%R(14) 下穿 -20']);
     assert.deepEqual(labels((t) => t.family === 'ATR'), ['ATR(14) ≥ 收盤 1%', 'ATR(14) ≥ 收盤 2%', 'ATR(14) ≥ 收盤 3%', 'ATR(14) ≥ 收盤 4%', 'ATR(14) ≥ 收盤 5%']);
-    assert.deepEqual(labels((t) => t.family === '量能'), ['量 ≥ 均量 1.5 倍', '量 ≥ 均量 2 倍', '量 ≥ 均量 3 倍']);
+    assert.deepEqual(labels((t) => t.family === '量能' && /成交量/.test(t.name)), ['量 ≥ 均量 1.5 倍', '量 ≥ 均量 2 倍', '量 ≥ 均量 3 倍']);
+    assert.deepEqual(labels((t) => t.family === '量能' && /OBV/.test(t.name)).sort(), ['OBV 向上穿越 OBV 的 SMA(20)', 'OBV 向上穿越前20根 OBV 最高值']);
     assert.deepEqual(labels((t) => t.family === '漲跌幅' && /前N根/.test(t.name)), [1, 2, 3, 4, 5].map((x) => `相對前5根漲 ${x}%`).concat([1, 2, 3, 4, 5].map((x) => `相對前5根跌 ${x}%`)));
     assert.deepEqual(labels((t) => t.family === '漲跌幅' && /開盤/.test(t.name)), [1, 2, 3, 4, 5].map((x) => `相對開盤漲 ${x}%`).concat([1, 2, 3, 4, 5].map((x) => `相對開盤跌 ${x}%`)));
     assert.deepEqual(labels((t) => t.family === '其他'), ['收盤價向上穿越前20根最高價'], '其他：唯一 preset = 原公式');
@@ -223,7 +224,7 @@ test('presets：每個 family 的粗刻度變體、label 中性具體；每個 p
       assert.doesNotMatch(preset.label, /買進|賣出|超買|超賣|訊號|轉強|轉弱|多頭|空頭/);
       fingerprints.add(result.proposal.fingerprint); count += 1;
     }
-    assert.equal(count, 8 + 8 + 6 + 2 + 3 + 4 + 2 + 2 + 3 + 2 + 5 + 3 + 10 + 10 + 1);
+    assert.equal(count, 8 + 8 + 6 + 2 + 3 + 4 + 2 + 2 + 3 + 2 + 5 + 3 + 10 + 10 + 1 + 2);
     for (const key of ['rsi_up', 'rsi_down', 'macd_death', 'boll_lower', 'vwap_below', 'pct_drop', 'open_drop', 'atr_pct', 'volume_surge', 'sma_cross', 'close_above_ema']) assert.ok(fingerprints.has(formulaFingerprint(recipe(key))), key);
     // 相對開盤跌 3% = 收盤 ≤ 首根開盤 × 0.97
     const openDrop = library.instantiate(templates.find((t) => t.family === '漲跌幅' && /開盤/.test(t.name)).shapeKey, { values: { p1: 0.97 }, direction: 'below' });

@@ -86,7 +86,7 @@ test('planMonitorCondition 用 json_object 回覆、正規化後回 formula，�
   const sloppy = { status:'formula', name:'跌幅超過 3%（前 1 根）', params:{ period:1, threshold:3 }, nodes:[n('n1', 'source', { field:'close' }), n('n2', 'prev', { inputId:'n1', period:1 }), n('n3', 'constant', { value:0.97 }), n('n4', 'mul', { leftId:'n2', rightId:'n3' }), n('n5', 'lte', { leftId:'n1', rightId:'n4' })] };
   const result = await planMonitorCondition('跌幅超過 3%', definitions, { env, fetchImpl:async (_url, options) => { body = JSON.parse(options.body); return chat('```json\n' + JSON.stringify(sloppy) + '\n```'); } });
   assert.equal(result.status, 'formula'); assert.equal(result.proposal.warmupBars, 2); assert.deepEqual(result.provider, { configured:true, provider:'groq', model:'openai/gpt-oss-20b', reason:null, fallbacks:[] });
-  assert.deepEqual(body.response_format, { type:'json_object' }); assert.equal(body.reasoning_effort, 'low'); assert.equal(body.temperature, 0);
+  assert.deepEqual(body.response_format, { type:'json_object' }); assert.equal(body.reasoning_effort, 'medium'); assert.equal(body.temperature, 0);
   const system = body.messages[0].content;
   assert.match(system, /每個 node 一律輸出 9 個 key/); assert.match(system, /完整範例「收盤上穿 SMA 20」/); assert.match(system, /可改用：/); assert.match(system, /連續N根紅K/); assert.match(system, /乖離率/); assert.match(system, /CCI/); assert.match(system, /VWAP=cumsum/);
   assert.ok(system.indexOf('每個 node 一律輸出 9 個 key') < system.indexOf('Registry:'), 'format rules come first');
