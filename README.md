@@ -65,6 +65,46 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 - `POST /api/indicator-templates/instantiate`：單一模板 body `{ shapeKey, values:{p1:21,…}, direction?, text? }`，或 1～2 個過濾 `{ items:[{ shapeKey, values?, direction? } | { fingerprint }], text? }`（`fingerprint` 直接使用公式庫既有成員的 AST；兩個過濾以 `all` 合併，摘要為「A 且 B」）。代入參數後重新 `validateFormula`，回傳與 `/api/indicator-agent/parse` 相同形狀的 formula 結果（`provider:{provider:'library',model:'template'}`、`library:true`、`template:true`，含簽章 `proposalToken`），可直接走既有 `/api/formula/activate`、歷史查詢流程。shapeKey／fingerprint 不存在回 404 `TEMPLATE_NOT_FOUND`；items 數量或形狀錯誤回 422 `TEMPLATE_REQUEST_INVALID`；參數型別或範圍錯誤回 422 `TEMPLATE_PARAM_INVALID` 並附 `detail`（含 `index`）。兩個大型指標（例如兩個 KD）合併可能超過公式節點上限而回 400 `FORMULA_COMPLEXITY_EXCEEDED`。
 - 套用後 `recordActivation` 寫入的公式（AI 或模板產生）自然依 shapeKey 歸入同一個指標，該指標的 hitCount 隨之累加。
 
+### 關卡順序與回查把關
+
+條件文字進來後依序通過四道關卡（老闆決策，由零成本到有成本）：
+
+1. **清單／公式庫比對**（零成本）：`normalizeAlias` 正規化後對公式庫別名精確比對，命中直接回 active 公式。
+2. **維基百科查核**（零 token，第一道擋垃圾；`src/indicatorLookup.js`）：公式庫未命中、`detectOtherTimeframe` 未攔、registry 階段未命中後、進入 AI 公式階段之前執行。去掉參數與方向詞取出指標名；字彙全部屬於公式庫 family／別名／recipes 名稱或價格量能通用詞時（白名單）直接通過不打網路；否則對 zh 與 en 維基 `action=query&list=search` 各查一次（含中→英對照：背離→divergence、乖離率→bias ratio、能量潮→OBV、威廉→Williams %R、布林→Bollinger、一目→Ichimoku、均線→moving average…），每次逾時 4 秒，結果快取 24 小時。查不到 → 回 HTTP 200 `{ status:'unknown_indicator', message, lookup:{ candidates, indicatorName } }`，不叫 AI，記 `unknown_indicator` 事件並 upsert 到 `watch365_unknown_indicators`（無 DB：`data/unknown-indicators.json`，`WATCH365_UNKNOWN_INDICATORS_FILE`）供後台研究。查核失敗（網路／逾時／5xx）**不擋**，照常交給 AI 並 log。查到時把維基標題當 `canonicalName` 一併放進給 AI 的 user 訊息 `{ request, canonicalName }`，降低組錯率。提到籌碼／法人／昨收／其他週期等資料限制的句子不查核，直接由 AI 以 discussion 給替代條件；追問回覆（帶 context）也不查核。`INDICATOR_LOOKUP=off` 可整個關閉。
+3. **AI 組公式**（`src/formulaPlanner.js`）。
+4. **回查把關**：`POST /api/formula/vet { proposalToken, purpose:'watchlist'|'screen', watchlist? }` 用過去 7 個交易日重播，回 202 `{ jobId }`（之後輪詢 `/api/history/jobs/:id`）或快取命中直接 200。所有回查結果（history job done 與 backtest）都附 `verdict:{ ok, code:'ok'|'no_triggers'|'too_many'|'no_data', perSymbolPerDay, totalEvents, symbolsCount, availableDays, maxPerSymbolDay, message }`；`VET_MAX_PER_SYMBOL_DAY`（預設 10）是平均每檔每個交易日的觸發上限，0 次或超過上限即 `ok:false`，前端不套用、不入庫，後端記 `vet_blocked` 事件。token 無效回 422 `FORMULA_TOKEN_INVALID`、過期回 409 `FORMULA_PROPOSAL_STALE`。
+
+用戶建立的公式仍是套用（`/api/formula/activate`／`/api/monitor/configure`）後才進公式庫（pending_review）。
+
+### 事件記錄與後台
+
+`src/events.js` 的 `EventStore` 把使用者看得到的每個動作記成 `{ ts, visitor, type, payload }`：有 `DB_HOST` 時寫 `watch365_events(id, ts DATETIME(3), visitor, type, payload LONGTEXT, INDEX(type,ts), INDEX(visitor,ts))`，無 DB 時追加到 `data/events.jsonl`（`WATCH365_EVENTS_FILE`；啟動只讀最後 5 萬行）。記錄是 fire-and-forget，失敗只 log 不影響請求。
+
+| type | 何時 | payload 重點 |
+| --- | --- | --- |
+| `page_view` | GET `/` | `ua:{ browser, os, mobile }`（只存粗分類，不存完整 UA） |
+| `parse` | `/api/indicator-agent/parse` | `text`（前 200 字）、`status`、`provider`、`model`、`library`、`fingerprint`、`ms` |
+| `template_instantiate` | `/api/indicator-templates/instantiate` | `items`、`labels`、`label`、`shapeKey`、`fingerprint`、`count` |
+| `monitor_configure` | `/api/monitor/configure` | `purpose`、`symbols`、`strategyName`、`fingerprint`、`formula` |
+| `monitor_start`／`monitor_stop`／`monitor_run` | 監控啟停與手動執行 | `strategyName`；run 另有 `skipped`、`reason`、`signals`、`error` |
+| `backtest` | history／vet job 結束 | `kind:'backtest'|'vet'`、`days`、`totalEvents`、`perSymbolPerDay`、`verdict`、`ms`、`status` |
+| `indicator_request` | `/api/indicator-requests` | `id`、`indicatorName`、`timeframe`、`duplicate` |
+| `unknown_indicator` | 維基查核擋下 | `text`、`candidates`、`indicatorName` |
+| `vet_blocked` | 回查 verdict 不 ok | `name`、`text`、`fingerprint`、`code`、`totalEvents`、`symbolsCount`、`availableDays`、`perSymbolPerDay` |
+| `admin_login`／`admin_status_change` | 後台 | `ok`；`fingerprint`、`status` |
+
+匿名訪客以 cookie `w365v`（22 碼隨機、HttpOnly、SameSite=Lax、一年）辨識，第一次呼叫 API 或開首頁時發放；`GET /api/me` 回 `{ visitor, firstSeen }`。**隱私**：visitor 只是瀏覽器層級的隨機 id，沒有帳號、不存 IP、不存完整 user agent；payload 只保留條件文字前 200 字與統計欄位，超過 4000 字元的 payload 會被截斷。清除 cookie 即成為新訪客。
+
+後台 API（`src/adminApi.js`；`/admin` 頁由前端對接）：設定 `ADMIN_TOKEN`（至少 8 碼）才啟用，未設定時所有 `/api/admin/*` 回 503 `ADMIN_DISABLED`。`POST /api/admin/login { token }` 成功後設 HttpOnly cookie `w365admin`（8 小時、Path=/api/admin、SameSite=Strict，內容是 HMAC 而非 token 本身）；其他 `/api/admin/*` 需 header `x-admin-token` 或該 cookie，否則 401 `ADMIN_UNAUTHORIZED`；`POST /api/admin/logout` 清 cookie。
+
+- `GET /api/admin/overview?days=7` → `{ visitors:{ total, active:[{day,count}] }, pageViews:[{day,count}], parses:{ total, byStatus:[{key,count}], byProvider:[{key,count}] }, monitors:{ configured:[{day,count}], current:{ strategyName, enabled, symbols, lastRunAt } }, topIndicators:[{label,count}], vetBlocked:[{key,count}], unknownIndicators:{ total, recent:[{norm,text,count,lastSeen}] }, library:{ formulas, active, pending, disabled, aliases } }`（日期為台北日）
+- `GET /api/admin/events?type=&visitor=&from=&to=&limit=&offset=` → `{ items:[{id,ts,visitor,type,payload}], total }`（新→舊，limit 最多 1000）
+- `GET /api/admin/visitors?days=30&limit=100` → `{ items:[{ visitor, firstSeen, lastSeen, pageViews, parses, monitors, backtests, indicators:[label…] }] }`
+- `GET /api/admin/unknown-indicators?limit=200` → `{ items:[{ norm, text, candidates, count, firstSeen, lastSeen }] }`
+- `GET /api/admin/indicators` → `{ items:[{ shapeKey, family, name, presets, members:[{ fingerprint, name, status, source, hitCount, uses }], uses }] }`；含 disabled 公式（歸不進模板的列在「其他」）。`POST /api/admin/indicators/:fingerprint/status { status:'active'|'pending_review'|'disabled' }` 改狀態（disabled 的公式不再被比對或列入模板），記 `admin_status_change`。
+
+新增一個統計＝在 `ADMIN_QUERIES` 加一筆 `{ type, groupBy }`，再在 overview 放一個 key。
+
 ### 固定突破量能規則
 
 - 市場：台股 regular session 09:00–13:30（Asia/Taipei）

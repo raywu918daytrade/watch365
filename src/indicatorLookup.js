@@ -25,18 +25,18 @@ import { FAMILY_ORDER } from './indicatorTemplates.js';
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const TIMEOUT_MS = 4000;
-const MAX_CANDIDATES = 2;
+const MAX_CANDIDATES = 3;
 const MAX_UNKNOWN = 2000;
 
 // Direction / comparison / filler words: they describe what to do with the indicator, not which indicator.
-const DIRECTION_WORDS = ['向上穿越', '向下穿越', '向上交叉', '向下交叉', '向上突破', '向下突破', '黃金交叉', '死亡交叉', '上穿越', '下穿越', '上穿', '下穿', '金叉', '死叉', '站上', '站回', '跌破', '跌落', '失守', '突破', '升破', '大於等於', '小於等於', '大於', '小於', '高於', '低於', '超過', '不到', '等於', '創新高', '創新低', '創高', '創低', '新高', '新低', '以上', '以下', '之上', '之下', '翻多', '翻空', '轉多', '轉空', '向上', '向下', '上升', '下降', '放大', '縮小', '擴大', '收斂',
+const DIRECTION_WORDS = ['向上穿越', '向下穿越', '向上交叉', '向下交叉', '向上突破', '向下突破', '黃金交叉', '死亡交叉', '上穿越', '下穿越', '上穿', '下穿', '金叉', '死叉', '站上', '站回', '跌破', '跌落', '失守', '突破', '升破', '大於等於', '小於等於', '大於', '小於', '高於', '低於', '超過', '不到', '等於', '創新高', '創新低', '創高', '創低', '新高', '新低', '以上', '以下', '之上', '之下', '翻多', '翻空', '轉多', '轉空', '向上', '向下', '上升', '下降', '放大', '縮小', '擴大', '收斂', '多頭排列', '空頭排列', '多頭', '空頭', '翻紅', '翻黑', '翻綠', '翻正', '翻負', '由負轉正', '由正轉負', '轉正', '轉負',
   '並且', '而且', '同時', '且', '或', '當', '的', '時', '就', '請', '我要', '我想', '幫我', '監控', '提醒', '通知', '條件', '設定', '參數', '出現', '發生', '成立', '觸發', '盯', '追蹤',
   'crosses above', 'crosses below', 'cross above', 'cross below', 'golden cross', 'death cross', 'crossover', 'crossunder', 'breaks above', 'breaks below', 'breakout', 'greater than', 'less than', 'above', 'below', 'over', 'under', 'exceeds', 'reaches', 'when', 'and', 'or', 'the', 'is'];
 // Units and quantity words that only make sense next to a number.
 const UNIT_WORDS = ['根', '倍', '次', '日', '天', '分鐘', '分', '個', '條', '檔', '期', '點', 'k線', 'k棒', 'bars', 'bar', 'times', 'percent', 'pct', 'days', 'day', 'minutes', 'minute', 'min', 'x'];
 // Chinese → English indicator vocabulary for the en.wikipedia candidate.
 export const ZH_EN_TERMS = Object.freeze([
-  ['背離', 'divergence'], ['乖離率', 'bias ratio'], ['乖離', 'bias ratio'], ['能量潮', 'OBV'], ['威廉指標', 'Williams %R'], ['威廉', 'Williams %R'], ['布林通道', 'Bollinger Bands'], ['布林帶', 'Bollinger Bands'], ['布林', 'Bollinger'],
+  ['背離', 'divergence'], ['收口', 'squeeze'], ['收窄', 'squeeze'], ['縮口', 'squeeze'], ['開口', 'expansion'], ['擴口', 'expansion'], ['帶寬', 'bandwidth'], ['乖離率', 'bias ratio'], ['乖離', 'bias ratio'], ['能量潮', 'OBV'], ['威廉指標', 'Williams %R'], ['威廉', 'Williams %R'], ['布林通道', 'Bollinger Bands'], ['布林帶', 'Bollinger Bands'], ['布林', 'Bollinger'],
   ['一目均衡表', 'Ichimoku'], ['一目', 'Ichimoku'], ['移動平均線', 'moving average'], ['移動平均', 'moving average'], ['均線', 'moving average'], ['量能', 'volume'], ['成交量', 'volume'], ['隨機指標', 'stochastic oscillator'],
   ['相對強弱指標', 'RSI'], ['相對強弱', 'RSI'], ['指數平滑異同移動平均線', 'MACD'], ['拋物線', 'parabolic SAR'], ['停損點轉向', 'parabolic SAR'], ['趨向指標', 'directional movement index'], ['動向指標', 'directional movement index'], ['平均趨向指標', 'ADX'],
   ['順勢指標', 'CCI'], ['商品通道指標', 'CCI'], ['動量指標', 'momentum'], ['動量', 'momentum'], ['真實波幅', 'average true range'], ['波動率', 'volatility'], ['成交量加權平均價', 'VWAP'], ['籌碼', 'chip distribution'], ['資金流向', 'money flow index'], ['資金流量指標', 'money flow index'],
@@ -46,12 +46,15 @@ export const ZH_EN_TERMS = Object.freeze([
 ]);
 // Generic price-action vocabulary the engine can express without any named indicator; never a reason to block.
 const GENERIC_WORDS = ['收盤價', '開盤價', '最高價', '最低價', '收盤', '開盤', '最高', '最低', '股價', '價格', '價', '漲幅', '跌幅', '漲跌幅', '漲', '跌', '紅k', '黑k', '綠k', '陽線', '陰線', '紅棒', '黑棒', '連續', '相對', '當日', '今日', '今天', '前', '均量', '量', '乖離率', '乖離', '波動率', '振幅', '區間', '高點', '低點', '前高', '前低', '盤中', '開盤以來', '漲停', '跌停', '長紅', '長黑', '十字', '實體', '影線', '上影線', '下影線', '均價', '成交金額', '金額',
+    // Chinese numerals, colour / size words and the pieces 台股 slang is built from (連三紅, 爆大量, 急拉, 放量): price action
+  // the AI can express, never a reason to block. Single characters only ever match what no longer word consumed first.
+  '零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '兩', '百', '千', '連', '紅', '黑', '綠', '陽', '陰', '長', '大', '小', '爆', '急', '拉', '殺', '放', '增', '縮', '跳空', '缺口', '開高', '開低', '走高', '走低', '翻紅', '翻黑',
   'close', 'open', 'high', 'low', 'price', 'volume', 'change', 'gain', 'loss', 'range', 'candle', 'candlestick', 'bias', 'atr', 'tr', 'vwap', 'obv', 'macd', 'rsi', 'kd', 'sma', 'ema', 'rma', 'wma', 'ma', 'dif', 'dea', 'bb', 'k', 'd', 'j', 'stdev', 'stddev', 'highest', 'lowest', 'average', 'avg', 'mean', 'sum', 'typical'];
 
 export const INDICATOR_WHITELIST = Object.freeze([...new Set([
   ...ALIAS_SYNONYMS.flatMap(([, words]) => words),
   ...FAMILY_ORDER.filter((name) => name !== '其他'),
-  'kd指標', 'k值', 'd值', 'k線', 'rsv', '布林上軌', '布林下軌', '轉換線', '基準線', '先行帶', '遲行帶', '雲層', '雲帶', '一目雲', '上軌', '下軌', '中軌', '均量', 'atr', '真實波幅', 'obv', '能量潮', 'vwap', '成交量加權平均價', '成交量加權均價', '威廉%r', 'williams %r', '%r',
+  'kd指標', 'k值', 'd值', 'k線', 'rsv', 'wilder', '一目均衡表', '一目均衡圖', '均衡表', '雲層', '雲帶', '雲層上緣', '雲層下緣', '上緣', '下緣', '快線', '慢線', '柱狀體', '柱狀圖', '零軸', '布林上軌', '布林下軌', '轉換線', '基準線', '先行帶', '遲行帶', '雲層', '雲帶', '一目雲', '上軌', '下軌', '中軌', '均量', 'atr', '真實波幅', 'obv', '能量潮', 'vwap', '成交量加權平均價', '成交量加權均價', '威廉%r', 'williams %r', '%r',
   ...GENERIC_WORDS
 ].map((word) => normalizeWord(word)))].filter(Boolean).sort((a, b) => b.length - a.length));
 
@@ -77,11 +80,15 @@ export function extractIndicatorCandidates(text) {
   }
   const indicatorName = tokens.map((token) => token.text).join(' ');
   const remainder = tokens.filter((token) => !token.known).map((token) => token.text).join('');
+  // Candidates, most specific first: the whole indicator phrase, its English translation (only when every word
+  // translated), then the unknown words alone and their translation, so「長紅吞噬」also tries "engulfing pattern".
   const candidates = [];
   if (tokens.length && remainder.length >= 2) {
-    candidates.push(tokens.map((token) => token.text).join(' '));
-    const translated = tokens.map((token) => (/[一-鿿]/.test(token.text) ? translate(token.text) : token.text)).join(' ');
-    if (translated !== candidates[0] && !/[一-鿿]/.test(translated)) candidates.push(translated);
+    const translateAll = (list) => list.map((token) => (/[一-鿿]/.test(token.text) ? translate(token.text) : token.text)).join(' ').replace(/\s+/g, ' ').trim();
+    const unknown = tokens.filter((token) => !token.known);
+    const plain = [tokens.map((token) => token.text).join(' '), unknown.map((token) => token.text).join(' ')];
+    const translated = [translateAll(tokens), translateAll(unknown)].filter((candidate) => !/[一-鿿]/.test(candidate)); // a half-translated phrase helps neither wiki
+    for (const candidate of [plain[0], translated[0], plain[1], translated[1]]) if (candidate && candidate.length >= 2 && !candidates.includes(candidate)) candidates.push(candidate);
   }
   return { candidates: candidates.slice(0, MAX_CANDIDATES), remainder, indicatorName, tokens: tokens.map((token) => token.text) };
 }

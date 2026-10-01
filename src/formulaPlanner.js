@@ -43,12 +43,19 @@ export async function planMonitorCondition(text,definitions,{context=[],lookupIm
   // Only a timeframe the engine can't run (d1, 5m, …) ends here; any other registry miss (other direction,
   // combinations, extra filters) goes on to formula planning.
   if(['d1','other'].includes(registryResult.requestDraft?.requestedTimeframe))return{status:'discussion',message:'目前只支援一分鐘 K 盤中監控，日 K／其他週期尚未開放。可以改用一分鐘 K 的同一條件，例如「收盤上穿 SMA(20)」。',provider:registryResult.provider};
-  if(lookupImpl&&!history.length){
+  // Indicator reality check (gate order, PM decision): library → Wikipedia → AI → backtest vet. found:false blocks
+  // here with no model call; found:true carries the reference title (canonicalName) into the model's user message so
+  // the formula is built for the indicator the reference describes; found:null (reference unavailable) never blocks.
+  let canonicalName=null;
+  // Requests about 籌碼／法人／昨收／other timeframes name a data limit, not an indicator: the AI's discussion (with a
+  // usable alternative) is the right answer there, so the reference check is skipped for them.
+  if(lookupImpl&&!history.length&&!mentionsHardLimit(request)){
     let lookup=null;try{lookup=await lookupImpl(request);}catch(error){console.warn(`indicator-lookup: failed ${error.code||error.message}; not blocking`);}
     if(lookup&&lookup.found===false)return unknownIndicatorResult(lookup);
+    if(lookup&&lookup.found===true&&typeof lookup.matched?.title==='string'&&lookup.matched.title.trim())canonicalName=lookup.matched.title.trim().slice(0,120);
   }
   const system=buildPlannerSystem(definitions);
-  const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
+  const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):canonicalName?JSON.stringify({request,canonicalName}):request;
   // Graphs such as KD or RSI need ~15–20 nodes, so allow more output tokens than the registry pass.
   // Formula planning is the one place the model has to reason (decompose an indicator into blocks), so it gets
   // medium effort. A premature "無法表達" on a request that names none of the hard limits is retried once with an
@@ -83,7 +90,7 @@ export function buildPlannerSystem(definitions){
     '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1)…)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」=highest後prev 1。ATR(14)=rma(tr,14)（tr 是現成積木，不要自己組真實波幅）。DMI/ADX 無法表達，回discussion。CCI≈(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。',
     'VWAP=cumsum(((high+low+close)÷3)×volume)÷cumsum(volume)。「相對開盤漲幅X%」=close≥first(open)×(1+X/100)。OBV=cumsum(sign×volume)，sign=min(max((close−prev(close,1))×1000000,−1),1)。替代條件用白話（如「量 ≥ 均量 2 倍」），不要寫函數式。需要昨日收盤（跳空、相對昨收漲跌幅）的條件無法表達：回discussion並建議改用相對當日開盤 first(open)。',
     '這是公式階段，只能回formula、clarification或discussion，禁止existing。沒有現成組法的指標，先依一般技術分析知識寫出數學定義，再用積木組出等價或近似條件並回formula（近似時name標「近似」）；參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。其他週期、跨股票、籌碼、財報、新聞、超過270根暖機或積木組不出時回discussion：message一句話說原因，並包含「可改用：…」一個同類、可用一分鐘K計算的具體替代條件（量能→量能、趨勢→均線/MACD、波動→ATR/布林、動能→RSI/KD）。',
-    'name與message用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。',
+    'name與message用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。輸入含 canonicalName 時，依該正式名稱指標的標準定義組公式。',
     `Registry: ${JSON.stringify(registry)}`
   ].join('\n');
 }

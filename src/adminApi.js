@@ -81,12 +81,13 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
       const parsesTotal = byStatus.reduce((sum, item) => sum + item.count, 0);
       const state = store.getState();
       const unknown = unknownIndicators.list({ limit: 10 }).map(({ norm, text, count, lastSeen }) => ({ norm, text, count, lastSeen }));
+      // Day series are [{ day, count }] (contract); categorical breakdowns stay [{ key, count }].
       sendJson(response, 200, {
         days: range.days, from: range.from, generatedAt: new Date(now()).toISOString(),
-        visitors: { total: allVisitors.length, active },
-        pageViews,
+        visitors: { total: allVisitors.length, active: daySeries(active) },
+        pageViews: daySeries(pageViews),
         parses: { total: parsesTotal, byStatus, byProvider },
-        monitors: { configured, current: { strategyName: state.settings.strategy?.name ?? null, enabled: Boolean(state.settings.enabled), symbols: state.settings.watchlist.length, scopeMode: state.settings.scopeMode ?? 'watchlist', lastRunAt: state.runtime.lastRunAt } },
+        monitors: { configured: daySeries(configured), current: { strategyName: state.settings.strategy?.name ?? null, enabled: Boolean(state.settings.enabled), symbols: state.settings.watchlist.length, scopeMode: state.settings.scopeMode ?? 'watchlist', lastRunAt: state.runtime.lastRunAt } },
         topIndicators: mergeCounts([templateLabels, strategyNames]).slice(0, 20).map(({ key, count }) => ({ label: key, count })),
         vetBlocked,
         unknownIndicators: { total: unknownIndicators.count(), recent: unknown },
@@ -123,9 +124,21 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
       const [byShape, byTemplateFingerprint, byMonitorFingerprint] = await Promise.all([adminQuery('templateShapeKeys'), adminQuery('templateFingerprints'), adminQuery('monitorFingerprints')]);
       const shapeCounts = new Map(byShape.map((item) => [item.key, item.count]));
       const fingerprintCounts = new Map(mergeCounts([byTemplateFingerprint, byMonitorFingerprint]).map((item) => [item.key, item.count]));
-      const templates = formulaLibrary.templates({ includePending: true }).map((template) => ({ ...template, usage: { instantiations: shapeCounts.get(template.shapeKey) || 0, activations: template.members.reduce((sum, member) => sum + (fingerprintCounts.get(member.fingerprint) || 0), 0) } }));
-      const formulas = formulaLibrary.list().map((formula) => ({ ...formula, usage: fingerprintCounts.get(formula.fingerprint) || 0 }));
-      sendJson(response, 200, { templates, formulas, library: formulaLibrary.stats() }); return true;
+      // Contract for the admin page: items:[{ shapeKey, family, name, presets, members:[{ fingerprint, name, status,
+      // source, hitCount }], uses }]. uses = template instantiations + monitor configurations of any member.
+      // Disabled formulas are listed too (they are what an operator comes here to re-enable), under their template
+      // when they have one, otherwise under a synthetic「其他」group keyed by fingerprint.
+      const grouped = formulaLibrary.templates({ includePending: true }).map((template) => ({
+        shapeKey: template.shapeKey, family: template.family, category: template.category, name: template.name, presets: template.presets, params: template.params, direction: template.direction,
+        members: template.members.map(({ fingerprint, name, summary, status, source, hitCount, aliases }) => ({ fingerprint, name, summary, status, source, hitCount, aliases, uses: fingerprintCounts.get(fingerprint) || 0 })),
+        hitCount: template.hitCount, source: template.source,
+        uses: (shapeCounts.get(template.shapeKey) || 0) + template.members.reduce((sum, member) => sum + (fingerprintCounts.get(member.fingerprint) || 0), 0)
+      }));
+      const listed = new Set(grouped.flatMap((item) => item.members.map((member) => member.fingerprint)));
+      for (const formula of formulaLibrary.list().filter((item) => !listed.has(item.fingerprint))) {
+        grouped.push({ shapeKey: `formula:${formula.fingerprint}`, family: '其他', category: '其他', name: formula.name, presets: [], params: [], direction: null, members: [{ fingerprint: formula.fingerprint, name: formula.name, summary: formula.summary, status: formula.status, source: formula.source, hitCount: formula.hitCount, aliases: formula.aliases, uses: fingerprintCounts.get(formula.fingerprint) || 0 }], hitCount: formula.hitCount, source: formula.source, uses: fingerprintCounts.get(formula.fingerprint) || 0 });
+      }
+      sendJson(response, 200, { items: grouped, library: formulaLibrary.stats() }); return true;
     }
 
     const statusMatch = url.pathname.match(/^\/api\/admin\/indicators\/([a-f0-9]{64})\/status$/);
@@ -155,6 +168,7 @@ function mergeCounts(lists) {
   for (const list of lists) for (const { key, count } of list) counts.set(key, (counts.get(key) || 0) + count);
   return [...counts].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count || a.key.localeCompare(b.key, 'zh-Hant'));
 }
+function daySeries(rows) { return rows.map(({ key, count }) => ({ day: key, count })); }
 function taipeiDay(iso) { return new Date(new Date(iso).getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10); }
 function parseDate(value) { if (!value) return null; const time = new Date(value).getTime(); return Number.isFinite(time) ? new Date(time).toISOString() : null; }
 function clamp(value, min, max, fallback) { const number = Number(value); if (value == null || value === '' || !Number.isFinite(number)) return fallback; return Math.min(max, Math.max(min, Math.trunc(number))); }

@@ -117,7 +117,7 @@ export async function createEventBackend(config) {
     ts DATETIME(3) NOT NULL,
     visitor VARCHAR(64) NULL,
     type VARCHAR(48) NOT NULL,
-    payload JSON NULL,
+    payload LONGTEXT NULL,
     INDEX idx_events_type_ts (type, ts),
     INDEX idx_events_visitor_ts (visitor, ts)
   )`);
@@ -184,7 +184,7 @@ export async function createUnknownIndicatorBackend(config) {
   await pool.query(`CREATE TABLE IF NOT EXISTS ${UNKNOWN_TABLE} (
     norm VARCHAR(255) NOT NULL PRIMARY KEY,
     text VARCHAR(500) NOT NULL,
-    candidates JSON NULL,
+    candidates LONGTEXT NULL,
     count INT NOT NULL DEFAULT 1,
     first_seen DATETIME(3) NOT NULL,
     last_seen DATETIME(3) NOT NULL
