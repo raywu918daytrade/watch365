@@ -92,7 +92,7 @@ async function home(){
     const settings=data.settings||{};
     if(!settings.monitorTask?.onboardingCompleted){target.innerHTML='';return;}
     const today=(data.signals||[]).filter((signal)=>isToday(signal.triggeredAt));
-    target.innerHTML=`<article class="proto-monitor proto-home-monitor"><header><span><small class="proto-eyebrow">我的監控</small><strong>${escapeHtml(monitorConditionText(settings))}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}</p><div class="proto-today"><strong>${todayCount(data.signals||[],today)}</strong><span>今日觸發</span>${today.length?`<small>${todayBreakdown(today,3)}・最新 ${formatClock(today[0].triggeredAt)}</small>`:''}</div><button class="proto-primary" data-go="dashboard">查看我的監控</button></article>`;
+    target.innerHTML=`<article class="proto-monitor proto-home-monitor"><header><span><small class="proto-eyebrow">我的監控</small><strong>${escapeHtml(monitorConditionText(settings))}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}</p>${state.purpose?'<p class="proto-notice proto-notice-compact" role="note"><span aria-hidden="true">i</span><span>正在重新設定中。這組會照常監控，直到新監控建立並取代它。</span></p>':''}<div class="proto-today"><strong>${todayCount(data.signals||[],today)}</strong><span>今日觸發</span>${today.length?`<small>${todayBreakdown(today,3)}・最新 ${formatClock(today[0].triggeredAt)}</small>`:''}</div><button class="proto-primary" data-go="dashboard">查看我的監控</button></article>`;
     target.querySelector('[data-go]').addEventListener('click',()=>go('dashboard'));
   }catch{target.innerHTML='';}
 }
@@ -485,7 +485,7 @@ function drawDashboard(data,{force=false}={}){
   target.querySelector('#newMonitor').addEventListener('click',()=>{
     const box=target.querySelector('#resetConfirm');
     box.innerHTML='<div class="proto-notice" role="alert"><span aria-hidden="true">!</span><span>系統一次只跑一組監控，新設定建立後才會取代目前這組（在那之前照常監控）。<span class="proto-inline-actions"><button class="proto-link" id="resetCancel">取消</button><button class="proto-secondary" id="resetGo">開始重新設定</button></span></span></div>';
-    box.querySelector('#resetGo').addEventListener('click',()=>{resetDraft();go('home');});
+    box.querySelector('#resetGo').addEventListener('click',()=>{resetDraft();state.purpose=settings.scopeMode==='universe'?'screen':'watchlist';state.selected=(settings.watchlist||[]).map(({symbol,name})=>({symbol,name:name||''}));save();go(state.purpose==='watchlist'?'stocks':'conditions');});
     box.querySelector('#resetCancel').addEventListener('click',()=>{box.innerHTML='';target.querySelector('#newMonitor').focus();});
     box.querySelector('#resetGo').focus();
   });

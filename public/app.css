@@ -157,3 +157,4 @@
 .proto-notice .proto-inline-actions { margin-top:.6rem; }
 @media (prefers-reduced-motion:reduce) { .proto-statusbar.live i, .proto-skeleton { animation:none; } }
 @media (max-width:640px) { .proto-monitor-actions { flex-direction:column; } .proto-monitor-actions .proto-link { margin:0; } .proto-notice .proto-inline-actions { flex-direction:column-reverse; } }
+.proto-notice-compact { margin:.6rem 0 0; padding:.45rem .6rem; font-size:.76rem; }
