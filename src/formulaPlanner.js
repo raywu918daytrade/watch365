@@ -26,7 +26,9 @@ export async function planMonitorCondition(text,definitions,{context=[],...optio
   // Other timeframes are an engine limit, not something the model should guess at: answer at once with a 1m rewrite.
   const otherTimeframe=detectOtherTimeframe(request);
   if(otherTimeframe&&!history.length)return{status:'discussion',message:otherTimeframe,provider:{provider:'rules',model:'timeframe'}};
-  const registryResult=await analyzeIndicatorRequest(request,definitions,{...options,context:history});
+  // The registry pass only knows RSI / SMA / the breakout-volume rule. Skip it (and its tokens) when the
+  // wording cannot refer to those, and go straight to formula planning.
+  const registryResult=needsRegistryPass(request)||history.length?await analyzeIndicatorRequest(request,definitions,{...options,context:history}):{status:'unsupported',reason:'skipped',requestDraft:{requestedIndicator:'other',requestedTimeframe:'1m',requestedDirection:'other',params:{period:null,threshold:null}},provider:null};
   if(registryResult.status==='matched')return{status:'existing',summary:registryResult.summary,proposal:registryResult.proposal,provider:registryResult.provider};
   // A registry match that only lacked parameters is applied with the registry defaults (shown in the summary)
   // instead of asking again: users should get a usable condition on the first try.
@@ -41,8 +43,9 @@ export async function planMonitorCondition(text,definitions,{context=[],...optio
     '你是台股盤中監控條件規劃器，只能輸出 schema，不得執行程式。所有說明使用繁體中文。',
     '系統只有一分鐘K；使用者沒講週期時一律視為一分鐘K，timeframe填1m，絕不為了週期追問。只允許當日已完成的一分鐘K，可用積木：source(open/high/low/close/volume)、constant、add/sub/mul/div/max/min、abs、sma/ema/rma(Wilder平滑，SMA作種子)/highest/lowest/stddev(母體標準差)、prev(前n根，n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt，以及all(且)/any(或) 2到4條布林條件。視窗期數2到200；總暖機需求不可超過台股當日270根完整K，不可跨日補資料。',
     'nodes 必須依相依順序排列且 id 唯一，可重複引用同一節點；source填field；constant填value；sma/ema/rma/highest/lowest/stddev/prev填inputId與period；abs填inputId；add/sub/mul/div/max/min與比較填leftId/rightId；all/any填itemIds陣列(2到4個布林節點id)。其他不適用欄位一律null。rootId指向最後布林節點。',
-    '台股常見指標標準組法（以下範例只列非null欄位，實際輸出時其餘欄位填null；照抄結構、替換參數即可）：',
-    ...FORMULA_RECIPES.map((recipe)=>`- ${recipe.name}：${compactGraph(toGraph(recipe.ast))}`),
+    '範例（只列非null欄位，實際輸出時其餘欄位填null；照抄結構、替換參數即可）：',
+    ...FORMULA_RECIPES.filter((recipe)=>PROMPT_EXAMPLE_KEYS.includes(recipe.key)).map((recipe)=>`- ${recipe.name}：${compactGraph(toGraph(recipe.ast))}`),
+    '其他常見指標的組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。VWAP(當日成交量加權均價)目前無法以積木表達（需要當日累計），改用「收盤 vs sma(close,N)」或「成交量×收盤的sma ÷ 成交量sma」近似並在name寫明近似。一目均衡表：轉換線=(highest(high,9)+lowest(low,9))/2、基準線同26、先行帶A=prev((轉換+基準)/2,26)、先行帶B=prev((highest(high,52)+lowest(low,52))/2,26)。OBV、ATR 等需逐根累計或真實波幅的指標：ATR可用rma(max(high−low, max(abs(high−prev(close,1)), abs(low−prev(close,1)))),14)；OBV 不可表達，回discussion並建議量增條件。',
     '補充定義：KD的RSV=(收盤-最低價N根最低)÷(最高價N根最高-最低價N根最低)×100，K=rma(RSV,3)、D=rma(K,3)，等同台股 K=⅔前K+⅓RSV。RSI用Wilder平滑(rma)。威廉%R=(N根最高-收盤)÷(N根最高-N根最低)×(-100)。「突破前N根最高」要先highest再prev 1，避免包含當根。「漲幅超過X%」定義為收盤≥前N根收盤×(1+X/100)，未指定N時用前1根，把N寫進name。「量增／爆量」未指定時用成交量≥前20根均量×2。',
     '這是公式階段，只能回formula、clarification或discussion，禁止回existing。目標是讓使用者第一次就拿到可監控的條件：只要能用允許的運算組出來就回formula。參數沒講就用業界常用預設值（例如MACD 12/26/9、均線20、成交量均量20根與2倍），「MA」未指明時用SMA，「黃金交叉／突破／站上」視為向上穿越、「死亡交叉／跌破」視為向下穿越，並把採用的參數寫進name。只有連要看哪個指標都無法判斷時才回clarification。要求5分、日線、跨股票、籌碼、財報、新聞等外部資料、未完成K、超過當日270根暖機，或允許的運算確實組不出來時才回discussion，message用一句話說明原因，再給一個可用一分鐘K計算、最接近的替代條件寫法。',
     'name與message只描述條件本身，使用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。formula的indicatorId/version與params值一律null，只填nodes/rootId。',
@@ -89,6 +92,10 @@ export function detectOtherTimeframe(text){
   const what=hitMa?`「${hitMa[0]}」是日線上的均線`:'日線、週線或其他分鐘週期';
   return `目前只支援一分鐘 K 的盤中監控，${what}，暫時還不能用來監控。最接近的一分鐘 K 寫法是「${alt}」（以一分鐘 K 計算的均線），可以直接輸入試試。`;
 }
+// Three short graphs are enough for the model to copy the format; the rest of the recipes live in the formula
+// library and hit without any model call. Keeping the prompt small matters on free-tier token-per-minute limits.
+const PROMPT_EXAMPLE_KEYS=['macd_golden','breakout_high','volume_surge'];
+export function needsRegistryPass(text){return /rsi|sma|ema|\bma\d*\b|均線|移動平均|相對強弱|突破今日|前高|量能放大|突破.*量|量.*突破/i.test(String(text).normalize('NFKC'));}
 function knownUnsupportedFormula(result,definitions){const draft=result.requestDraft;if(!draft||draft.requestedIndicator!=='sma'||!['1m','unknown'].includes(draft.requestedTimeframe)||draft.requestedDirection!=='crosses_below'||(draft.params?.period!=null&&!Number.isFinite(draft.params.period))||draft.params?.threshold!=null)return null;const definition=definitions.find((item)=>item.executor==='sma_cross');if(!definition)return null;const period=draft.params?.period??definition.params.find((item)=>item.key==='period')?.default;let strategy;try{strategy=validateStrategy({id:definition.id,version:definition.version,timeframe:'1m',params:{period}},definition);}catch{return null;}const ast={op:'crosses_below',left:{op:'source',field:'close'},right:{op:'sma',input:{op:'source',field:'close'},period:strategy.params.period}};const validated=validateFormula(ast);return{status:'formula',summary:`價格下穿 SMA ${strategy.params.period} · 一分鐘`,formulaSummary:formulaSummary(validated.ast),proposal:{name:`價格下穿 SMA ${strategy.params.period}`,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider:result.provider};}
 
 function compileGraph(nodes,rootId){if(!Array.isArray(nodes)||nodes.length<1||nodes.length>MAX_GRAPH_NODES||typeof rootId!=='string')throw plannerError('FORMULA_PLAN_INVALID',422);const built=new Map();for(const node of nodes){exactObject(node,NODE_KEYS);if(typeof node.id!=='string'||!/^[a-z0-9][a-z0-9_]{0,31}$/i.test(node.id)||built.has(node.id)||!NODE_OPS.includes(node.op))throw plannerError('FORMULA_PLAN_INVALID',422);validateNodeFields(node);let ast;if(node.op==='source')ast={op:'source',field:node.field};else if(node.op==='constant')ast={op:'constant',value:node.value};else if(INPUT_PERIOD_OPS.includes(node.op))ast={op:node.op,input:lookup(built,node.inputId),period:node.period};else if(node.op==='abs')ast={op:'abs',input:lookup(built,node.inputId)};else if(['all','any'].includes(node.op))ast={op:node.op,items:node.itemIds.map((id)=>lookup(built,id))};else ast={op:node.op,left:lookup(built,node.leftId),right:lookup(built,node.rightId)};built.set(node.id,ast);}return lookup(built,rootId);}

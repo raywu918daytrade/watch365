@@ -204,7 +204,7 @@ async function routeApi(request, response) {
       delete result.proposal?.ast;
       sendJson(response,200,result);
     } catch(error) {
-      sendJson(response,error.statusCode||500,{error:error.code||'INDICATOR_AGENT_FAILED'});
+      sendJson(response,error.statusCode||500,{error:error.code||'INDICATOR_AGENT_FAILED',...(error.retryAfterSeconds?{retryAfterSeconds:error.retryAfterSeconds}:{})});
     }
     return;
   }

@@ -662,7 +662,8 @@ test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與
   const defaulted=await planMonitorCondition('RSI 14 上穿',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(rsiNoThreshold);}});assert.equal(defaulted.status,'existing');assert.equal(defaulted.proposal.params.threshold,70);assert.match(defaulted.summary,/預設值/);assert.equal(calls,1);
 
   calls=0;const smuggledExisting={status:'existing',message:'',name:'SMA',timeframe:'1m',indicatorId:'sma.cross',version:'1.0.0',params:{period:20,threshold:null},nodes:[],rootId:null};
-  await assert.rejects(()=>planMonitorCondition('自訂條件',definitions,{env,fetchImpl:async()=>groqResponse(++calls===1?unsupported:smuggledExisting)}),/FORMULA_PLAN_INVALID/);assert.equal(calls,2);
+  // Wording without RSI/SMA skips the registry pass, so the smuggled 'existing' is the first and only call.
+  await assert.rejects(()=>planMonitorCondition('自訂條件',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(smuggledExisting);}}),/FORMULA_PLAN_INVALID/);assert.equal(calls,1);
 
   calls=0;await assert.rejects(()=>planMonitorCondition('一分鐘價格上穿 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse({...agentOutput({indicatorId:'sma.cross',requestedIndicator:'sma',params:{period:20,threshold:null}}),executor:'eval'});}}),/INDICATOR_AGENT_OUTPUT_INVALID/);assert.equal(calls,1);
 });

@@ -58,12 +58,12 @@ function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{}}
 function resetDraft(){state=initial();save();}
 function node(){return location.hash.slice(1)||'home';}
 function go(next){if(location.hash===`#${next}`)render();else location.hash=next;}
-function errorText(error){if(ERROR_TEXT[error?.code])return ERROR_TEXT[error.code];const message=error?.message||'';if(/^HTTP 5\d\d$/.test(message))return'伺服器暫時沒有回應，請稍後再試一次。';if(/^HTTP 4\d\d$/.test(message))return'這個請求無法處理，請重新整理頁面後再試。';return message||'發生錯誤，請稍後再試。';}
+function errorText(error){if(error?.code==='INDICATOR_AGENT_RATE_LIMITED'&&error.payload?.retryAfterSeconds)return`AI 服務這一分鐘的用量已滿，請約 ${error.payload.retryAfterSeconds} 秒後再試。`;if(ERROR_TEXT[error?.code])return ERROR_TEXT[error.code];const message=error?.message||'';if(/^HTTP 5\d\d$/.test(message))return'伺服器暫時沒有回應，請稍後再試一次。';if(/^HTTP 4\d\d$/.test(message))return'這個請求無法處理，請重新整理頁面後再試。';return message||'發生錯誤，請稍後再試。';}
 
 async function api(url,body){
   const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const payload=await response.json().catch(()=>({}));
-  if(!response.ok)throw Object.assign(new Error(payload.error||`HTTP ${response.status}`),{code:payload.error});
+  if(!response.ok)throw Object.assign(new Error(payload.error||`HTTP ${response.status}`),{code:payload.error,payload});
   return payload;
 }
 

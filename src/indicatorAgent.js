@@ -55,7 +55,10 @@ export async function requestStructuredAgent(system,user,schema,name,{env=proces
     try{return{raw:await call(),status};}
     catch(error){
       // A model that emits JSON failing the provider's schema check (or a 5xx) usually succeeds on a second try.
-      if(!['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_OUTPUT_INVALID','INDICATOR_AGENT_SCHEMA_MISSING'].includes(error.code)||controller.signal.aborted)throw error;
+      // A short per-minute rate limit is waited out once; a long one is reported with the wait time.
+      if(controller.signal.aborted)throw error;
+      if(error.code==='INDICATOR_AGENT_RATE_LIMITED'){if(!(error.retryAfterSeconds<=15))throw error;console.warn(`indicator-agent: ${name} rate limited, waiting ${error.retryAfterSeconds}s`);await new Promise((resolve)=>setTimeout(resolve,error.retryAfterSeconds*1000+250));return{raw:await call(),status};}
+      if(!['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_OUTPUT_INVALID','INDICATOR_AGENT_SCHEMA_MISSING'].includes(error.code))throw error;
       console.warn(`indicator-agent: ${name} retrying after ${error.code}`);
       return{raw:await call(),status};
     }
@@ -132,7 +135,9 @@ async function providerJson(response){
     // Log the provider's reason (status + a short body excerpt, never credentials) so failures can be diagnosed.
     let excerpt='';try{excerpt=(await response.text()).replace(/\s+/g,' ').slice(0,400);}catch{}
     console.error(`indicator-agent: provider responded ${response.status} ${excerpt}`);
-    throw agentError(code,statusCode);
+    const error=agentError(code,statusCode);
+    if(response.status===429){const header=Number(response.headers.get('retry-after'));const match=excerpt.match(/try again in\s*([\d.]+)\s*(ms|s)/i);const seconds=match?(match[2]==='ms'?Number(match[1])/1000:Number(match[1])):Number.isFinite(header)&&header>0?header:null;if(seconds)error.retryAfterSeconds=Math.ceil(seconds);}
+    throw error;
   }
   try{return await response.json();}catch{throw agentError('INDICATOR_AGENT_PROVIDER_FAILED',502);}
 }
