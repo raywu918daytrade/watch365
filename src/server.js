@@ -49,6 +49,36 @@ let universeCache = null;
 const historyCache = new Map();
 let historyQueue = Promise.resolve();
 const HISTORY_CACHE_MS = 10 * 60 * 1000;
+const historyJobs = new Map();
+const HISTORY_JOB_TTL_MS = 30 * 60 * 1000;
+// One job per (strategy, watchlist) key; a second request for the same key joins the running job.
+function startHistoryJob(key, strategy, watchlist) {
+  const running = historyJobs.get(key);
+  if (running && running.status !== 'failed') return running;
+  const job = { id: randomUUID(), key, status: 'queued', progress: { stage: 'queued', message: '排隊中' }, startedAt: Date.now(), finishedAt: null, result: null, error: null };
+  historyJobs.set(key, job); historyJobs.set(job.id, job);
+  job.promise = historyQueue.then(async () => {
+    job.status = 'running';
+    const result = await runHistory(strategy, watchlist, { onProgress: (progress) => { job.progress = progress; } });
+    historyCache.set(key, { at: Date.now(), result });
+    if (historyCache.size > 20) historyCache.delete(historyCache.keys().next().value);
+    job.result = result; job.status = 'done';
+    console.log(`history: ${watchlist.length} symbols, ${result.availableDays} days, ${result.totalEvents} events in ${result.elapsedMs} ms`);
+  }).catch((error) => {
+    job.error = error; job.status = 'failed';
+    console.error('history: job failed', error.code || error.message);
+  }).finally(() => {
+    job.finishedAt = Date.now();
+    setTimeout(() => { if (historyJobs.get(job.id) === job) { historyJobs.delete(job.id); if (historyJobs.get(key) === job) historyJobs.delete(key); } }, HISTORY_JOB_TTL_MS).unref?.();
+  });
+  historyQueue = job.promise.catch(() => {});
+  return job;
+}
+function historyJobView(job) {
+  if (job.status === 'done') return { status: 'done', jobId: job.id, cached: false, ...job.result };
+  if (job.status === 'failed') return { status: 'failed', jobId: job.id, error: job.error?.code || 'HISTORY_FAILED' };
+  return { status: job.status, jobId: job.id, progress: job.progress, elapsedMs: Date.now() - job.startedAt };
+}
 
 await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load()]);
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
@@ -91,6 +121,14 @@ async function routeApi(request, response) {
   }
 
   // POST with the same body as /api/monitor/configure; GET ?spec=<json> is accepted for quick checks.
+  // History lookups can take minutes on a cold cache (two months of M1 parquet). The request returns
+  // right away with a job id and the client polls /api/history/jobs/:id, so no gateway timeout can cut it.
+  if (method === 'GET' && url.pathname.startsWith('/api/history/jobs/')) {
+    const job = historyJobs.get(decodeURIComponent(url.pathname.slice('/api/history/jobs/'.length)));
+    if (!job) { sendJson(response, 404, { error:'HISTORY_JOB_NOT_FOUND' }); return; }
+    sendJson(response, 200, historyJobView(job));
+    return;
+  }
   if ((method === 'POST' || method === 'GET') && url.pathname === '/api/history/backtest') {
     let body;
     try { body = method === 'POST' ? await readJson(request) : url.searchParams.has('c') ? await compactHistorySpec(url.searchParams) : JSON.parse(url.searchParams.get('spec') || 'null'); }
@@ -102,13 +140,11 @@ async function routeApi(request, response) {
       const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
       const key = `${strategyIdentity(strategy)}|${watchlist.map((item) => item.symbol).sort().join(',')}`;
       const cached = historyCache.get(key);
-      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { sendJson(response, 200, { ...cached.result, cached:true }); return; }
-      const job = historyQueue.then(() => runHistory(strategy, watchlist));
-      historyQueue = job.catch(() => {});
-      const result = await job;
-      historyCache.set(key, { at:Date.now(), result });
-      if (historyCache.size > 20) historyCache.delete(historyCache.keys().next().value);
-      sendJson(response, 200, { ...result, cached:false });
+      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { sendJson(response, 200, { ...cached.result, cached:true, status:'done' }); return; }
+      const job = startHistoryJob(key, strategy, watchlist);
+      // ?wait=1 keeps the old synchronous behaviour for scripts; the UI polls instead.
+      if (url.searchParams.get('wait') === '1') { await job.promise.catch(() => {}); sendJson(response, job.error ? (job.error.statusCode || 500) : 200, job.error ? { error:job.error.code || 'HISTORY_FAILED' } : { ...job.result, cached:false, status:'done' }); return; }
+      sendJson(response, 202, historyJobView(job));
     } catch (error) {
       if (!error.statusCode) console.error(error);
       sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_FAILED' });

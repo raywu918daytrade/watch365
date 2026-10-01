@@ -235,14 +235,16 @@ export function dayEvents(strategy, bars) {
 
 function taipeiDate(date) { return new Date(date.getTime() + TAIPEI_OFFSET_MS).toISOString().slice(0, 10); }
 
-export async function collectHistory(symbols, { days = HISTORY_DAYS, now = new Date(), listDates = listHfM1Dates, listMonths = listHfM1Months, readImpl = readParquetInto } = {}) {
+export async function collectHistory(symbols, { days = HISTORY_DAYS, now = new Date(), listDates = listHfM1Dates, listMonths = listHfM1Months, readImpl = readParquetInto, onProgress = () => {} } = {}) {
   const today = taipeiDate(now);
   const collector = new BarCollector(symbols);
   const failed = [];
+  onProgress({ stage: 'list', message: '取得資料清單' });
   const liveDays = (await listDates()).filter((file) => file.date <= today);
   const liveDates = new Set();
   for (const file of liveDays) {
     const day = new BarCollector(symbols);
+    onProgress({ stage: 'day', message: `讀取 ${file.date} 盤中資料`, sizeBytes: file.size });
     try { await readImpl(file.path, day, { maxAgeSeconds: file.date === today ? 60 : 7 * 86400 }); }
     catch { failed.push(file.date); continue; }
     liveDates.add(file.date);
@@ -253,6 +255,7 @@ export async function collectHistory(symbols, { days = HISTORY_DAYS, now = new D
   for (const file of months) {
     if (collector.days.size >= days) break;
     const month = new BarCollector(symbols);
+    onProgress({ stage: 'month', message: `讀取 ${file.month} 月資料（約 ${Math.max(1, Math.round((file.size || 0) / 1048576))} MB）`, sizeBytes: file.size });
     try { await readImpl(file.path, month, { maxAgeSeconds: file.month === today.slice(0, 7) ? 3600 : 7 * 86400 }); }
     catch { failed.push(file.month); continue; }
     monthsRead.push(file.month);
@@ -267,6 +270,7 @@ export async function runHistory(strategy, watchlist, options = {}) {
   const started = Date.now();
   const names = new Map(watchlist.map((item) => [item.symbol, item.name || item.symbol]));
   const { collector, failed, sources } = await collectHistory(new Set(names.keys()), options);
+  options.onProgress?.({ stage: 'evaluate', message: '套用條件計算觸發點' });
   const summary = [], events = [];
   let total = 0;
   for (const date of collector.dates()) {

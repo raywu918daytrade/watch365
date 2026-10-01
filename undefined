@@ -1,0 +1,1203 @@
+{
+  "version": 1,
+  "formulas": [
+    {
+      "fingerprint": "4fb1309da782786c436cbac7ccbaa0df2fe5e41a0d6be4007c4818f12bcbbc86",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "sub",
+          "left": {
+            "op": "ema",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 12
+          },
+          "right": {
+            "op": "ema",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 26
+          }
+        },
+        "right": {
+          "op": "ema",
+          "input": {
+            "op": "sub",
+            "left": {
+              "op": "ema",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 12
+            },
+            "right": {
+              "op": "ema",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 26
+            }
+          },
+          "period": 9
+        }
+      },
+      "name": "MACD(12,26,9) DIF 向上穿越 DEA",
+      "summary": "MACD DIF(12,26) 向上穿越 MACD DEA(12,26,9)",
+      "warmupBars": 35,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "0ddad384fa0596689bc85642edd6508f2fc86a28ad507ae4d4adfb6178f61c9d",
+      "ast": {
+        "op": "crosses_below",
+        "left": {
+          "op": "sub",
+          "left": {
+            "op": "ema",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 12
+          },
+          "right": {
+            "op": "ema",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 26
+          }
+        },
+        "right": {
+          "op": "ema",
+          "input": {
+            "op": "sub",
+            "left": {
+              "op": "ema",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 12
+            },
+            "right": {
+              "op": "ema",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 26
+            }
+          },
+          "period": 9
+        }
+      },
+      "name": "MACD(12,26,9) DIF 向下穿越 DEA",
+      "summary": "MACD DIF(12,26) 向下穿越 MACD DEA(12,26,9)",
+      "warmupBars": 35,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "cc69a4120801fd44daa445927df236db7582b061e5b4475de5046cd8ac097032",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "rma",
+          "input": {
+            "op": "mul",
+            "left": {
+              "op": "div",
+              "left": {
+                "op": "sub",
+                "left": {
+                  "op": "source",
+                  "field": "close"
+                },
+                "right": {
+                  "op": "lowest",
+                  "input": {
+                    "op": "source",
+                    "field": "low"
+                  },
+                  "period": 9
+                }
+              },
+              "right": {
+                "op": "sub",
+                "left": {
+                  "op": "highest",
+                  "input": {
+                    "op": "source",
+                    "field": "high"
+                  },
+                  "period": 9
+                },
+                "right": {
+                  "op": "lowest",
+                  "input": {
+                    "op": "source",
+                    "field": "low"
+                  },
+                  "period": 9
+                }
+              }
+            },
+            "right": {
+              "op": "constant",
+              "value": 100
+            }
+          },
+          "period": 3
+        },
+        "right": {
+          "op": "rma",
+          "input": {
+            "op": "rma",
+            "input": {
+              "op": "mul",
+              "left": {
+                "op": "div",
+                "left": {
+                  "op": "sub",
+                  "left": {
+                    "op": "source",
+                    "field": "close"
+                  },
+                  "right": {
+                    "op": "lowest",
+                    "input": {
+                      "op": "source",
+                      "field": "low"
+                    },
+                    "period": 9
+                  }
+                },
+                "right": {
+                  "op": "sub",
+                  "left": {
+                    "op": "highest",
+                    "input": {
+                      "op": "source",
+                      "field": "high"
+                    },
+                    "period": 9
+                  },
+                  "right": {
+                    "op": "lowest",
+                    "input": {
+                      "op": "source",
+                      "field": "low"
+                    },
+                    "period": 9
+                  }
+                }
+              },
+              "right": {
+                "op": "constant",
+                "value": 100
+              }
+            },
+            "period": 3
+          },
+          "period": 3
+        }
+      },
+      "name": "KD(9,3,3) K 向上穿越 D",
+      "summary": "K值(RSV 9，以1/3權重平滑) 向上穿越 D值(RSV 9，K再以1/3權重平滑)",
+      "warmupBars": 14,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "97ce9040b9d7992239662e08d4265ea4ff6507d81fe10343bbd00a76fee22c46",
+      "ast": {
+        "op": "all",
+        "items": [
+          {
+            "op": "lt",
+            "left": {
+              "op": "rma",
+              "input": {
+                "op": "mul",
+                "left": {
+                  "op": "div",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "right": {
+                      "op": "lowest",
+                      "input": {
+                        "op": "source",
+                        "field": "low"
+                      },
+                      "period": 9
+                    }
+                  },
+                  "right": {
+                    "op": "sub",
+                    "left": {
+                      "op": "highest",
+                      "input": {
+                        "op": "source",
+                        "field": "high"
+                      },
+                      "period": 9
+                    },
+                    "right": {
+                      "op": "lowest",
+                      "input": {
+                        "op": "source",
+                        "field": "low"
+                      },
+                      "period": 9
+                    }
+                  }
+                },
+                "right": {
+                  "op": "constant",
+                  "value": 100
+                }
+              },
+              "period": 3
+            },
+            "right": {
+              "op": "constant",
+              "value": 20
+            }
+          },
+          {
+            "op": "crosses_above",
+            "left": {
+              "op": "rma",
+              "input": {
+                "op": "mul",
+                "left": {
+                  "op": "div",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "right": {
+                      "op": "lowest",
+                      "input": {
+                        "op": "source",
+                        "field": "low"
+                      },
+                      "period": 9
+                    }
+                  },
+                  "right": {
+                    "op": "sub",
+                    "left": {
+                      "op": "highest",
+                      "input": {
+                        "op": "source",
+                        "field": "high"
+                      },
+                      "period": 9
+                    },
+                    "right": {
+                      "op": "lowest",
+                      "input": {
+                        "op": "source",
+                        "field": "low"
+                      },
+                      "period": 9
+                    }
+                  }
+                },
+                "right": {
+                  "op": "constant",
+                  "value": 100
+                }
+              },
+              "period": 3
+            },
+            "right": {
+              "op": "rma",
+              "input": {
+                "op": "rma",
+                "input": {
+                  "op": "mul",
+                  "left": {
+                    "op": "div",
+                    "left": {
+                      "op": "sub",
+                      "left": {
+                        "op": "source",
+                        "field": "close"
+                      },
+                      "right": {
+                        "op": "lowest",
+                        "input": {
+                          "op": "source",
+                          "field": "low"
+                        },
+                        "period": 9
+                      }
+                    },
+                    "right": {
+                      "op": "sub",
+                      "left": {
+                        "op": "highest",
+                        "input": {
+                          "op": "source",
+                          "field": "high"
+                        },
+                        "period": 9
+                      },
+                      "right": {
+                        "op": "lowest",
+                        "input": {
+                          "op": "source",
+                          "field": "low"
+                        },
+                        "period": 9
+                      }
+                    }
+                  },
+                  "right": {
+                    "op": "constant",
+                    "value": 100
+                  }
+                },
+                "period": 3
+              },
+              "period": 3
+            }
+          }
+        ]
+      },
+      "name": "KD(9,3,3) K<20 且 K 向上穿越 D",
+      "summary": "K值(RSV 9，以1/3權重平滑) < 20 且 K值(RSV 9，以1/3權重平滑) 向上穿越 D值(RSV 9，K再以1/3權重平滑)",
+      "warmupBars": 14,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "ec3f2e3174e964560847d933ee64807f0807669589cfcf2b3991fe935fd48adf",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "source",
+          "field": "close"
+        },
+        "right": {
+          "op": "add",
+          "left": {
+            "op": "sma",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 20
+          },
+          "right": {
+            "op": "mul",
+            "left": {
+              "op": "stddev",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 20
+            },
+            "right": {
+              "op": "constant",
+              "value": 2
+            }
+          }
+        }
+      },
+      "name": "收盤價向上穿越布林上軌(20,2σ)",
+      "summary": "收盤價 向上穿越 布林上軌(20, 2σ)",
+      "warmupBars": 21,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "f622009acf35b77ce86237380da81fa316b89001d9564bcac63a93f869b11561",
+      "ast": {
+        "op": "crosses_below",
+        "left": {
+          "op": "source",
+          "field": "close"
+        },
+        "right": {
+          "op": "sub",
+          "left": {
+            "op": "sma",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 20
+          },
+          "right": {
+            "op": "mul",
+            "left": {
+              "op": "stddev",
+              "input": {
+                "op": "source",
+                "field": "close"
+              },
+              "period": 20
+            },
+            "right": {
+              "op": "constant",
+              "value": 2
+            }
+          }
+        }
+      },
+      "name": "收盤價向下穿越布林下軌(20,2σ)",
+      "summary": "收盤價 向下穿越 布林下軌(20, 2σ)",
+      "warmupBars": 21,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "source",
+          "field": "close"
+        },
+        "right": {
+          "op": "prev",
+          "input": {
+            "op": "highest",
+            "input": {
+              "op": "source",
+              "field": "high"
+            },
+            "period": 20
+          },
+          "period": 1
+        }
+      },
+      "name": "收盤價向上穿越前20根最高價",
+      "summary": "收盤價 向上穿越 前1根的最高值(最高價, 20)",
+      "warmupBars": 22,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "ast": {
+        "op": "gte",
+        "left": {
+          "op": "source",
+          "field": "volume"
+        },
+        "right": {
+          "op": "mul",
+          "left": {
+            "op": "prev",
+            "input": {
+              "op": "sma",
+              "input": {
+                "op": "source",
+                "field": "volume"
+              },
+              "period": 20
+            },
+            "period": 1
+          },
+          "right": {
+            "op": "constant",
+            "value": 2
+          }
+        }
+      },
+      "name": "成交量 ≥ 前20根均量 × 2",
+      "summary": "成交量 ≥ (前1根的SMA(成交量, 20) × 2)",
+      "warmupBars": 21,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "3f19ca50f1a735326a2e71ff1ab722da2222991ebde07cf43636ef06a87b543b",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "mul",
+          "left": {
+            "op": "div",
+            "left": {
+              "op": "rma",
+              "input": {
+                "op": "max",
+                "left": {
+                  "op": "sub",
+                  "left": {
+                    "op": "source",
+                    "field": "close"
+                  },
+                  "right": {
+                    "op": "prev",
+                    "input": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "period": 1
+                  }
+                },
+                "right": {
+                  "op": "constant",
+                  "value": 0
+                }
+              },
+              "period": 14
+            },
+            "right": {
+              "op": "add",
+              "left": {
+                "op": "rma",
+                "input": {
+                  "op": "max",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "right": {
+                      "op": "prev",
+                      "input": {
+                        "op": "source",
+                        "field": "close"
+                      },
+                      "period": 1
+                    }
+                  },
+                  "right": {
+                    "op": "constant",
+                    "value": 0
+                  }
+                },
+                "period": 14
+              },
+              "right": {
+                "op": "rma",
+                "input": {
+                  "op": "max",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "prev",
+                      "input": {
+                        "op": "source",
+                        "field": "close"
+                      },
+                      "period": 1
+                    },
+                    "right": {
+                      "op": "source",
+                      "field": "close"
+                    }
+                  },
+                  "right": {
+                    "op": "constant",
+                    "value": 0
+                  }
+                },
+                "period": 14
+              }
+            }
+          },
+          "right": {
+            "op": "constant",
+            "value": 100
+          }
+        },
+        "right": {
+          "op": "constant",
+          "value": 30
+        }
+      },
+      "name": "RSI(14, Wilder) 向上穿越 30",
+      "summary": "RSI(14, Wilder) 向上穿越 30",
+      "warmupBars": 16,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "b1d20bce9ea6a2cf31b29bd9a1581aa92c2a1f9762e99bc6806838881bd14c23",
+      "ast": {
+        "op": "crosses_below",
+        "left": {
+          "op": "mul",
+          "left": {
+            "op": "div",
+            "left": {
+              "op": "rma",
+              "input": {
+                "op": "max",
+                "left": {
+                  "op": "sub",
+                  "left": {
+                    "op": "source",
+                    "field": "close"
+                  },
+                  "right": {
+                    "op": "prev",
+                    "input": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "period": 1
+                  }
+                },
+                "right": {
+                  "op": "constant",
+                  "value": 0
+                }
+              },
+              "period": 14
+            },
+            "right": {
+              "op": "add",
+              "left": {
+                "op": "rma",
+                "input": {
+                  "op": "max",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "source",
+                      "field": "close"
+                    },
+                    "right": {
+                      "op": "prev",
+                      "input": {
+                        "op": "source",
+                        "field": "close"
+                      },
+                      "period": 1
+                    }
+                  },
+                  "right": {
+                    "op": "constant",
+                    "value": 0
+                  }
+                },
+                "period": 14
+              },
+              "right": {
+                "op": "rma",
+                "input": {
+                  "op": "max",
+                  "left": {
+                    "op": "sub",
+                    "left": {
+                      "op": "prev",
+                      "input": {
+                        "op": "source",
+                        "field": "close"
+                      },
+                      "period": 1
+                    },
+                    "right": {
+                      "op": "source",
+                      "field": "close"
+                    }
+                  },
+                  "right": {
+                    "op": "constant",
+                    "value": 0
+                  }
+                },
+                "period": 14
+              }
+            }
+          },
+          "right": {
+            "op": "constant",
+            "value": 100
+          }
+        },
+        "right": {
+          "op": "constant",
+          "value": 70
+        }
+      },
+      "name": "RSI(14, Wilder) 向下穿越 70",
+      "summary": "RSI(14, Wilder) 向下穿越 70",
+      "warmupBars": 16,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "bd07af316d033b4d363f40672bcff0229f65ce3a7f24403a637a5bc7487554c6",
+      "ast": {
+        "op": "crosses_above",
+        "left": {
+          "op": "mul",
+          "left": {
+            "op": "div",
+            "left": {
+              "op": "sub",
+              "left": {
+                "op": "highest",
+                "input": {
+                  "op": "source",
+                  "field": "high"
+                },
+                "period": 14
+              },
+              "right": {
+                "op": "source",
+                "field": "close"
+              }
+            },
+            "right": {
+              "op": "sub",
+              "left": {
+                "op": "highest",
+                "input": {
+                  "op": "source",
+                  "field": "high"
+                },
+                "period": 14
+              },
+              "right": {
+                "op": "lowest",
+                "input": {
+                  "op": "source",
+                  "field": "low"
+                },
+                "period": 14
+              }
+            }
+          },
+          "right": {
+            "op": "constant",
+            "value": -100
+          }
+        },
+        "right": {
+          "op": "constant",
+          "value": -80
+        }
+      },
+      "name": "威廉 %R(14) 向上穿越 -80",
+      "summary": "威廉%R(14) 向上穿越 -80",
+      "warmupBars": 15,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    },
+    {
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "ast": {
+        "op": "gte",
+        "left": {
+          "op": "source",
+          "field": "close"
+        },
+        "right": {
+          "op": "mul",
+          "left": {
+            "op": "prev",
+            "input": {
+              "op": "source",
+              "field": "close"
+            },
+            "period": 5
+          },
+          "right": {
+            "op": "constant",
+            "value": 1.02
+          }
+        }
+      },
+      "name": "收盤價相對前5根收盤漲幅 ≥ 2%",
+      "summary": "收盤價 ≥ (前5根的收盤價 × 1.02)",
+      "warmupBars": 6,
+      "source": "preset",
+      "status": "active",
+      "hitCount": 0,
+      "createdAt": "2026-10-01T02:18:47.325Z",
+      "updatedAt": "2026-10-01T02:18:47.325Z"
+    }
+  ],
+  "aliases": [
+    {
+      "aliasNorm": "MACDXUP",
+      "aliasRaw": "MACD黃金交叉",
+      "fingerprint": "4fb1309da782786c436cbac7ccbaa0df2fe5e41a0d6be4007c4818f12bcbbc86",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "difXUPdea",
+      "aliasRaw": "DIF上穿DEA",
+      "fingerprint": "4fb1309da782786c436cbac7ccbaa0df2fe5e41a0d6be4007c4818f12bcbbc86",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "MACD快線XUP慢線",
+      "aliasRaw": "MACD快線上穿慢線",
+      "fingerprint": "4fb1309da782786c436cbac7ccbaa0df2fe5e41a0d6be4007c4818f12bcbbc86",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "MACDXDN",
+      "aliasRaw": "MACD死亡交叉",
+      "fingerprint": "0ddad384fa0596689bc85642edd6508f2fc86a28ad507ae4d4adfb6178f61c9d",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "difXDNdea",
+      "aliasRaw": "DIF下穿DEA",
+      "fingerprint": "0ddad384fa0596689bc85642edd6508f2fc86a28ad507ae4d4adfb6178f61c9d",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "MACD快線XDN慢線",
+      "aliasRaw": "MACD快線下穿慢線",
+      "fingerprint": "0ddad384fa0596689bc85642edd6508f2fc86a28ad507ae4d4adfb6178f61c9d",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "KDXUP",
+      "aliasRaw": "KD黃金交叉",
+      "fingerprint": "cc69a4120801fd44daa445927df236db7582b061e5b4475de5046cd8ac097032",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "kXUPd",
+      "aliasRaw": "K上穿D",
+      "fingerprint": "cc69a4120801fd44daa445927df236db7582b061e5b4475de5046cd8ac097032",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "k值XUPd值",
+      "aliasRaw": "K值上穿D值",
+      "fingerprint": "cc69a4120801fd44daa445927df236db7582b061e5b4475de5046cd8ac097032",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "KD低檔XUP",
+      "aliasRaw": "KD低檔黃金交叉",
+      "fingerprint": "97ce9040b9d7992239662e08d4265ea4ff6507d81fe10343bbd00a76fee22c46",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "KD20以下XUP",
+      "aliasRaw": "KD20以下黃金交叉",
+      "fingerprint": "97ce9040b9d7992239662e08d4265ea4ff6507d81fe10343bbd00a76fee22c46",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "k小於20且kXUPd",
+      "aliasRaw": "K小於20且K上穿D",
+      "fingerprint": "97ce9040b9d7992239662e08d4265ea4ff6507d81fe10343bbd00a76fee22c46",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "k值低於20且XUP",
+      "aliasRaw": "K值低於20且黃金交叉",
+      "fingerprint": "97ce9040b9d7992239662e08d4265ea4ff6507d81fe10343bbd00a76fee22c46",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "XUPBOLLUPB",
+      "aliasRaw": "突破布林上軌",
+      "fingerprint": "ec3f2e3174e964560847d933ee64807f0807669589cfcf2b3991fe935fd48adf",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "CLOSEXUPBOLLUPB",
+      "aliasRaw": "股價突破布林上軌",
+      "fingerprint": "ec3f2e3174e964560847d933ee64807f0807669589cfcf2b3991fe935fd48adf",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "BOLLUPBXUP",
+      "aliasRaw": "布林通道上軌突破",
+      "fingerprint": "ec3f2e3174e964560847d933ee64807f0807669589cfcf2b3991fe935fd48adf",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "XDNBOLLLOB",
+      "aliasRaw": "跌破布林下軌",
+      "fingerprint": "f622009acf35b77ce86237380da81fa316b89001d9564bcac63a93f869b11561",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "CLOSEXDNBOLLLOB",
+      "aliasRaw": "股價跌破布林下軌",
+      "fingerprint": "f622009acf35b77ce86237380da81fa316b89001d9564bcac63a93f869b11561",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "BOLLLOBXDN",
+      "aliasRaw": "布林通道下軌跌破",
+      "fingerprint": "f622009acf35b77ce86237380da81fa316b89001d9564bcac63a93f869b11561",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "XUP20根新高",
+      "aliasRaw": "突破20根新高",
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "XUP前20根最高價",
+      "aliasRaw": "突破前20根最高價",
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "創20根新高",
+      "aliasRaw": "創20根新高",
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "CLOSEXUP前20根高點",
+      "aliasRaw": "收盤突破前20根高點",
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "XUP20k高點",
+      "aliasRaw": "突破20K高點",
+      "fingerprint": "fd29839379b7dcd5a24b0ff32d16280b7b0bddb896df4d451525aaa31ea15b3b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "爆量",
+      "aliasRaw": "爆量",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "量增兩倍",
+      "aliasRaw": "量增兩倍",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "VOL大於20根均量2倍",
+      "aliasRaw": "成交量大於20根均量2倍",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "VOL是均量兩倍",
+      "aliasRaw": "成交量是均量兩倍",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "VOL放大兩倍",
+      "aliasRaw": "量能放大兩倍",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "VOL超過均量兩倍",
+      "aliasRaw": "成交量超過均量兩倍",
+      "fingerprint": "5719c1427fe3c8402a841554347d13249661f36c0f32f2f8e907ffedd91db780",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "RSIXUP30",
+      "aliasRaw": "RSI上穿30",
+      "fingerprint": "3f19ca50f1a735326a2e71ff1ab722da2222991ebde07cf43636ef06a87b543b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "RSI14XUP30",
+      "aliasRaw": "RSI14上穿30",
+      "fingerprint": "3f19ca50f1a735326a2e71ff1ab722da2222991ebde07cf43636ef06a87b543b",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "RSIXDN70",
+      "aliasRaw": "RSI下穿70",
+      "fingerprint": "b1d20bce9ea6a2cf31b29bd9a1581aa92c2a1f9762e99bc6806838881bd14c23",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "RSI14XDN70",
+      "aliasRaw": "RSI14下穿70",
+      "fingerprint": "b1d20bce9ea6a2cf31b29bd9a1581aa92c2a1f9762e99bc6806838881bd14c23",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "WRXUP-80",
+      "aliasRaw": "威廉指標上穿-80",
+      "fingerprint": "bd07af316d033b4d363f40672bcff0229f65ce3a7f24403a637a5bc7487554c6",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "WR14XUP-80",
+      "aliasRaw": "威廉14上穿-80",
+      "fingerprint": "bd07af316d033b4d363f40672bcff0229f65ce3a7f24403a637a5bc7487554c6",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "5根內漲幅2",
+      "aliasRaw": "5根內漲幅2%",
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "5分鐘漲2",
+      "aliasRaw": "5分鐘漲2%",
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "五根漲幅超過2",
+      "aliasRaw": "五根漲幅超過2%",
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "相對5根前漲幅2",
+      "aliasRaw": "相對5根前漲幅2%",
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    },
+    {
+      "aliasNorm": "5根k漲2",
+      "aliasRaw": "5根K漲2%",
+      "fingerprint": "76f0b13012a15b45f64ed8c5019518b7331e58d85bb89ae045ee5c0d16dfa57a",
+      "hits": 0,
+      "lastUsedAt": null,
+      "source": "preset"
+    }
+  ]
+}

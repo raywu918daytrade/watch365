@@ -32,7 +32,7 @@ function isToday(value){const time=Date.parse(value);return Number.isFinite(time
 let pillKey='';
 function drawSessionPill(){const target=document.querySelector('#sessionPill');if(!target)return;const session=marketSession();if(session.key===pillKey)return;pillKey=session.key;target.className=`proto-mode session-${session.key}`;target.innerHTML=`<i aria-hidden="true"></i>台股${session.label}`;target.title=session.detail;}
 const ERROR_TEXT={
-  HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',
+  HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',HF_DOWNLOAD_TIMEOUT:'資料下載逾時，來源暫時較慢，請稍後再試。',HF_DOWNLOAD_FAILED:'資料下載失敗，請稍後再試。',HISTORY_JOB_NOT_FOUND:'這次回查已過期，請重新回查。',
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
   INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
   FORMULA_WITH_OTHER_CONDITIONS:'AI 自訂條件目前不能與其他條件組合，請先移除。',
@@ -58,7 +58,7 @@ function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{}}
 function resetDraft(){state=initial();save();}
 function node(){return location.hash.slice(1)||'home';}
 function go(next){if(location.hash===`#${next}`)render();else location.hash=next;}
-function errorText(error){return ERROR_TEXT[error?.code]||error?.message||'發生錯誤，請稍後再試。';}
+function errorText(error){if(ERROR_TEXT[error?.code])return ERROR_TEXT[error.code];const message=error?.message||'';if(/^HTTP 5\d\d$/.test(message))return'伺服器暫時沒有回應，請稍後再試一次。';if(/^HTTP 4\d\d$/.test(message))return'這個請求無法處理，請重新整理頁面後再試。';return message||'發生錯誤，請稍後再試。';}
 
 async function api(url,body){
   const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -356,7 +356,7 @@ async function drawHistory(options={}){
   const head=(right)=>`<div class="proto-history-head"><div><p class="proto-eyebrow">過去 7 個交易日</p><h2>這組條件會多常觸發？</h2></div>${right}</div>`;
   if(!hasConditions()){target.innerHTML=head('')+'<div class="proto-status"><strong>先加入條件</strong><p>加入條件後，可以回查這組條件在過去 7 個交易日的觸發時間點。</p></div>';return;}
   const history=historyFresh();
-  if(options.loading){target.innerHTML=head('<span>回查中…</span>')+'<div class="proto-status"><strong>回查中…</strong><p>第一次回查約需 1 分鐘，之後 10 分鐘內重查同一組條件會很快。</p></div>';return;}
+  if(options.loading){target.innerHTML=head('<span>回查中…</span>')+`<div class="proto-status" aria-live="polite"><strong>回查中…</strong><p id="historyProgress">${escapeHtml(options.progress||'準備中')}</p><p class="proto-signature">第一次回查要下載近兩個月的一分鐘資料，可能需要 1～3 分鐘；之後 10 分鐘內重查同一組條件會很快。可以先繼續設定，回查會在背景跑完。</p></div>`;return;}
   if(options.error){target.innerHTML=head('')+`<div class="proto-status"><strong>回查失敗</strong><p>${escapeHtml(options.error)}</p><button class="proto-secondary" id="runHistory">再試一次</button></div>`;}
   else if(!history){target.innerHTML=head('')+'<div class="proto-status"><strong>看看這組條件過去的表現</strong><p>用真實一分鐘 K、和盤中監控相同的規則（同一檔 30 分鐘內只通知一次），先看看會不會太常或太少觸發。</p><button class="proto-secondary" id="runHistory">回查過去 7 個交易日</button></div>';}
   else{
@@ -368,9 +368,23 @@ async function drawHistory(options={}){
   target.querySelector('#showAllHistory')?.addEventListener('click',()=>drawHistory({all:true}));
   target.querySelector('#runHistory')?.addEventListener('click',async()=>{
     const signature=historySignature();drawHistory({loading:true});
-    try{const result=await withFormula(['/api/history/backtest',monitorSpec()]);state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();if(node()==='conditions')drawHistory();}
+    try{const result=await runHistoryJob();state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();if(node()==='conditions')drawHistory();}
     catch(error){if(node()==='conditions')drawHistory({error:errorText(error)});}
   });
+}
+// Backtest runs as a server job: POST returns 202 + jobId (or 200 when cached), then poll until done/failed.
+async function runHistoryJob(){
+  let data=await withFormula(['/api/history/backtest',monitorSpec()]);
+  const started=Date.now();
+  while(data.status&&data.status!=='done'){
+    if(data.status==='failed')throw Object.assign(new Error(ERROR_TEXT[data.error]||'回查失敗'),{code:data.error});
+    const seconds=Math.round((Date.now()-started)/1000);
+    const text=`${data.progress?.message||'處理中'}${seconds>=5?`・已 ${seconds} 秒`:''}`;
+    const node=root.querySelector('#historyProgress');if(node)node.textContent=text;
+    await new Promise((resolve)=>setTimeout(resolve,2000));
+    data=await api(`/api/history/jobs/${encodeURIComponent(data.jobId)}`);
+  }
+  return data;
 }
 function alertInline(message){const target=root.querySelector('#aiPanel .proto-status');if(target)target.insertAdjacentHTML('beforeend',`<p class="proto-error" role="alert">${escapeHtml(message)}</p>`);}
 // Formula tokens expire after 10 minutes and after a server restart; re-plan from the saved text once.

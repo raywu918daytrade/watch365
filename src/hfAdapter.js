@@ -39,6 +39,8 @@ export async function loadHfConfig(paths = DEFAULT_ENV_PATHS) {
   return { repoId, token };
 }
 
+const DOWNLOAD_TIMEOUT_MS = Number(process.env.HF_DOWNLOAD_TIMEOUT_MS || 180_000);
+
 export async function downloadHfAsset(assetPath, {
   cacheRoot = DEFAULT_CACHE_ROOT,
   config,
@@ -60,16 +62,19 @@ export async function downloadHfAsset(assetPath, {
   let response;
   try {
     const encodedRepo = credentials.repoId.split('/').map(encodeURIComponent).join('/');
+    // A stalled HF download must fail instead of holding the history queue forever.
     response = await fetchImpl(`https://huggingface.co/datasets/${encodedRepo}/resolve/${encodeURIComponent(revision)}/${assetPath}`, {
-      headers: { Authorization: `Bearer ${credentials.token}` }, redirect: 'follow'
+      headers: { Authorization: `Bearer ${credentials.token}` }, redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
     });
-  } catch {
-    throw hfError('HF_DOWNLOAD_FAILED');
+  } catch (error) {
+    throw hfError(error?.name === 'TimeoutError' ? 'HF_DOWNLOAD_TIMEOUT' : 'HF_DOWNLOAD_FAILED');
   }
   if (response.status === 401 || response.status === 403) throw hfError('HF_UNAUTHORIZED');
   if (response.status === 404) throw hfError('HF_ASSET_NOT_FOUND');
   if (!response.ok) throw hfError('HF_DOWNLOAD_FAILED');
-  const body = Buffer.from(await response.arrayBuffer());
+  let body;
+  try { body = Buffer.from(await response.arrayBuffer()); }
+  catch (error) { throw hfError(error?.name === 'TimeoutError' ? 'HF_DOWNLOAD_TIMEOUT' : 'HF_DOWNLOAD_FAILED'); }
   await mkdir(dirname(cachePath), { recursive: true });
   try {
     await writeFile(cachePath, body);
