@@ -23,7 +23,9 @@ export const FORMULA_PLAN_SCHEMA={type:'object',additionalProperties:false,prope
   nodes:{type:'array',maxItems:MAX_GRAPH_NODES,items:{type:'object',additionalProperties:false,properties:{id:{type:'string'},op:{type:'string',enum:NODE_OPS},field:{type:['string','null'],enum:[...FORMULA_SOURCE_FIELDS,null]},value:nullableNumber,period:nullableNumber,inputId:nullableString,leftId:nullableString,rightId:nullableString,itemIds:{type:['array','null'],items:{type:'string'},maxItems:4}},required:NODE_KEYS}},rootId:nullableString
 },required:PLAN_KEYS};
 
-export async function planMonitorCondition(text,definitions,{context=[],...options}={}){
+// lookupImpl (server: lookupIndicator from indicatorLookup.js) runs before the formula stage: an indicator no
+// public reference knows is not built (status 'unknown_indicator'); a lookup failure (found:null) never blocks.
+export async function planMonitorCondition(text,definitions,{context=[],lookupImpl=null,...options}={}){
   const request=String(text||'').trim();if(!request)throw plannerError('INDICATOR_AGENT_INPUT_REQUIRED',400);if(request.length>500)throw plannerError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
   const history=validateContext(context);
   // Other timeframes are an engine limit, not something the model should guess at: answer at once with a 1m rewrite.
@@ -41,6 +43,10 @@ export async function planMonitorCondition(text,definitions,{context=[],...optio
   // Only a timeframe the engine can't run (d1, 5m, …) ends here; any other registry miss (other direction,
   // combinations, extra filters) goes on to formula planning.
   if(['d1','other'].includes(registryResult.requestDraft?.requestedTimeframe))return{status:'discussion',message:'目前只支援一分鐘 K 盤中監控，日 K／其他週期尚未開放。可以改用一分鐘 K 的同一條件，例如「收盤上穿 SMA(20)」。',provider:registryResult.provider};
+  if(lookupImpl&&!history.length){
+    let lookup=null;try{lookup=await lookupImpl(request);}catch(error){console.warn(`indicator-lookup: failed ${error.code||error.message}; not blocking`);}
+    if(lookup&&lookup.found===false)return unknownIndicatorResult(lookup);
+  }
   const system=buildPlannerSystem(definitions);
   const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):request;
   // Graphs such as KD or RSI need ~15–20 nodes, so allow more output tokens than the registry pass.
@@ -135,6 +141,10 @@ export function validatePlan(raw,definitions,provider={provider:'stub',model:'st
   return{status:'formula',summary:`${name} · 一分鐘`,formulaSummary:formulaSummary(ast),proposal:{name,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider};
 }
 
+export function unknownIndicatorResult(lookup){
+  const name=lookup.indicatorName||lookup.candidates?.[0]||'這個';
+  return{status:'unknown_indicator',message:`查不到「${name}」這個指標的公開定義，為避免建立錯誤公式，暫不建立。已記錄下來供我們研究；也可以換個常見名稱再試。`,lookup:{candidates:Array.isArray(lookup.candidates)?lookup.candidates:[],indicatorName:name},provider:{provider:'rules',model:'lookup'}};
+}
 // Matches 日線／週線／月線／季線／年線／5分／15分／60分／小時 K and offers the closest 1m condition.
 export function detectOtherTimeframe(text){
   const t=String(text).normalize('NFKC').toLowerCase();

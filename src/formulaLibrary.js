@@ -173,6 +173,19 @@ export class FormulaLibrary {
   }
 
   get(fingerprint) { const formula = this.formulas.get(fingerprint); return formula ? publicFormula(formula, this.aliasesOf(fingerprint)) : null; }
+  // Admin: disable / re-enable / send back to review. A disabled formula is never served by match() or templates().
+  setStatus(fingerprint, status) {
+    if (!FORMULA_LIBRARY_STATUSES.includes(status)) return Promise.reject(requestError('FORMULA_LIBRARY_STATUS_INVALID', { status }, 400));
+    return this.enqueue(async () => {
+      const formula = this.formulas.get(fingerprint); if (!formula) throw requestError('FORMULA_NOT_FOUND', { fingerprint }, 404);
+      if (formula.status !== status) { formula.status = status; formula.updatedAt = new Date().toISOString(); await this.persist([formula], []); }
+      return publicFormula(formula, this.aliasesOf(fingerprint));
+    });
+  }
+  stats() {
+    const formulas = [...this.formulas.values()];
+    return { formulas: formulas.length, active: formulas.filter((item) => item.status === 'active').length, pending: formulas.filter((item) => item.status === 'pending_review').length, disabled: formulas.filter((item) => item.status === 'disabled').length, aliases: this.aliases.size };
+  }
   list({ status = null } = {}) {
     return [...this.formulas.values()].filter((formula) => !status || formula.status === status)
       .sort((a, b) => b.hitCount - a.hitCount || a.name.localeCompare(b.name, 'zh-Hant'))

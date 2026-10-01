@@ -25,6 +25,7 @@ const ERROR_TEXT={
   HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',HF_DOWNLOAD_TIMEOUT:'資料下載逾時，來源暫時較慢，請稍後再試。',HF_DOWNLOAD_FAILED:'資料下載失敗，請稍後再試。',HISTORY_JOB_NOT_FOUND:'這次回查已過期，請重新回查。',HISTORY_TIMEOUT:'回查超過 10 分鐘仍未完成，已停止。請縮小股票範圍再試。',HISTORY_OUT_OF_MEMORY:'這次回查的資料量太大，無法完成。請縮小股票範圍（例如先選一個類股）再試。',
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
   INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_PROVIDER_FAILED:'AI 服務這次沒有回應成功，請再試一次。',INDICATOR_AGENT_RATE_LIMITED:'AI 服務目前請求較多，請稍等幾秒再試。',INDICATOR_AGENT_OUTPUT_INVALID:'AI 回覆的格式有誤，請再試一次或換個說法。',INDICATOR_AGENT_SCHEMA_MISSING:'AI 回覆的格式有誤，請再試一次。',INDICATOR_AGENT_CREDENTIALS_REJECTED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_ACCESS_DENIED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
+  FORMULA_VET_FAILED:'驗證這個條件時發生錯誤，請再試一次。',FORMULA_VET_TIMEOUT:'驗證超過時間仍未完成，請再試一次。',
   FORMULA_WITH_OTHER_CONDITIONS:'這兩個過濾目前無法同時監控，請換一個。',FORMULA_COMPLEXITY_EXCEEDED:'這兩個指標合起來太複雜，目前無法同時監控，請換一個。',
   TEMPLATE_NOT_FOUND:'清單裡找不到這個指標，請重新整理頁面後再選。',TEMPLATE_PARAM_INVALID:'這個指標的參數無效，請換一個變體。',TEMPLATE_REQUEST_INVALID:'過濾設定有誤，請移除後重新加入。',
   retry_not_allowed:'只有送出失敗的通知可以重送。',not_found:'找不到這則通知。',
@@ -42,7 +43,7 @@ document.querySelector('#homeButton').addEventListener('click',()=>go('home'));
 window.addEventListener('hashchange',render);
 
 function initial(){return{purpose:null,selected:[],watchlist:[],filters:[],formulaToken:null,formulaTokenSignature:null,requestText:'',ai:null,history:null};}
-function load(){try{const saved=migrateDraft({...initial(),...JSON.parse(localStorage.getItem(KEY))});if(saved.ai)saved.ai.loading=false;return saved;}catch{return initial();}}
+function load(){try{const saved=migrateDraft({...initial(),...JSON.parse(localStorage.getItem(KEY))});if(saved.ai){saved.ai.loading=false;saved.ai.vetting=null;}return saved;}catch{return initial();}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{}}
 function resetDraft(){state=initial();save();}
 function node(){return location.hash.slice(1)||'home';}
@@ -428,9 +429,21 @@ function drawAi(){
   else{
     const result=ai.result||{};
     if(result.status==='existing'){eyebrow='內建指標';body=existingPreset?`<div class="proto-ai-body"><strong>${escapeHtml(existingPreset.label)}</strong><p class="proto-signature">清單裡有這個指標，直接加入即可。</p><div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseExisting">加入過濾</button></div></div>`:`<div class="proto-ai-body"><strong>${escapeHtml(result.summary||'')}目前不能從這裡建立</strong><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiQuickRequest">送出需求，之後通知我</button></div></div>`;}
+    else if(result.status==='formula'&&ai.vetting){
+      // Vetting an AI-built formula: replay it over the last 7 trading days before it may be added.
+      eyebrow='AI 新建立・驗證中';const name=String(result.summary||'').replace(/ · 一分鐘$/,'');
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><div class="proto-skeleton proto-skeleton-line" aria-hidden="true"></div><div class="proto-skeleton proto-skeleton-line short" aria-hidden="true"></div><p>正在用過去 7 個交易日驗證這個條件…</p><p id="vetProgress" class="proto-signature" aria-live="polite">${escapeHtml(ai.vetting.progress||'準備中')}</p><p class="proto-signature">第一次驗證要下載近期的一分鐘資料，可能需要 1～3 分鐘。</p></div>`;}
+    else if(result.status==='formula'&&ai.vet&&ai.vet.verdict&&!ai.vet.verdict.ok){
+      // Blocked by the vet: 0 triggers or far too many over 7 days. Not added, not saved to the library.
+      const verdict=ai.vet.verdict,name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow='AI 新建立・未通過驗證';
+      body=`<div class="proto-ai-body"><strong>這個條件沒有通過驗證</strong><p>${escapeHtml(verdict.message||VERDICT_TEXT[verdict.code]||'這個條件目前不適合用來監控。')}</p><p class="proto-signature">${escapeHtml(name)}</p>${vetStats(verdict)}<div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiQuickRequest">送出需求，之後通知我</button><button type="button" class="proto-primary" id="aiRephrase">換個說法</button></div></div>`;}
     else if(result.status==='formula'){
       const name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow=result.library?'公式庫・已驗證':'AI 新建立';
-      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">可以和清單裡的指標組合；建立監控後會進入清單，下次直接選。</p>'}<div id="aiConfirmBox"></div><div class="proto-inline-actions">${result.library?'<button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">加入過濾</button>':'<button type="button" class="proto-secondary" id="aiUseFormula">只加入</button><button type="button" class="proto-primary" id="aiUseFormulaHistory">加入並回查 7 日</button>'}</div></div>`;}
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">加入前會先用過去 7 個交易日驗證；建立監控後會進入清單，下次直接選。</p>'}${ai.vetError?`<p class="proto-error" role="alert">${escapeHtml(ai.vetError)}</p>`:''}<div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">${ai.vetError?'再驗證一次':'加入過濾'}</button></div></div>`;}
+    else if(result.status==='unknown_indicator'){
+      // The AI could not find a public definition for the indicator name; show what it looked up.
+      eyebrow='查不到這個指標';const candidates=(result.lookup?.candidates||[]).filter(Boolean).slice(0,8);
+      body=`<div class="proto-ai-body"><strong>查不到這個指標的公開定義</strong><p>${escapeHtml(result.message||'目前找不到這個名稱對應的公開計算方式，無法建立條件。')}</p>${candidates.length?`<p class="proto-signature">查過的關鍵字</p><div class="proto-candidates">${candidates.map((item)=>`<span class="proto-chip">${escapeHtml(item)}</span>`).join('')}</div>`:''}<div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiQuickRequest">送出需求，之後通知我</button><button type="button" class="proto-primary" id="aiRephrase">換個名稱再試</button></div></div>`;}
     else if(result.status==='clarification'){eyebrow='AI 想確認一件事';body=`<div class="proto-ai-body"><strong>AI 想確認一件事</strong><p>${escapeHtml(result.message||result.question||'')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答這裡" aria-label="回答 AI 的問題"></label><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiSendReply">送出</button></div></div>`;}
     else if(ai.requested)body=requestedCard(ai);
     else{const message=result.message||'這個條件超出目前可計算的範圍。',alternative=alternativeOf(message);eyebrow='這個目前還算不出來';
@@ -452,21 +465,48 @@ function drawAi(){
   // An AI-built formula isn't in the library yet, so the backend can't join it with other filters: confirm the replacement inline.
   const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>已有 ${count} 個過濾（上限 2 個），加入會取代它們，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
   target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{if(!existingPreset)return;addFilter({id:crypto.randomUUID(),label:existingPreset.label,formulaSummary:'',spec:existingPreset.spec});});
-  const useFormula=(withHistory)=>{
+  // Library hits are already vetted and go straight in. A brand-new AI formula is first replayed over the
+  // last 7 trading days (/api/formula/vet); it is only added when the verdict is ok.
+  const useFormula=()=>{
     const result=ai.result,name=String(result.summary||'').replace(/ · 一分鐘$/,'');
-    if(result.library&&result.proposal?.fingerprint){addFilter({id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{fingerprint:result.proposal.fingerprint}},{withHistory});return;}
+    if(result.library&&result.proposal?.fingerprint){addFilter({id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{fingerprint:result.proposal.fingerprint}});return;}
     const filter={id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{ai:{text:ai.text,context:ai.context}},token:result.proposalToken};
-    const apply=async(replace)=>{if(await addFilter(filter,{withHistory,replace}))showToast('已加入。建立監控後，這個指標會進入清單，下次直接選。');};
-    if(filtersFull())return confirmReplace(state.filters.length,()=>apply(true));
-    apply(false);
+    if(filtersFull())return confirmReplace(state.filters.length,()=>vetAndAdd(ai,filter,true));
+    vetAndAdd(ai,filter,false);
   };
-  target.querySelector('#aiUseFormula')?.addEventListener('click',()=>useFormula(false));
-  target.querySelector('#aiUseFormulaHistory')?.addEventListener('click',()=>useFormula(true));
+  target.querySelector('#aiUseFormula')?.addEventListener('click',useFormula);
   const reply=target.querySelector('#aiReply');
   const send=()=>{const text=reply.value.trim();if(!text)return;if(ai.result?.message)ai.context=[...ai.context,{request:ai.text.slice(0,500),response:String(ai.result.message).slice(0,500)}].slice(-4);else ai.context=[];ai.text=text;ai.result=null;ai.error=null;save();runAi();};
   target.querySelector('#aiSendReply')?.addEventListener('click',send);
   reply?.addEventListener('keydown',(event)=>{if(event.key==='Enter')send();});
   reply?.focus({preventScroll:true});
+}
+// Vet verdicts (/api/formula/vet and every backtest result): ok, no_triggers, too_many, no_data.
+const VERDICT_TEXT={no_triggers:'過去 7 個交易日完全沒有觸發，這個條件可能太嚴格，監控不到東西。',too_many:'過去 7 個交易日觸發太頻繁，通知會多到沒有參考價值。',no_data:'沒有可用的歷史資料，無法驗證這個條件。'};
+function perDayText(verdict){const value=Number(verdict?.perSymbolPerDay);return Number.isFinite(value)?(value>=10?String(Math.round(value)):String(Math.round(value*10)/10)):'—';}
+function vetStats(verdict){return`<div class="proto-vet-stats"><div><strong>${escapeHtml(String(verdict.totalEvents??'—'))}</strong><span>總觸發次數</span></div><div><strong>${escapeHtml(String(verdict.symbolsCount??'—'))}</strong><span>檔數</span></div><div><strong>${escapeHtml(String(verdict.availableDays??'—'))}</strong><span>交易日</span></div><div><strong>${escapeHtml(perDayText(verdict))}</strong><span>平均每檔每天</span></div></div>`;}
+async function vetAndAdd(ai,filter,replace){
+  if(state.ai!==ai||ai.vetting)return;
+  ai.vetting={progress:'準備中'};ai.vet=null;ai.vetError=null;save();drawAi();
+  let result;
+  try{
+    const first=await api('/api/formula/vet',{proposalToken:filter.token,...monitorSpec()});
+    result=await pollJob(first,(text)=>{const node=root.querySelector('#vetProgress');if(node)node.textContent=text;if(ai.vetting)ai.vetting.progress=text;});
+  }catch(error){
+    if(state.ai!==ai)return;
+    // An expired proposal needs a fresh parse; everything else is shown on the card with a retry.
+    if(['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code)){ai.vetting=null;aiCache.delete(ai.text);ai.result=null;save();runAi();return;}
+    ai.vetting=null;ai.vetError=errorText(error);save();drawAi();return;
+  }
+  if(state.ai!==ai)return;
+  ai.vetting=null;
+  const verdict=result.verdict||{ok:true,code:'ok',totalEvents:result.totalEvents,symbolsCount:result.symbolsCount,availableDays:result.availableDays};
+  if(!verdict.ok){ai.vet={verdict};save();drawAi();return;}
+  const added=await addFilter(filter,{replace});
+  if(!added)return;
+  // The vet already replayed this very filter, so its result is the 7-day history (only when it is the sole filter).
+  if(state.filters.length===1&&Array.isArray(result.days)){state.history=historyFrom(historySignature(),result);save();if(node()==='conditions')drawHistory();}
+  showToast(`已加入。過去 7 日觸發 ${verdict.totalEvents??result.totalEvents??0} 次`);
 }
 // E. 7-day M1 history: replays the current filters over HF daily one-minute files on the server.
 // Shown as a one-line summary; details expand on request. Never runs on its own unless the AI card asked for it.
@@ -486,7 +526,9 @@ function drawHistory(options={}){
   else if(!history)target.innerHTML=row(stale?'<strong>過濾已變，重新回查</strong>':'過去 7 個交易日：尚未回查','<button type="button" class="proto-link" id="runHistory">回查</button>');
   else{
     const busiest=history.days.filter((day)=>day.count).sort((a,b)=>b.count-a.count)[0];
-    const summary=`過去 7 個交易日：共觸發 ${history.totalEvents} 次${busiest?`・最多 ${escapeHtml(busiest.date.slice(5).replace('-','/'))} ${busiest.count} 次`:''}`;
+    const code=history.verdict?.code;
+    const hint=code==='too_many'?`<span class="proto-vet-hint warn">太頻繁：平均每檔每天 ${escapeHtml(perDayText(history.verdict))} 次</span>`:code==='no_triggers'||(!code&&!history.totalEvents)?'<span class="proto-vet-hint">沒有觸發</span>':code==='no_data'?'<span class="proto-vet-hint">沒有資料</span>':'';
+    const summary=`過去 7 個交易日：共觸發 ${history.totalEvents} 次${busiest?`・最多 ${escapeHtml(busiest.date.slice(5).replace('-','/'))} ${busiest.count} 次`:''}${hint}`;
     let detail='';
     if(historyDetail){
       const limit=historyAll?history.events.length:30;
@@ -502,18 +544,23 @@ function drawHistory(options={}){
 async function runHistory(){
   if(!hasFilters()||historyBusy)return;
   const signature=historySignature();historyBusy=true;historyAll=false;historyDetail=false;drawHistory({loading:true});drawSticky();
-  try{const result=await runHistoryJob();state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();historyBusy=false;if(node()==='conditions'){drawHistory();drawSticky();}}
+  try{const result=await runHistoryJob();state.history=historyFrom(signature,result);save();historyBusy=false;if(node()==='conditions'){drawHistory();drawSticky();}}
   catch(error){historyBusy=false;if(node()==='conditions'){drawHistory({error:errorText(error)});drawSticky();}}
 }
+// What we keep of a backtest / vet result (events capped at 100; the verdict drives the summary row's hint).
+function historyFrom(signature,result){const events=Array.isArray(result.events)?result.events:[];return{signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||events.length>100,days:result.days||[],events:events.slice(0,100),verdict:result.verdict||null};}
 // Backtest runs as a server job: POST returns 202 + jobId (or 200 when cached), then poll until done/failed.
 async function runHistoryJob(){
-  let data=await withFormula(['/api/history/backtest',monitorSpec()]);
+  const first=await withFormula(['/api/history/backtest',monitorSpec()]);
+  return pollJob(first,(text)=>{const node=root.querySelector('#historyProgress');if(node)node.textContent=text;});
+}
+// Shared poller for /api/history/jobs/:id (backtest and vet): every 2 seconds, reporting progress text.
+async function pollJob(data,onProgress){
   const started=Date.now();
   while(data.status&&data.status!=='done'){
     if(data.status==='failed')throw Object.assign(new Error(ERROR_TEXT[data.error]||'回查失敗'),{code:data.error});
     const seconds=Math.round((Date.now()-started)/1000);
-    const text=`${data.progress?.message||'處理中'}${seconds>=5?`・已 ${seconds} 秒`:''}`;
-    const node=root.querySelector('#historyProgress');if(node)node.textContent=text;
+    onProgress(`${data.progress?.message||'處理中'}${seconds>=5?`・已 ${seconds} 秒`:''}`);
     await new Promise((resolve)=>setTimeout(resolve,2000));
     data=await api(`/api/history/jobs/${encodeURIComponent(data.jobId)}`);
   }

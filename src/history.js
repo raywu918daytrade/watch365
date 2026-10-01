@@ -329,3 +329,19 @@ export async function runHistory(strategy, watchlist, options = {}) {
 }
 
 function historyError(code, statusCode = 500) { return Object.assign(new Error(code), { code, statusCode }); }
+
+// Verdict on a history result (PM decision: a condition that never triggers, or triggers far too often, is not
+// usable for notifications and is blocked before it is applied). Attached to every done history result so the
+// backtest and the vet flow share one shape. Threshold: VET_MAX_PER_SYMBOL_DAY average triggers per symbol per
+// trading day (default 10).
+export const VET_MAX_PER_SYMBOL_DAY_DEFAULT = 10;
+export function vetMaxPerSymbolDay(env = process.env) { const value = Number(env.VET_MAX_PER_SYMBOL_DAY); return Number.isFinite(value) && value > 0 ? value : VET_MAX_PER_SYMBOL_DAY_DEFAULT; }
+export function historyVerdict(result, { maxPerSymbolDay = vetMaxPerSymbolDay() } = {}) {
+  const totalEvents = Number(result?.totalEvents) || 0, symbolsCount = Number(result?.symbolsCount) || 0, availableDays = Number(result?.availableDays) || 0;
+  const perSymbolPerDay = symbolsCount && availableDays ? Number((totalEvents / (symbolsCount * availableDays)).toFixed(2)) : 0;
+  const base = { perSymbolPerDay, totalEvents, symbolsCount, availableDays, maxPerSymbolDay };
+  if (availableDays === 0) return { ok: false, code: 'no_data', ...base, message: `過去 ${HISTORY_DAYS} 個交易日沒有可用的歷史資料，無法確認這個條件的觸發頻率。` };
+  if (totalEvents === 0) return { ok: false, code: 'no_triggers', ...base, message: `過去 ${availableDays} 個交易日沒有任何觸發，這個條件可能太嚴格或定義有誤。` };
+  if (perSymbolPerDay > maxPerSymbolDay) return { ok: false, code: 'too_many', ...base, message: `平均每檔每天觸發 ${perSymbolPerDay} 次，太頻繁，無法用來通知。` };
+  return { ok: true, code: 'ok', ...base, message: `過去 ${availableDays} 個交易日共觸發 ${totalEvents} 次，平均每檔每天 ${perSymbolPerDay} 次。` };
+}

@@ -14,8 +14,12 @@ import { applyScopedMarketBars } from './signalEngine.js';
 import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateStrategy } from './indicatorRegistry.js';
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
-import { createDocumentBackend, createFormulaLibraryBackend, dbConfigFromEnv } from './db.js';
-import { HISTORY_DAYS, listHfM1Dates, listHfM1Months } from './history.js';
+import { createDocumentBackend, createEventBackend, createFormulaLibraryBackend, createUnknownIndicatorBackend, dbConfigFromEnv } from './db.js';
+import { HISTORY_DAYS, historyVerdict, listHfM1Dates, listHfM1Months } from './history.js';
+import { EventStore } from './events.js';
+import { classifyUserAgent, visitorCookie, visitorFromRequest } from './visitor.js';
+import { UnknownIndicatorStore, lookupIndicator } from './indicatorLookup.js';
+import { createAdminApi } from './adminApi.js';
 import { fork } from 'node:child_process';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
@@ -29,6 +33,10 @@ const PUBLIC_DIR = join(ROOT, 'public');
 const DATA_FILE = process.env.WATCH365_DATA_FILE || join(ROOT, 'data', 'watch365.json');
 const INDICATOR_REQUESTS_FILE = process.env.WATCH365_INDICATOR_REQUESTS_FILE || join(ROOT, 'data', 'indicator-requests.json');
 const FORMULA_LIBRARY_FILE = process.env.WATCH365_FORMULA_LIBRARY_FILE || join(ROOT, 'data', 'formula-library.json');
+const EVENTS_FILE = process.env.WATCH365_EVENTS_FILE || join(ROOT, 'data', 'events.jsonl');
+const UNKNOWN_INDICATORS_FILE = process.env.WATCH365_UNKNOWN_INDICATORS_FILE || join(ROOT, 'data', 'unknown-indicators.json');
+// PM decision: the indicator reality check (indicatorLookup.js) runs before the AI formula stage unless disabled.
+const INDICATOR_LOOKUP_ENABLED = process.env.INDICATOR_LOOKUP !== 'off';
 const PORT = Number(process.env.PORT || 3650);
 const indicatorRegistry = new IndicatorRegistry();
 const formulaTokenSecret=randomBytes(32).toString('base64url');
@@ -43,6 +51,10 @@ const store = new JsonStore(DATA_FILE, { backend: documentBackend, key: 'state' 
 const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE, { backend: documentBackend, key: 'indicator-requests' });
 // Formula library: DB tables when DB_HOST is set, otherwise data/formula-library.json. Seeded from FORMULA_RECIPES on boot.
 const formulaLibrary = new FormulaLibrary(FORMULA_LIBRARY_FILE, { backend: await createFormulaLibraryBackend(dbConfigFromEnv()) });
+// Event log (admin dashboard) and blocked-indicator list: DB tables when DB_HOST is set, otherwise data/ files.
+const events = new EventStore(EVENTS_FILE, { backend: await createEventBackend(dbConfigFromEnv()) });
+const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { backend: await createUnknownIndicatorBackend(dbConfigFromEnv()) });
+const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, secret: formulaTokenSecret });
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
@@ -100,22 +112,33 @@ function runHistoryInWorker(strategy, watchlist, onProgress) {
     });
   });
 }
+// Every done result carries a verdict (no_data / no_triggers / too_many / ok) so the backtest UI and the vet
+// flow share one shape.
+function withVerdict(result) { return { ...result, verdict: historyVerdict(result) }; }
 function historyJobView(job) {
-  if (job.status === 'done') return { status: 'done', jobId: job.id, cached: false, ...job.result };
+  if (job.status === 'done') return { status: 'done', jobId: job.id, cached: false, ...withVerdict(job.result) };
   if (job.status === 'failed') return { status: 'failed', jobId: job.id, error: job.error?.code || 'HISTORY_FAILED' };
   return { status: job.status, jobId: job.id, progress: job.progress, elapsedMs: Date.now() - job.startedAt };
 }
 
-await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load()]);
+await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load()]);
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
+console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}`);
 syncMonitorTimer();
 
 const server = createServer(async (request, response) => {
   try {
+    // Anonymous visitor id: read from the w365v cookie, issued on the first API call (and on the page itself).
+    const { visitor, isNew } = visitorFromRequest(request);
+    request.visitor = visitor;
+    const pathname = request.url.split('?')[0];
+    if (isNew && (pathname.startsWith('/api/') || pathname === '/' || pathname === '/index.html')) response.setHeader('Set-Cookie', visitorCookie(visitor, { secure: request.headers['x-forwarded-proto'] === 'https' }));
     if (request.url.startsWith('/api/')) {
+      if (await adminApi.handle(request, response, new URL(request.url, `http://${request.headers.host}`))) return;
       await routeApi(request, response);
       return;
     }
+    if ((request.method || 'GET') === 'GET' && (pathname === '/' || pathname === '/index.html')) events.record('page_view', { ua: classifyUserAgent(request.headers['user-agent']) }, { visitor });
     await serveStatic(request, response);
   } catch (error) {
     console.error(error);
@@ -130,6 +153,13 @@ server.listen(PORT, () => {
 async function routeApi(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const method = request.method || 'GET';
+
+  const visitor = request.visitor ?? null;
+  if (method === 'GET' && url.pathname === '/api/me') {
+    const range = await events.visitorRange(visitor);
+    sendJson(response, 200, { visitor, firstSeen: range?.firstSeen ?? null });
+    return;
+  }
 
   if (method === 'GET' && url.pathname === '/api/version') {
     sendJson(response, 200, { version: APP_VERSION, deployedAt: BOOTED_AT.toISOString(), commit: APP_COMMIT });
@@ -166,11 +196,36 @@ async function routeApi(request, response) {
       const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
       const key = `${strategyIdentity(strategy)}|${watchlist.map((item) => item.symbol).sort().join(',')}`;
       const cached = historyCache.get(key);
-      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { sendJson(response, 200, { ...cached.result, cached:true, status:'done' }); return; }
+      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { sendJson(response, 200, { ...withVerdict(cached.result), cached:true, status:'done' }); return; }
       const job = startHistoryJob(key, strategy, watchlist);
+      recordHistoryOutcome(job, 'backtest', { strategy, watchlist, visitor });
       // ?wait=1 keeps the old synchronous behaviour for scripts; the UI polls instead.
-      if (url.searchParams.get('wait') === '1') { await job.promise.catch(() => {}); sendJson(response, job.error ? (job.error.statusCode || 500) : 200, job.error ? { error:job.error.code || 'HISTORY_FAILED' } : { ...job.result, cached:false, status:'done' }); return; }
+      if (url.searchParams.get('wait') === '1') { await job.promise.catch(() => {}); sendJson(response, job.error ? (job.error.statusCode || 500) : 200, job.error ? { error:job.error.code || 'HISTORY_FAILED' } : { ...withVerdict(job.result), cached:false, status:'done' }); return; }
       sendJson(response, 202, historyJobView(job));
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_FAILED' });
+    }
+    return;
+  }
+
+  // Vet (PM decision 1: a condition that triggers 0 times or far too often in the 7-day replay is blocked before it
+  // is applied). Same job machinery as the backtest; the done result's `verdict` says ok / no_triggers / too_many /
+  // no_data. The client applies only when verdict.ok.
+  if (method === 'POST' && url.pathname === '/api/formula/vet') {
+    let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
+    if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
+    if (typeof body?.proposalToken !== 'string') { sendJson(response, 422, { error:'FORMULA_TOKEN_INVALID' }); return; }
+    try {
+      const { strategy, formulaPayload } = await strategyFromRequest({ formulaToken: body.proposalToken }, null);
+      const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
+      const key = `${strategyIdentity(strategy)}|${watchlist.map((item) => item.symbol).sort().join(',')}`;
+      const cached = historyCache.get(key);
+      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { const view = { ...withVerdict(cached.result), cached:true, status:'done', vet:true }; if (!view.verdict.ok) recordVetBlocked(view.verdict, { strategy, formulaPayload, watchlist, visitor }); sendJson(response, 200, view); return; }
+      const job = startHistoryJob(key, strategy, watchlist);
+      recordHistoryOutcome(job, 'vet', { strategy, formulaPayload, watchlist, visitor });
+      sendJson(response, job.status === 'done' ? 200 : 202, { ...historyJobView(job), vet:true });
     } catch (error) {
       if (!error.statusCode) console.error(error);
       sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_FAILED' });
@@ -196,14 +251,19 @@ async function routeApi(request, response) {
 
   if (method === 'POST' && url.pathname === '/api/indicator-agent/parse') {
     const body=await readJson(request);
+    const startedAt=Date.now();const text=typeof body?.text==='string'?body.text.slice(0,200):'';
     try {
       const registry=await indicatorRegistry.load();
-      // Library first (exact alias match, active formulas only), AI planner on a miss. Both paths return the same shape.
-      const result=await resolveMonitorCondition(body.text,registry.items,{library:formulaLibrary,context:body.context});
+      // Library first (exact alias match, active formulas only), then the indicator reality check (indicatorLookup.js),
+      // then the AI planner. All paths return the same shape.
+      const result=await resolveMonitorCondition(body.text,registry.items,{library:formulaLibrary,context:body.context,lookupImpl:INDICATOR_LOOKUP_ENABLED?lookupIndicator:null});
       if(result.status==='formula'){result.proposalId=randomUUID();result.proposalToken=issueFormulaToken({...result.proposal,proposalId:result.proposalId,sourceText:typeof body.text==='string'?body.text:undefined},formulaTokenSecret);}
+      if(result.status==='unknown_indicator'){events.record('unknown_indicator',{text,candidates:result.lookup?.candidates??[],indicatorName:result.lookup?.indicatorName??null},{visitor});unknownIndicators.record({text:body.text,candidates:result.lookup?.candidates??[]});}
       delete result.proposal?.ast;
+      events.record('parse',{text,status:result.status,provider:result.provider?.provider??null,model:result.provider?.model??null,library:Boolean(result.library),fingerprint:result.proposal?.fingerprint??null,ms:Date.now()-startedAt},{visitor});
       sendJson(response,200,result);
     } catch(error) {
+      events.record('parse',{text,status:'error',code:error.code||'INDICATOR_AGENT_FAILED',provider:null,model:null,library:false,ms:Date.now()-startedAt},{visitor});
       sendJson(response,error.statusCode||500,{error:error.code||'INDICATOR_AGENT_FAILED',...(error.retryAfterSeconds?{retryAfterSeconds:error.retryAfterSeconds}:{})});
     }
     return;
@@ -261,6 +321,8 @@ async function routeApi(request, response) {
       const result = formulaLibrary.compose(items);
       result.proposalId = randomUUID();
       result.proposalToken = issueFormulaToken({ ...result.proposal, proposalId: result.proposalId, sourceText: typeof body.text === 'string' && body.text.trim() ? body.text : result.proposal.name }, formulaTokenSecret);
+      const labels = result.items ? result.items.map((item) => item.formulaSummary) : [result.formulaSummary];
+      events.record('template_instantiate', { items: items.map((item, index) => ({ shapeKey: item.shapeKey ?? null, fingerprint: item.fingerprint ?? null, label: labels[index] ?? null })), labels, label: result.proposal.name, shapeKey: result.shapeKey ?? items[0]?.shapeKey ?? null, fingerprint: result.proposal.fingerprint, count: items.length }, { visitor });
       delete result.proposal.ast;
       sendJson(response, 200, result);
     } catch (error) {
@@ -278,7 +340,7 @@ async function routeApi(request, response) {
     let body;
     try { body=await readJson(request); }
     catch { sendJson(response,400,{error:'INVALID_JSON'}); return; }
-    try { const result=await indicatorRequests.submit(body); sendJson(response,result.duplicate?200:201,result); }
+    try { const result=await indicatorRequests.submit(body); events.record('indicator_request',{id:result.request.id,indicatorName:result.request.indicatorName,timeframe:result.request.timeframe,duplicate:result.duplicate},{visitor}); sendJson(response,result.duplicate?200:201,result); }
     catch(error){sendJson(response,error.statusCode||500,{error:error.code||'INDICATOR_REQUEST_SAVE_FAILED'});}
     return;
   }
@@ -421,6 +483,7 @@ async function routeApi(request, response) {
     });
     syncMonitorTimer();
     if (formulaPayload) await recordFormulaActivation(formulaPayload);
+    events.record('monitor_configure', { purpose, symbols: watchlist.length, strategyName: strategy.name, fingerprint: strategy.definitionFingerprint ?? null, label: strategy.name, formula: Boolean(formulaPayload) }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
@@ -431,6 +494,7 @@ async function routeApi(request, response) {
       appendLog(state, 'info', '啟動監控');
     });
     syncMonitorTimer();
+    events.record('monitor_start', { strategyName: store.getState().settings.strategy?.name ?? null }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
@@ -443,12 +507,14 @@ async function routeApi(request, response) {
       appendLog(state, 'info', '停止監控');
     });
     syncMonitorTimer();
+    events.record('monitor_stop', { strategyName: store.getState().settings.strategy?.name ?? null }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/monitor/run') {
     const result = await runMonitor('manual-run');
+    events.record('monitor_run', { skipped: Boolean(result.skipped), reason: result.reason ?? null, signals: result.signals?.length ?? 0, error: result.error ?? null }, { visitor });
     sendJson(response, 200, result);
     return;
   }
@@ -603,6 +669,23 @@ async function strategyFromRequest(body, current) {
     strategy = validateFormulaStrategy(plan.strategy, current?.definitionFingerprint === plan.strategy.definitionFingerprint ? current.activatedAt : new Date().toISOString());
   }
   return { strategy, conditions, name:conditionsName(conditions) };
+}
+
+// Records the outcome of a history job as a `backtest` event, and a `vet_blocked` event when a vet verdict is not ok.
+// Attached once per request (a joined job records once per requester, which is what the dashboard wants).
+function recordHistoryOutcome(job, kind, { strategy, formulaPayload = null, watchlist, visitor }) {
+  const startedAt = Date.now();
+  const base = { kind, fingerprint: strategy.definitionFingerprint ?? strategyIdentity(strategy), strategyName: strategy.name, symbols: watchlist.length };
+  job.promise.then(() => {
+    const result = job.result; if (!result) return;
+    const verdict = historyVerdict(result);
+    events.record('backtest', { ...base, days: result.availableDays, totalEvents: result.totalEvents, perSymbolPerDay: verdict.perSymbolPerDay, verdict: verdict.code, ms: result.elapsedMs ?? Date.now() - startedAt, status: 'done' }, { visitor });
+    if (kind === 'vet' && !verdict.ok) recordVetBlocked(verdict, { strategy, formulaPayload, watchlist, visitor });
+  }).catch(() => {});
+  job.promise.catch((error) => { events.record('backtest', { ...base, days: 0, totalEvents: 0, ms: Date.now() - startedAt, status: 'failed', error: error?.code || 'HISTORY_FAILED' }, { visitor }); });
+}
+function recordVetBlocked(verdict, { strategy, formulaPayload = null, watchlist, visitor }) {
+  events.record('vet_blocked', { name: strategy.name, text: formulaPayload?.sourceText?.slice(0, 200) ?? null, fingerprint: strategy.definitionFingerprint ?? null, code: verdict.code, totalEvents: verdict.totalEvents, symbolsCount: verdict.symbolsCount ?? watchlist.length, availableDays: verdict.availableDays, perSymbolPerDay: verdict.perSymbolPerDay }, { visitor });
 }
 
 // A formula the user applied goes into the library (AI formulas start as pending_review). Never fails the request.

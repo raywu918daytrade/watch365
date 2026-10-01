@@ -256,3 +256,15 @@
 .proto-preset.soon strong { color:#566b70; }
 .proto-preset.soon .proto-add[disabled] { border-style:dashed; }
 .proto-soon-note { margin:.4rem .75rem .2rem; }
+
+/* ---- 2026-10 vet gate: AI-built formulas are replayed over 7 days before they can be added ---- */
+.proto-vet-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:.8rem; border:1px solid #d0dddd; border-radius:.5rem; overflow:hidden; background:#fff; }
+.proto-vet-stats div { display:grid; gap:.15rem; padding:.65rem .5rem; border-right:1px solid #e3ebeb; text-align:center; }
+.proto-vet-stats div:last-child { border-right:0; }
+.proto-vet-stats strong { font-size:1.15rem; line-height:1.1; font-variant-numeric:tabular-nums; }
+.proto-vet-stats span { color:#567075; font-size:.68rem; }
+.proto-vet-hint { display:inline-block; margin-left:.5rem; border-radius:.25rem; padding:.05rem .45rem; background:#edf1f1; color:#355257; font-size:.74rem; font-weight:800; white-space:nowrap; }
+.proto-vet-hint.warn { background:#fff3e0; color:#8a3b00; }
+.proto-candidates { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.3rem; }
+.proto-candidates .proto-chip { cursor:default; }
+@media (max-width:640px) { .proto-vet-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .proto-vet-stats div:nth-child(2) { border-right:0; } .proto-vet-stats div:nth-child(-n+2) { border-bottom:1px solid #e3ebeb; } .proto-vet-hint { margin:.3rem 0 0; } }
