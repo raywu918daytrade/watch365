@@ -25,7 +25,7 @@ const ERROR_TEXT={
   HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',HF_DOWNLOAD_TIMEOUT:'資料下載逾時，來源暫時較慢，請稍後再試。',HF_DOWNLOAD_FAILED:'資料下載失敗，請稍後再試。',HISTORY_JOB_NOT_FOUND:'這次回查已過期，請重新回查。',HISTORY_TIMEOUT:'回查超過 10 分鐘仍未完成，已停止。請縮小股票範圍再試。',HISTORY_OUT_OF_MEMORY:'這次回查的資料量太大，無法完成。請縮小股票範圍（例如先選一個類股）再試。',
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
   INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_PROVIDER_FAILED:'AI 服務這次沒有回應成功，請再試一次。',INDICATOR_AGENT_RATE_LIMITED:'AI 服務目前請求較多，請稍等幾秒再試。',INDICATOR_AGENT_OUTPUT_INVALID:'AI 回覆的格式有誤，請再試一次或換個說法。',INDICATOR_AGENT_SCHEMA_MISSING:'AI 回覆的格式有誤，請再試一次。',INDICATOR_AGENT_CREDENTIALS_REJECTED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_ACCESS_DENIED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
-  FORMULA_WITH_OTHER_CONDITIONS:'AI 新建立的過濾第一次使用需單獨監控，請先移除其他過濾。',FORMULA_COMPLEXITY_EXCEEDED:'這兩個指標合起來太複雜，目前無法同時監控，請換一個。',
+  FORMULA_WITH_OTHER_CONDITIONS:'這兩個過濾目前無法同時監控，請換一個。',FORMULA_COMPLEXITY_EXCEEDED:'這兩個指標合起來太複雜，目前無法同時監控，請換一個。',
   TEMPLATE_NOT_FOUND:'清單裡找不到這個指標，請重新整理頁面後再選。',TEMPLATE_PARAM_INVALID:'這個指標的參數無效，請換一個變體。',TEMPLATE_REQUEST_INVALID:'過濾設定有誤，請移除後重新加入。',
   retry_not_allowed:'只有送出失敗的通知可以重送。',not_found:'找不到這則通知。',
   CONDITIONS_REQUIRED:'請至少加入一個過濾。',CONDITIONS_TOO_MANY:'目前最多只能組合 2 個過濾。',
@@ -234,9 +234,8 @@ function hasSpec(spec){return state.filters.some((filter)=>specKey(filter.spec)=
 function legacyFilters(){return state.filters.filter((filter)=>filter.spec.legacy);}
 function hasFilters(){return state.filters.length>0&&!legacyFilters().length;}
 function filtersFull(){return state.filters.length>=MAX_FILTERS;}
-function aiSolo(){return state.filters.some((filter)=>filter.spec.ai);}
 // Why the list's 加入 buttons are disabled right now, or '' when they aren't.
-function addBlockReason(){return filtersFull()?'已滿，要換請先移除一個':aiSolo()?'AI 新過濾第一次使用需單獨監控，建立監控後才能組合':'';}
+function addBlockReason(){return filtersFull()?'已滿，要換請先移除一個':'';}
 function invalidateToken(){state.formulaToken=null;state.formulaTokenSignature=null;state.history=null;}
 function monitorSpec(){return{purpose:state.purpose,watchlist:state.purpose==='watchlist'?state.watchlist:undefined};}
 function scopeText(){return state.purpose==='watchlist'?`${state.watchlist.length} 檔指定股票`:'今日監控名單';}
@@ -324,7 +323,7 @@ async function addFilter(filter,{withHistory=false,replace=false}={}){
   if(addBlockReason()){showToast(`${addBlockReason()}。`);return false;}
   if(hasSpec(filter.spec)){showToast('這個過濾已經加入了。');return false;}
   state.filters.push(filter);invalidateToken();state.requestText='';state.ai=null;
-  if(filter.token){state.formulaToken=filter.token;state.formulaTokenSignature=filterSignature();delete filter.token;}
+  if(filter.token){if(filter.spec.ai)filter.spec.ai.token=filter.token;if(state.filters.length===1){state.formulaToken=filter.token;state.formulaTokenSignature=filterSignature();}delete filter.token;}
   autoHistory=withHistory;save();render();
   if(!filter.spec.shapeKey&&!filter.spec.fingerprint)return true;
   const current=()=>state.filters.find((item)=>item.id===filter.id);
@@ -431,7 +430,7 @@ function drawAi(){
     if(result.status==='existing'){eyebrow='內建指標';body=existingPreset?`<div class="proto-ai-body"><strong>${escapeHtml(existingPreset.label)}</strong><p class="proto-signature">清單裡有這個指標，直接加入即可。</p><div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseExisting">加入過濾</button></div></div>`:`<div class="proto-ai-body"><strong>${escapeHtml(result.summary||'')}目前不能從這裡建立</strong><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiQuickRequest">送出需求，之後通知我</button></div></div>`;}
     else if(result.status==='formula'){
       const name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow=result.library?'公式庫・已驗證':'AI 新建立';
-      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">第一次使用需單獨監控；建立監控後會進入清單，下次可和其他過濾組合。建議先跑 7 日回查，看觸發次數合不合理。</p>'}<div id="aiConfirmBox"></div><div class="proto-inline-actions">${result.library?'<button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">加入過濾</button>':'<button type="button" class="proto-secondary" id="aiUseFormula">只加入</button><button type="button" class="proto-primary" id="aiUseFormulaHistory">加入並回查 7 日</button>'}</div></div>`;}
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">可以和清單裡的指標組合；建立監控後會進入清單，下次直接選。</p>'}<div id="aiConfirmBox"></div><div class="proto-inline-actions">${result.library?'<button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">加入過濾</button>':'<button type="button" class="proto-secondary" id="aiUseFormula">只加入</button><button type="button" class="proto-primary" id="aiUseFormulaHistory">加入並回查 7 日</button>'}</div></div>`;}
     else if(result.status==='clarification'){eyebrow='AI 想確認一件事';body=`<div class="proto-ai-body"><strong>AI 想確認一件事</strong><p>${escapeHtml(result.message||result.question||'')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答這裡" aria-label="回答 AI 的問題"></label><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiSendReply">送出</button></div></div>`;}
     else if(ai.requested)body=requestedCard(ai);
     else{const message=result.message||'這個條件超出目前可計算的範圍。',alternative=alternativeOf(message);eyebrow='這個目前還算不出來';
@@ -451,15 +450,15 @@ function drawAi(){
     catch(error){button.disabled=false;button.textContent=label;alertInline(errorText(error));}
   });
   // An AI-built formula isn't in the library yet, so the backend can't join it with other filters: confirm the replacement inline.
-  const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>AI 新過濾第一次使用需單獨監控，會先取代目前的 ${count} 個過濾，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
+  const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>已有 ${count} 個過濾（上限 2 個），加入會取代它們，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
   target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{if(!existingPreset)return;addFilter({id:crypto.randomUUID(),label:existingPreset.label,formulaSummary:'',spec:existingPreset.spec});});
   const useFormula=(withHistory)=>{
     const result=ai.result,name=String(result.summary||'').replace(/ · 一分鐘$/,'');
     if(result.library&&result.proposal?.fingerprint){addFilter({id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{fingerprint:result.proposal.fingerprint}},{withHistory});return;}
     const filter={id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{ai:{text:ai.text,context:ai.context}},token:result.proposalToken};
-    const apply=async()=>{if(await addFilter(filter,{withHistory,replace:true}))showToast('已加入。建立監控後，這個指標會進入清單，下次直接選。');};
-    if(state.filters.length)return confirmReplace(state.filters.length,apply);
-    apply();
+    const apply=async(replace)=>{if(await addFilter(filter,{withHistory,replace}))showToast('已加入。建立監控後，這個指標會進入清單，下次直接選。');};
+    if(filtersFull())return confirmReplace(state.filters.length,()=>apply(true));
+    apply(false);
   };
   target.querySelector('#aiUseFormula')?.addEventListener('click',()=>useFormula(false));
   target.querySelector('#aiUseFormulaHistory')?.addEventListener('click',()=>useFormula(true));
@@ -530,11 +529,20 @@ async function buildFormulaToken(){
   const signature=filterSignature();
   if(state.formulaToken&&state.formulaTokenSignature===signature)return state.formulaToken;
   const specs=state.filters.map((filter)=>filter.spec);let result;
-  if(specs.every((spec)=>spec.shapeKey||spec.fingerprint))result=await api('/api/indicator-templates/instantiate',{items:specs.map(instantiateItem),text:state.filters.map((filter)=>filter.label).join(' 且 ')});
-  else{
-    if(specs.length!==1)throw Object.assign(new Error(ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS),{code:'FORMULA_WITH_OTHER_CONDITIONS'});
-    result=await api('/api/indicator-agent/parse',{text:specs[0].ai.text,context:specs[0].ai.context||[]});
-    if(result.status!=='formula')throw Object.assign(new Error('AI 重新解析的結果和原本不同，請移除這個過濾後重新建立。'),{code:'FORMULA_REPARSE_MISMATCH'});
+  // AI-built filters carry their own signed token; the server verifies it and combines it like any library filter.
+  // A lone AI filter whose token expired is re-parsed from its text.
+  const resolved=[];
+  for(const spec of specs){
+    if(spec.shapeKey||spec.fingerprint){resolved.push(instantiateItem(spec));continue;}
+    let token=spec.ai?.token||null;
+    if(!token){const parsed=await api('/api/indicator-agent/parse',{text:spec.ai.text,context:spec.ai.context||[]});if(parsed.status!=='formula')throw Object.assign(new Error('AI 重新解析的結果和原本不同，請移除這個過濾後重新建立。'),{code:'FORMULA_REPARSE_MISMATCH'});token=parsed.proposalToken;spec.ai.token=token;}
+    resolved.push({proposalToken:token});
+  }
+  try{result=await api('/api/indicator-templates/instantiate',{items:resolved,text:state.filters.map((filter)=>filter.label).join(' 且 ')});}
+  catch(error){
+    // An expired AI token: drop it and rebuild once from the text.
+    if(['FORMULA_TOKEN_INVALID','FORMULA_PROPOSAL_STALE'].includes(error.code)&&specs.some((spec)=>spec.ai?.token)){for(const spec of specs)if(spec.ai)spec.ai.token=null;save();return buildFormulaToken();}
+    throw error;
   }
   if(!result.proposalToken)throw Object.assign(new Error('沒有拿到可用的條件，請重新加入過濾。'),{code:'FORMULA_TOKEN_MISSING'});
   state.formulaToken=result.proposalToken;state.formulaTokenSignature=signature;save();return state.formulaToken;

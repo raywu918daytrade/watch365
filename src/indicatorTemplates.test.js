@@ -268,3 +268,18 @@ test('compose：items 兩個過濾以 all 合併、token 可驗、summary 為「
     assert.throws(() => library.compose([{ shapeKey: rsi.shapeKey }, { shapeKey: rsi.shapeKey, values: { p1: 999 } }]), (error) => error.code === 'TEMPLATE_PARAM_INVALID' && error.detail.index === 1);
   } finally { await rm(dir, { recursive:true, force:true }); }
 });
+
+test('compose accepts a pre-resolved AST item (verified AI proposal) alongside a library filter', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const { FormulaLibrary } = await import('./formulaLibrary.js');
+  const dir = await mkdtemp(join(tmpdir(), 'fl-'));
+  try {
+    const library = new FormulaLibrary(join(dir, 'lib.json'), { log: { warn() {}, error() {}, info() {} } });
+    await library.load();
+    const vol = library.templates().find((t) => t.family === '量能' && /成交量/.test(t.name));
+    const aiAst = { op:'crosses_above', left:{ op:'source', field:'close' }, right:{ op:'sma', input:{ op:'source', field:'close' }, period:7 } };
+    const result = library.compose([{ ast: aiAst, name:'AI 公式' }, { shapeKey: vol.shapeKey, values: vol.presets[0].values, direction: vol.presets[0].direction }]);
+    assert.equal(result.status, 'formula'); assert.equal(result.proposal.ast.op, 'all'); assert.equal(result.proposal.ast.items.length, 2);
+    assert.match(result.formulaSummary, /SMA\(收盤價, 7\)/); assert.match(result.formulaSummary, /成交量/);
+  } finally { await rm(dir, { recursive:true, force:true }); }
+});

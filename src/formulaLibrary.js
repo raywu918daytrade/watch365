@@ -224,10 +224,13 @@ export class FormulaLibrary {
   instantiate(shapeKey, { values = {}, direction = null } = {}) { return this.compose([{ shapeKey, values, direction }]); }
   // 1–2 filters, each either a template instantiation ({ shapeKey, values, direction }) or an existing
   // library formula as is ({ fingerprint }); two filters are joined with `all` (PM: "多個指標就是多個過濾").
+  // items may also carry a pre-resolved { ast, name } (the server verifies a signed proposalToken into one), so a
+  // formula the AI just built can be combined with a library filter before it has been applied anywhere.
   compose(items) {
     if (!Array.isArray(items) || items.length < 1 || items.length > MAX_COMPOSE_ITEMS) throw requestError('TEMPLATE_REQUEST_INVALID', { message: `items 必須是 1–${MAX_COMPOSE_ITEMS} 個過濾` });
     const parts = items.map((item, index) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) throw requestError('TEMPLATE_REQUEST_INVALID', { message: `items[${index}] 必須是物件`, index });
+      if (item.ast && typeof item.ast === 'object') { const checked = validateFormula(item.ast); return { ast: structuredClone(checked.ast), fingerprint: checked.fingerprint, shapeKey: null, name: typeof item.name === 'string' ? item.name : null }; }
       if (typeof item.fingerprint === 'string') {
         const formula = this.formulas.get(item.fingerprint);
         if (!formula || !formula.ast || !['active', 'pending_review'].includes(formula.status)) throw requestError('TEMPLATE_NOT_FOUND', { message: `items[${index}] 的 fingerprint 不在公式庫`, index }, 404);

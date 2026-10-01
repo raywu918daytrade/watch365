@@ -253,7 +253,12 @@ async function routeApi(request, response) {
     try {
       if (!body || typeof body !== 'object' || Array.isArray(body) || (typeof body.shapeKey !== 'string' && !Array.isArray(body.items))) throw Object.assign(new Error('TEMPLATE_REQUEST_INVALID'), { code:'TEMPLATE_REQUEST_INVALID', statusCode:422 });
       // Single template ({ shapeKey, values, direction }) or 1–2 filters ({ items:[{ shapeKey|fingerprint, values, direction }] }) joined with `all`.
-      const result = formulaLibrary.compose(Array.isArray(body.items) ? body.items : [{ shapeKey: body.shapeKey, values: body.values ?? {}, direction: body.direction ?? null }]);
+      // An item may be a signed proposalToken from /api/indicator-agent/parse: verify it and compose its AST.
+      const items = (Array.isArray(body.items) ? body.items : [{ shapeKey: body.shapeKey, values: body.values ?? {}, direction: body.direction ?? null }]).map((item) => {
+        if (item && typeof item === 'object' && typeof item.proposalToken === 'string') { const payload = verifyFormulaToken(item.proposalToken, formulaTokenSecret); return { ast: payload.ast, name: payload.name }; }
+        return item;
+      });
+      const result = formulaLibrary.compose(items);
       result.proposalId = randomUUID();
       result.proposalToken = issueFormulaToken({ ...result.proposal, proposalId: result.proposalId, sourceText: typeof body.text === 'string' && body.text.trim() ? body.text : result.proposal.name }, formulaTokenSecret);
       delete result.proposal.ast;
