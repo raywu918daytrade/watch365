@@ -2,20 +2,10 @@
 // for stock lists, indicator requests and monitor creation.
 // Also: AI parsing of new indicators, 7-trading-day M1 history lookup, request progress and notification retry.
 const KEY='watch365_ui_v2';
-const INDICATORS=[
-  {id:'rsi',name:'RSI',desc:'Wilder RSI 穿越門檻（上穿或下穿）',directions:['above','below'],periodMax:100,threshold:true,defaults:{period:14,threshold:30}},
-  {id:'sma',name:'SMA 簡單移動平均',desc:'收盤價穿越 SMA',directions:['above','below'],periodMax:200,threshold:false,defaults:{period:20}},
-  {id:'ema',name:'EMA 指數移動平均',desc:'收盤價穿越 EMA',directions:['above','below'],periodMax:200,threshold:false,defaults:{period:20}}
-];
 const DIRECTION_LABEL={above:'上穿',below:'下穿'};
-// One-tap starting points (Wantgoo quick conditions / TradingView popular screens). Every template is a
-// combination the existing rules accept: single RSI, or up to two SMA/EMA conditions.
-const TEMPLATES=[
-  {id:'rsi-30',name:'RSI(14) 上穿 30',desc:'RSI 由下往上穿越 30',conditions:[{indicator:'rsi',direction:'above',period:14,threshold:30}]},
-  {id:'ema20-up',name:'收盤上穿 EMA(20)',desc:'一分鐘 K 收盤價上穿 EMA(20)',conditions:[{indicator:'ema',direction:'above',period:20,threshold:null}]},
-  {id:'sma60-up',name:'收盤上穿 SMA(60)',desc:'一分鐘 K 收盤價上穿 SMA(60)',conditions:[{indicator:'sma',direction:'above',period:60,threshold:null}]},
-  {id:'sma20-down',name:'收盤下穿 SMA(20)',desc:'一分鐘 K 收盤價下穿 SMA(20)',conditions:[{indicator:'sma',direction:'below',period:20,threshold:null}]}
-];
+const MA_NAME={sma:'SMA',ema:'EMA'};
+const MAX_FILTERS=2;
+const SYNONYMS=[[/金叉/g,'黃金交叉'],[/死叉/g,'死亡交叉'],[/站上|突破/g,'上穿'],[/跌破/g,'下穿']];
 const PROVIDER_STATUS={ok:'正常',empty:'本輪沒有新的一分鐘 K',error:'資料讀取異常',coverage_unknown:'無法確認今日名單',empty_scope:'今日名單沒有可監控的股票','尚未執行':'尚未執行'};
 const MARKET_LABEL={TWSE:'上市',TPEx:'上櫃'};
 // Taiwan regular session 09:00–13:30 Asia/Taipei. Weekends are known client-side; national holidays are not
@@ -35,25 +25,24 @@ const ERROR_TEXT={
   HISTORY_SOURCE_FAILED:'無法讀取歷史資料，請稍後再試。',HF_UNAUTHORIZED:'資料來源權限異常，請稍後再試。',HISTORY_FAILED:'回查時發生錯誤，請稍後再試。',HF_DOWNLOAD_TIMEOUT:'資料下載逾時，來源暫時較慢，請稍後再試。',HF_DOWNLOAD_FAILED:'資料下載失敗，請稍後再試。',HISTORY_JOB_NOT_FOUND:'這次回查已過期，請重新回查。',HISTORY_TIMEOUT:'回查超過 10 分鐘仍未完成，已停止。請縮小股票範圍再試。',HISTORY_OUT_OF_MEMORY:'這次回查的資料量太大，無法完成。請縮小股票範圍（例如先選一個類股）再試。',
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
   INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_PROVIDER_FAILED:'AI 服務這次沒有回應成功，請再試一次。',INDICATOR_AGENT_RATE_LIMITED:'AI 服務目前請求較多，請稍等幾秒再試。',INDICATOR_AGENT_OUTPUT_INVALID:'AI 回覆的格式有誤，請再試一次或換個說法。',INDICATOR_AGENT_SCHEMA_MISSING:'AI 回覆的格式有誤，請再試一次。',INDICATOR_AGENT_CREDENTIALS_REJECTED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_ACCESS_DENIED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
-  FORMULA_WITH_OTHER_CONDITIONS:'AI 自訂條件目前不能與其他條件組合，請先移除。',
+  FORMULA_WITH_OTHER_CONDITIONS:'AI 新建立的過濾第一次使用需單獨監控，請先移除其他過濾。',FORMULA_COMPLEXITY_EXCEEDED:'這兩個指標合起來太複雜，目前無法同時監控，請換一個。',
+  TEMPLATE_NOT_FOUND:'清單裡找不到這個指標，請重新整理頁面後再選。',TEMPLATE_PARAM_INVALID:'這個指標的參數無效，請換一個變體。',TEMPLATE_REQUEST_INVALID:'過濾設定有誤，請移除後重新加入。',
   retry_not_allowed:'只有送出失敗的通知可以重送。',not_found:'找不到這則通知。',
-  CONDITIONS_REQUIRED:'請至少加入一個條件。',CONDITIONS_TOO_MANY:'目前最多只能組合 2 個條件。',
-  CONDITION_RSI_BELOW_UNSUPPORTED:'RSI 目前只支援上穿。',CONDITION_RSI_COMBINATION_UNSUPPORTED:'RSI 目前不能與其他條件組合，請單獨使用。',
-  CONDITION_PERIOD_INVALID:'期數超出範圍。',CONDITION_THRESHOLD_INVALID:'RSI 門檻需介於 1–99。',
+  CONDITIONS_REQUIRED:'請至少加入一個過濾。',CONDITIONS_TOO_MANY:'目前最多只能組合 2 個過濾。',
   WATCHLIST_REQUIRED:'請至少選一檔股票。',WATCHLIST_MARKET_REQUIRED:'有股票無法確認市場別，請移除後再試。',
   HF_UNIVERSE_SOURCE_FAILED:'無法讀取今日監控名單，請稍後再試。',HF_UNIVERSE_NOT_FOUND:'今日監控名單尚未產生。',HF_METADATA_UNAVAILABLE:'無法讀取股票市場別資料，請稍後再試。',
   INDICATOR_REQUEST_TEXT_TOO_SHORT:'需求描述至少 3 個字。',INDICATOR_REQUEST_FIELDS_REQUIRED:'請填完所有欄位。',INDICATOR_TEXT_REQUIRED:'欄位長度不足（至少 2 個字）。'
 };
 const root=document.querySelector('#app');
 let state=load();
-let pollTimer=0,searchTimer=0,aiTimer=0,seenNotifications=new Set();
+let pollTimer=0,searchTimer=0,seenNotifications=new Set();
 // Parse results for first-turn AI requests, keyed by text, so retyping the same words doesn't re-call the model.
 const aiCache=new Map();
 document.querySelector('#homeButton').addEventListener('click',()=>go('home'));
 window.addEventListener('hashchange',render);
 
-function initial(){return{purpose:null,selected:[],watchlist:[],conditions:[],formula:null,activeIndicator:'rsi',drafts:{},requestText:'',ai:null,history:null};}
-function load(){try{const saved={...initial(),...JSON.parse(localStorage.getItem(KEY))};if(saved.ai)saved.ai.loading=false;return saved;}catch{return initial();}}
+function initial(){return{purpose:null,selected:[],watchlist:[],filters:[],formulaToken:null,formulaTokenSignature:null,requestText:'',ai:null,history:null};}
+function load(){try{const saved=migrateDraft({...initial(),...JSON.parse(localStorage.getItem(KEY))});if(saved.ai)saved.ai.loading=false;return saved;}catch{return initial();}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch{}}
 function resetDraft(){state=initial();save();}
 function node(){return location.hash.slice(1)||'home';}
@@ -82,7 +71,7 @@ function shell({step,title,lead,body,back}){
 function render(){const routes={home,stocks,conditions,request,confirm:confirmPage,success,dashboard};(routes[node()]||home)();}
 
 async function home(){
-  const draft=state.purpose?`<div class="proto-resume"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.formula?'AI 自訂條件':`${state.conditions.length} 個條件`}</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'conditions'}">繼續草案</button></div></div>`:'';
+  const draft=state.purpose?`<div class="proto-resume"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'conditions'}">繼續草案</button></div></div>`:'';
   shell({title:'今天想怎麼盯？',lead:'選一個方式開始，條件成立時會即時通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div>${draft}`});
   root.querySelectorAll('[data-purpose]').forEach((button)=>button.addEventListener('click',()=>{const purpose=button.dataset.purpose;if(purpose!==state.purpose){state.purpose=purpose;state.watchlist=[];}save();go(purpose==='watchlist'?'stocks':'conditions');}));
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
@@ -215,77 +204,188 @@ function stocks(){
     }catch(error){root.querySelector('#stockError').textContent=errorText(error);syncCount();}
   });
 }
+// ---- 條件頁 (#conditions) ----
+// Product model: see an indicator → pick a coarse preset → add it as a 過濾 (filter). Each filter is one
+// formula; up to 2 filters are joined with 且 by /api/indicator-templates/instantiate. The AI is only the
+// fallback for indicators the list doesn't have; once such a formula is used it enters the library and
+// shows up in the list next time.
+let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[];
+function normalizeQuery(text){let value=String(text||'').normalize('NFKC').toLowerCase().replace(/\s+/g,'');for(const [pattern,replacement]of SYNONYMS)value=value.replace(pattern,replacement);return value;}
+function queryTokens(text){return String(text||'').normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean).map(normalizeQuery).filter(Boolean);}
+async function loadTemplates(){if(!templateCache){try{templateCache=((await api('/api/indicator-templates')).items||[]).filter((item)=>item&&item.shapeKey);templateError='';}catch(error){templateCache=[];templateError=errorText(error);}}return templateCache;}
+function showToast(text){document.querySelectorAll('.proto-toast').forEach((node)=>node.remove());const toast=document.createElement('div');toast.className='proto-toast';toast.setAttribute('role','status');toast.textContent=text;document.body.appendChild(toast);setTimeout(()=>toast.remove(),3500);}
+function focusSearch({select=false,scroll=true}={}){const search=root.querySelector('#indicatorSearch');if(!search)return;if(scroll)search.scrollIntoView({block:'center',behavior:'smooth'});search.focus({preventScroll:true});if(select)search.select();}
+
+// Filters: { id, label, formulaSummary, spec } where spec is {shapeKey,values,direction} (a preset),
+// {fingerprint} (a library formula as is), {ai:{text,context}} (AI-built, not in the library yet) or
+// {legacy:{indicator,direction,period,threshold}} (an old structured condition with no matching preset).
+function specKey(spec){return JSON.stringify(spec.shapeKey?['s',spec.shapeKey,spec.values||{},spec.direction??null]:spec.fingerprint?['f',spec.fingerprint]:spec.ai?['a',spec.ai.text]:['l',spec.legacy]);}
+function filterSignature(){return JSON.stringify(state.filters.map((filter)=>specKey(filter.spec)));}
+function hasSpec(spec){return state.filters.some((filter)=>specKey(filter.spec)===specKey(spec));}
+function legacyFilters(){return state.filters.filter((filter)=>filter.spec.legacy);}
+function hasFilters(){return state.filters.length>0&&!legacyFilters().length;}
+function filtersFull(){return state.filters.length>=MAX_FILTERS;}
+function aiSolo(){return state.filters.some((filter)=>filter.spec.ai);}
+// Why the list's 加入 buttons are disabled right now, or '' when they aren't.
+function addBlockReason(){return filtersFull()?'已滿，要換請先移除一個':aiSolo()?'AI 新過濾第一次使用需單獨監控，建立監控後才能組合':'';}
+function invalidateToken(){state.formulaToken=null;state.formulaTokenSignature=null;state.history=null;}
+function monitorSpec(){return{purpose:state.purpose,watchlist:state.purpose==='watchlist'?state.watchlist:undefined};}
+function scopeText(){return state.purpose==='watchlist'?`${state.watchlist.length} 檔指定股票`:'今日監控名單';}
+function instantiateItem(spec){return spec.shapeKey?{shapeKey:spec.shapeKey,values:spec.values||{},direction:spec.direction??null}:{fingerprint:spec.fingerprint};}
+// Old saved drafts (structured conditions / a single AI formula) become filters once, at load time.
+function migrateDraft(saved){
+  if(!Array.isArray(saved.filters))saved.filters=[];
+  if(saved.formula&&saved.formula.text){saved.filters=[{id:crypto.randomUUID(),label:saved.formula.name||saved.formula.text,formulaSummary:saved.formula.summary||'',spec:{ai:{text:saved.formula.text,context:saved.formula.context||[]}}}];if(saved.formula.token){saved.formulaToken=saved.formula.token;saved.formulaTokenSignature=JSON.stringify(saved.filters.map((filter)=>specKey(filter.spec)));}}
+  else if(!saved.filters.length&&Array.isArray(saved.conditions)&&saved.conditions.length)saved.filters=saved.conditions.slice(0,MAX_FILTERS).map((condition)=>({id:condition.id||crypto.randomUUID(),label:conditionLabel(condition),formulaSummary:'',spec:{legacy:{indicator:condition.indicator,direction:condition.direction,period:condition.period,threshold:condition.threshold}}}));
+  saved.filters=saved.filters.filter((filter)=>filter&&filter.spec&&typeof filter.label==='string').slice(0,MAX_FILTERS);
+  for(const key of['conditions','formula','activeIndicator','drafts','panel'])delete saved[key];
+  return saved;
+}
+// A legacy RSI/SMA/EMA condition maps to the preset with the same period / threshold / direction, if the library has one.
+function presetFor(condition){
+  const ma={sma:'sma',ema:'ema'}[condition.indicator],rsi=condition.indicator==='rsi';if(!ma&&!rsi)return null;
+  for(const template of templateCache||[]){
+    if((ma&&template.family!=='均線')||(rsi&&template.family!=='RSI'))continue;
+    for(const preset of template.presets||[]){
+      if(preset.direction!==condition.direction)continue;
+      const label=normalizeQuery(preset.label);
+      const hit=ma?label.startsWith('收盤')&&label.includes(`${ma}(${condition.period})`):label.includes(`rsi(${condition.period})`)&&Object.values(preset.values||{}).includes(Number(condition.threshold));
+      if(hit)return{label:preset.label,spec:{shapeKey:template.shapeKey,values:preset.values||{},direction:preset.direction}};
+    }
+  }
+  return null;
+}
+function resolveLegacy(){
+  let changed=false;
+  for(const filter of legacyFilters()){const preset=presetFor(filter.spec.legacy);if(!preset)continue;Object.assign(filter,{label:preset.label,spec:preset.spec});changed=true;}
+  if(changed){invalidateToken();save();}
+  return changed;
+}
+
 function conditions(){
   if(!state.purpose)return go('home');
   if(state.purpose==='watchlist'&&!state.watchlist.length)return go('stocks');
-  const item=INDICATORS.find((entry)=>entry.id===state.activeIndicator)||INDICATORS[0],draft={direction:item.directions[0],...item.defaults,...state.drafts[item.id]};
-  if(!item.directions.includes(draft.direction))draft.direction=item.directions[0];
-  const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔指定股票`:'今日監控名單';
-  const blocked=addBlockReason(item.id);
-  const templates=!hasConditions()?`<section class="proto-templates" aria-label="常用條件"><p class="proto-eyebrow">常用條件・一鍵帶入</p><div class="proto-template-grid">${TEMPLATES.map((template)=>`<button class="proto-template" data-template="${template.id}"><strong>${escapeHtml(template.name)}</strong><small>${escapeHtml(template.desc)}</small></button>`).join('')}</div></section>`:'';
-  shell({step:'conditions',title:'設定監控條件',lead:`範圍：${scope}。以一分鐘 K 收盤判斷，最多 2 個條件、同時成立才通知。`,back:state.purpose==='watchlist'?'stocks':'home',body:`${templates}${!hasConditions()?'<section class="proto-templates" id="libraryPanel" aria-label="公式庫"></section>':''}${conditionMarkup()}<label class="proto-search proto-ai-search"><span class="proto-ai-tag" aria-hidden="true">AI</span><input id="indicatorSearch" type="search" placeholder="例如：MACD 黃金交叉、KD 低檔上穿" aria-label="搜尋指標或用一句話描述條件" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到想要的指標？直接用一句話描述，AI 會轉成可監控的條件；暫時做不到的會列入新指標開發。</p><div class="proto-library proto-inline-library" id="indicatorResults"></div><section id="aiPanel"></section><section class="proto-condition-editor"><details id="editorDetails" ${state.editorOpen&&!blocked?'open':''}><summary><span class="proto-eyebrow">自訂參數</span> <strong>${escapeHtml(item.name)}</strong></summary><p class="proto-signature">${escapeHtml(item.desc)}</p><div class="proto-form"><label>方向<select id="direction">${item.directions.map((value)=>`<option value="${value}" ${draft.direction===value?'selected':''}>${DIRECTION_LABEL[value]}</option>`).join('')}</select></label><label>期數<input id="period" type="number" inputmode="numeric" min="2" max="${item.periodMax}" value="${escapeHtml(draft.period)}"></label>${item.threshold?`<label>門檻<input id="threshold" type="number" inputmode="numeric" min="1" max="99" value="${escapeHtml(draft.threshold)}"></label>`:''}<p id="paramError" class="proto-error" role="alert"></p></div><button id="addCondition" class="proto-secondary" ${blocked?'disabled aria-describedby="addBlocked"':''}>加入這個條件</button>${blocked?`<p id="addBlocked" class="proto-signature">${escapeHtml(blocked)}</p>`:''}</details></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span>${state.formula?'AI 自訂條件':`${state.conditions.length}/2 個條件`}</span><button id="confirmConditions" class="proto-primary" ${hasConditions()?'':'disabled'}>下一步：確認</button></div>`});
-  bindConditionList();
-  root.querySelectorAll('[data-template]').forEach((button)=>button.addEventListener('click',()=>{const template=TEMPLATES.find((entry)=>entry.id===button.dataset.template);state.conditions=template.conditions.map((condition)=>({id:crypto.randomUUID(),...condition}));state.activeIndicator=template.conditions[0].indicator;state.history=null;save();render();}));
-  const search=root.querySelector('#indicatorSearch'),results=root.querySelector('#indicatorResults');
-  const startAi=(value)=>{clearTimeout(aiTimer);if(state.ai&&state.ai.text===value&&!state.ai.context.length&&(state.ai.loading||state.ai.result||state.ai.error))return;state.ai={text:value,context:[],result:null};save();runAi();};
-  const drawSearch=()=>{
-    const value=search.value.trim(),needle=value.toLowerCase();state.requestText=value;save();clearTimeout(aiTimer);
-    const matches=INDICATORS.filter((entry)=>!needle||`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(needle));
-    results.innerHTML=matches.length?matches.map((entry)=>`<button class="proto-indicator-pill ${entry.id===item.id?'active':''}" data-indicator="${entry.id}"><strong>${escapeHtml(entry.name)}</strong><small>已有指標</small></button>`).join(''):`<p class="proto-signature">已有指標找不到「${escapeHtml(value)}」，${value.length>=2?'已交給 AI 判斷能不能直接監控。':'再多打幾個字，AI 會幫你判斷。'}</p>`;
-    results.querySelectorAll('[data-indicator]').forEach((button)=>button.addEventListener('click',()=>{state.activeIndicator=button.dataset.indicator;state.editorOpen=true;state.requestText='';save();render();}));
-    // A stale first-turn AI card for different text is dropped once the search matches again or is cleared.
-    if((matches.length||!value)&&state.ai&&!state.ai.context.length&&state.ai.text!==value){state.ai=null;save();drawAi();}
-    if(!matches.length&&value.length>=2)aiTimer=setTimeout(()=>startAi(value),700);
-  };
-  search.addEventListener('keydown',(event)=>{const value=search.value.trim();if(event.key==='Enter'&&value.length>=2&&!INDICATORS.some((entry)=>`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(value.toLowerCase())))startAi(value);});
-  search.addEventListener('input',drawSearch);drawSearch();drawAi();drawHistory();drawLibrary(startAi);
-  const capture=()=>{state.drafts[item.id]={direction:root.querySelector('#direction').value,period:root.querySelector('#period').value,threshold:root.querySelector('#threshold')?.value??null};save();};
-  root.querySelectorAll('#direction,#period,#threshold').forEach((input)=>input.addEventListener('input',()=>{capture();root.querySelector('#paramError').textContent='';}));
-  root.querySelector('#addCondition').addEventListener('click',()=>{
-    capture();
-    const values=state.drafts[item.id],period=Number(values.period),threshold=item.threshold?Number(values.threshold):null;
-    const error=!Number.isInteger(period)||period<2||period>item.periodMax?`期數需為 2–${item.periodMax} 的整數。`:item.threshold&&(!values.threshold||!Number.isFinite(threshold)||threshold<1||threshold>99)?'門檻需介於 1–99。':state.formula?ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS:state.conditions.length>=2?'目前最多只能組合 2 個條件。':'';
-    if(error){root.querySelector('#paramError').textContent=error;return;}
-    state.conditions.push({id:crypto.randomUUID(),indicator:item.id,direction:values.direction,period,threshold});state.editorOpen=false;state.history=null;save();render();
+  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 2 個，同時成立才通知。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
+  const search=root.querySelector('#indicatorSearch');
+  bindFilterList();drawSticky();
+  // Typing again drops a first-turn AI card for other text, so the list comes back.
+  search.addEventListener('input',()=>{const value=search.value.trim();state.requestText=value;if(state.ai&&!state.ai.context.length&&state.ai.text!==value){state.ai=null;drawAi();}save();drawTemplates();});
+  search.addEventListener('keydown',(event)=>{
+    const value=search.value.trim();
+    if(event.key==='Enter'){event.preventDefault();if(value.length>=2&&!templateRows.length)startAi(value);else root.querySelector('#templatePanel [data-add]:not(:disabled)')?.focus();}
+    if(event.key==='Escape'&&value){search.value='';state.requestText='';save();drawTemplates();}
   });
-  root.querySelector('#editorDetails').addEventListener('toggle',(event)=>{state.editorOpen=event.currentTarget.open;save();});
-  root.querySelector('#confirmConditions').addEventListener('click',()=>go('confirm'));
+  root.querySelector('#confirmConditions').addEventListener('click',()=>{if(!hasFilters())return;go('confirm');});
+  drawAi();drawTemplates();drawHistory();
+  loadTemplates().then(()=>{if(node()!=='conditions')return;if(resolveLegacy())drawFilters();drawTemplates();});
+  if(autoHistory){autoHistory=false;runHistory();}
 }
+function startAi(value){
+  const text=String(value||'').trim();if(text.length<2)return;
+  const same=state.ai&&state.ai.text===text&&!state.ai.context.length&&(state.ai.loading||state.ai.result||state.ai.error);
+  if(!same)state.ai={text,context:[],result:null};
+  const search=root.querySelector('#indicatorSearch');if(search&&search.value.trim()!==text){search.value=text;state.requestText=text;}
+  save();drawTemplates();
+  if(same)drawAi();else runAi();
+}
+function drawSticky(){
+  const text=root.querySelector('#stickyText'),button=root.querySelector('#confirmConditions');if(!text||!button)return;
+  text.textContent=legacyFilters().length?'有舊版條件，請先移除':historyBusy?'回查中…可先下一步':`${state.filters.length}/${MAX_FILTERS} 個過濾`;
+  button.disabled=!hasFilters();
+}
+// A. Selected filters, pinned at the top.
+function filterMarkup(){
+  if(!state.filters.length)return'';
+  const rows=state.filters.map((filter,index)=>{
+    const legacy=Boolean(filter.spec.legacy);
+    const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':filter.formulaSummary;
+    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>兩個都成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
+  }).join('');
+  const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'<button type="button" class="proto-add-more" id="addMore">＋ 再加一個過濾</button>';
+  return`<div class="proto-condition-list"><p class="proto-eyebrow">已選過濾 ${state.filters.length}/${MAX_FILTERS}</p>${rows}${foot}</div>`;
+}
+function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();}
+function bindFilterList(){
+  root.querySelectorAll('#addedPanel [data-remove]').forEach((button)=>button.addEventListener('click',()=>{state.filters=state.filters.filter((item)=>item.id!==button.dataset.remove);invalidateToken();save();drawFilters();focusSearch({scroll:false});}));
+  root.querySelector('#addMore')?.addEventListener('click',()=>focusSearch());
+}
+// Adds a filter; a preset / library filter then fetches its own formulaSummary (and validates the pair) from instantiate.
+async function addFilter(filter,{withHistory=false,replace=false}={}){
+  if(replace)state.filters=[];
+  if(addBlockReason()){showToast(`${addBlockReason()}。`);return false;}
+  if(hasSpec(filter.spec)){showToast('這個過濾已經加入了。');return false;}
+  state.filters.push(filter);invalidateToken();state.requestText='';state.ai=null;
+  if(filter.token){state.formulaToken=filter.token;state.formulaTokenSignature=filterSignature();delete filter.token;}
+  autoHistory=withHistory;save();render();
+  if(!filter.spec.shapeKey&&!filter.spec.fingerprint)return true;
+  const current=()=>state.filters.find((item)=>item.id===filter.id);
+  try{
+    const single=await api('/api/indicator-templates/instantiate',{items:[instantiateItem(filter.spec)],text:filter.label});
+    if(!current())return false;
+    filter.formulaSummary=single.formulaSummary||'';
+    if(state.filters.length===1){state.formulaToken=single.proposalToken;state.formulaTokenSignature=filterSignature();}
+    else await buildFormulaToken(); // surfaces FORMULA_COMPLEXITY_EXCEEDED for the pair right away
+    save();if(node()==='conditions')drawFilters();return true;
+  }catch(error){
+    if(!current())return false;
+    state.filters=state.filters.filter((item)=>item.id!==filter.id);invalidateToken();save();
+    if(node()==='conditions')drawFilters();
+    showToast(`無法加入「${filter.label}」：${errorText(error)}`);return false;
+  }
+}
+// C. Indicator list: one accordion per family, preset rows inside; AI-built members listed under their family.
+function templateRowsFor(template,tokens){
+  const base=normalizeQuery([template.family,template.name,...(template.members||[]).flatMap((member)=>member.aliases||[])].join(' '));
+  const match=(extra)=>!tokens.length||tokens.every((token)=>(base+normalizeQuery(extra)).includes(token));
+  const rows=[];
+  if(template.source!=='ai')for(const preset of template.presets||[])if(match(preset.label))rows.push({family:template.family,label:preset.label,ai:false,spec:{shapeKey:template.shapeKey,values:preset.values||{},direction:preset.direction??null}});
+  for(const member of template.members||[])if(member.source==='ai'&&match(`${member.name} ${(member.aliases||[]).join(' ')}`))rows.push({family:template.family,label:member.name,summary:member.summary||'',ai:true,spec:{fingerprint:member.fingerprint}});
+  return rows;
+}
+function drawTemplates(){
+  const target=root.querySelector('#templatePanel'),aiRow=root.querySelector('#aiRow'),search=root.querySelector('#indicatorSearch');if(!target||!aiRow||!search)return;
+  const value=search.value.trim(),tokens=queryTokens(value);
+  if(!templateCache){target.hidden=false;target.innerHTML='<p class="proto-eyebrow">指標清單</p><div class="proto-skeleton" aria-hidden="true"></div>';aiRow.innerHTML='';aiRow.hidden=true;templateRows=[];return;}
+  const groups=new Map(),totals=new Map();
+  for(const template of templateCache){
+    totals.set(template.family,(totals.get(template.family)||0)+templateRowsFor(template,[]).length);
+    const rows=templateRowsFor(template,tokens);if(!rows.length)continue;
+    if(!groups.has(template.family))groups.set(template.family,[]);groups.get(template.family).push(...rows);
+  }
+  templateRows=[...groups.values()].flat();
+  // AI row only when the search found nothing in the list (and no AI card is already open).
+  const showAi=Boolean(value)&&!templateRows.length&&!state.ai;
+  aiRow.hidden=!showAi;
+  aiRow.innerHTML=showAi?(value.length>=2?`<button type="button" class="proto-row proto-row-ai" id="aiCreateRow"><strong><span class="proto-ai-tag" aria-hidden="true">AI</span>清單沒有這個指標，用 AI 建立：『${escapeHtml(value)}』</strong><small>按 Enter 也可以</small></button>`:'<p class="proto-dropdown-head">再多打一個字</p>'):'';
+  aiRow.querySelector('#aiCreateRow')?.addEventListener('click',()=>startAi(value));
+  if(!templateCache.length){target.hidden=false;target.innerHTML=`<p class="proto-eyebrow">指標清單</p><div class="proto-status"><strong>${templateError?'無法讀取指標清單':'清單還是空的'}</strong><p>${escapeHtml(templateError||'描述你要的指標，AI 會建立並加進清單。')}</p></div>`;return;}
+  if(value&&!templateRows.length){target.innerHTML='';target.hidden=true;return;} // the AI row says it
+  const block=addBlockReason(),full=Boolean(block),families=[...groups.keys()];
+  if(!value&&(openFamily===null||!groups.has(openFamily)))openFamily=families[0]||null;
+  let index=0;
+  const sections=families.map((family)=>{
+    const rows=groups.get(family),open=value?true:family===openFamily;
+    const body=rows.map((row)=>{const i=index++;const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;}).join('');
+    return`<details class="proto-family" name="indicator-family" data-family="${escapeHtml(family)}" data-was-open="${open?'1':'0'}" ${open?'open':''}><summary><span>${escapeHtml(family)}</span><small>${value?`符合 ${rows.length} 個`:`${totals.get(family)||rows.length} 個變體`}</small></summary><div class="proto-preset-list">${body}</div></details>`;
+  }).join('');
+  target.hidden=false;
+  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}`;
+  // Chrome also fires toggle for details parsed with the open attribute, so only a real change (open !== the rendered state) counts.
+  target.querySelectorAll('details.proto-family').forEach((details)=>details.addEventListener('toggle',()=>{const was=details.dataset.wasOpen==='1';if(details.open===was)return;details.dataset.wasOpen=details.open?'1':'0';if(value)return;if(details.open)openFamily=details.dataset.family;else if(openFamily===details.dataset.family)openFamily=null;}));
+  target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
+}
+// Labels for the server's structured conditions (dashboard / home) and for legacy drafts.
 function conditionLabel(condition){
-  const item=INDICATORS.find((entry)=>entry.id===condition.indicator),direction=DIRECTION_LABEL[condition.direction]||condition.direction;
+  const direction=DIRECTION_LABEL[condition.direction]||condition.direction;
   if(condition.indicator==='rsi')return`RSI(${condition.period}) ${condition.direction==='above'?'由下往上穿越':'由上往下穿越'} ${condition.threshold}`;
-  if(item)return`收盤價${direction} ${item.id.toUpperCase()}(${condition.period})`;
-  return`${condition.indicator} ${condition.period} ${direction}${condition.threshold===null?'':` ${condition.threshold}`}`;
-}
-// Explains up front why a condition can't be added, instead of failing after the click.
-function addBlockReason(indicatorId){
-  if(state.formula)return'已使用 AI 自訂條件，要加入其他條件請先移除它。';
-  if(state.conditions.length>=2)return'已達 2 個條件上限，要換條件請先移除一個。';
-  return'';
+  if(MA_NAME[condition.indicator])return`收盤價${direction} ${MA_NAME[condition.indicator]}(${condition.period})`;
+  return`${condition.indicator} ${condition.period} ${direction}${condition.threshold==null?'':` ${condition.threshold}`}`;
 }
 function directionTag(direction){return`<span class="proto-dir ${direction==='below'?'down':'up'}">${DIRECTION_LABEL[direction]||''}</span>`;}
-function monitorSpec(){const spec={purpose:state.purpose,watchlist:state.purpose==='watchlist'?state.watchlist:undefined};if(!state.formula)spec.conditions=state.conditions.map(({indicator,direction,period,threshold})=>({indicator,direction,period,threshold}));return spec;}
-function hasConditions(){return Boolean(state.formula)||state.conditions.length>0;}
-function scopeText(){return state.purpose==='watchlist'?`${state.watchlist.length} 檔指定股票`:'今日監控名單';}
-function conditionMarkup(){if(state.formula)return`<div class="proto-condition-list"><p class="proto-eyebrow">AI 自訂條件</p><div class="proto-condition"><strong>${escapeHtml(state.formula.name)}</strong><span><button aria-label="移除 ${escapeHtml(state.formula.name)}" data-remove="formula">移除</button></span></div><p class="proto-signature">${escapeHtml(state.formula.summary)}</p></div>`;return state.conditions.length?`<div class="proto-condition-list"><p class="proto-eyebrow">已加入的條件${state.conditions.length>1?'（全部成立才通知）':''}</p>${state.conditions.map((condition)=>`<div class="proto-condition"><strong>${directionTag(condition.direction)}${escapeHtml(conditionLabel(condition))}</strong><span><button aria-label="移除 ${escapeHtml(conditionLabel(condition))}" data-remove="${condition.id}">移除</button></span></div>`).join('')}</div>`:'';}
-function bindConditionList(){root.querySelectorAll('[data-remove]').forEach((button)=>button.addEventListener('click',()=>{if(button.dataset.remove==='formula')state.formula=null;else state.conditions=state.conditions.filter((item)=>item.id!==button.dataset.remove);state.history=null;save();render();}));}
 
-// AI parsing: /api/indicator-agent/parse returns existing (registry indicator), formula (signed proposal),
-// clarification (needs a reply, sent back with the conversation as context) or discussion (not computable).
-// Formula library (server-side, seeded with common TA conditions and grown from applied AI formulas).
-// Picking one sends its alias through the normal parse path, which hits the library and returns instantly.
-let libraryCache=null;
-async function drawLibrary(startAi){
-  const target=root.querySelector('#libraryPanel');if(!target)return;
-  try{
-    if(!libraryCache)libraryCache=(await api('/api/formula-library?status=active')).items||[];
-    if(!root.contains(target))return;
-    const items=libraryCache.filter((item)=>item.aliases?.length).slice(0,8);
-    if(!items.length){target.remove();return;}
-    target.innerHTML=`<p class="proto-eyebrow">公式庫・AI 已整理好的條件</p><div class="proto-template-grid">${items.map((item,index)=>`<button class="proto-template" data-library="${index}"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.summary)}</small></button>`).join('')}</div>`;
-    target.querySelectorAll('[data-library]').forEach((button)=>button.addEventListener('click',()=>{const item=items[Number(button.dataset.library)];const search=root.querySelector('#indicatorSearch');search.value=item.aliases[0];state.requestText=item.aliases[0];save();startAi(item.aliases[0]);search.scrollIntoView({block:'center',behavior:'smooth'});}));
-  }catch{target.remove();}
-}
+// AI parsing: /api/indicator-agent/parse returns existing (registry indicator), formula (signed proposal,
+// library:true when the text hit the formula library), clarification (needs a reply, sent back with the
+// conversation as context) or discussion (not computable).
 async function runAi(){
   const ai=state.ai;if(!ai)return;
   ai.loading=true;ai.error=null;ai.errorCode=null;drawAi();
@@ -303,78 +403,97 @@ function registryCondition(proposal){
 // Unsupported / uncomputable AI results end in a single click: the request is filed from the search text,
 // with the detailed form still one link away for people who want to spell out parameters.
 function quickRequestPayload(text){return{sourceText:text.length>=3?text:`${text} 指標`,indicatorName:text.slice(0,80),timeframe:'1m',parameterDescription:'未指定，評估時確認',triggerCondition:'未指定，評估時確認'};}
-function quickRequestCard(ai,title,message){
-  if(ai.requested)return`<div class="proto-status"><strong>${ai.requested.duplicate?'這個需求已經提過了':'需求已送出'}</strong><p>「${escapeHtml(ai.requested.name)}」目前狀態：待評估。評估完成前請先使用已有指標。</p><button class="proto-link" data-go="request">查看我的需求</button></div>`;
-  return`<div class="proto-status"><strong>${escapeHtml(title)}</strong>${message?`<p>${escapeHtml(message)}</p>`:''}<p class="proto-signature">送出後會列入新指標評估，不會影響目前的條件。</p><div class="proto-inline-actions"><button class="proto-primary" id="aiQuickRequest">送出需求</button><button class="proto-link" id="aiRequest">補充參數再送</button></div></div>`;
-}
+function requestedCard(ai){return`<div class="proto-ai-body"><strong>${ai.requested.duplicate?'這個需求已經提過了':'需求已送出'}</strong><p>「${escapeHtml(ai.requested.name)}」目前狀態：待評估。評估完成前請先使用其他過濾。</p><div class="proto-inline-actions"><button type="button" class="proto-link" data-go="request">查看我的需求</button><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button></div></div>`;}
+function alternativeOf(message){const match=/可改用[:：]\s*([^。\n]+)/.exec(String(message||''));return match?match[1].trim().replace(/[「『」』]/g,''):'';}
+function warmupText(proposal){return Number.isFinite(proposal?.warmupBars)?`<p class="proto-signature">開盤後約 ${proposal.warmupBars} 分鐘開始有判斷結果</p>`:'';}
+// D. AI card, right under the search box.
 function drawAi(){
   const target=root.querySelector('#aiPanel');if(!target)return;
-  const ai=state.ai;if(!ai){target.innerHTML='';return;}
-  const head=`<div class="proto-history-head"><div><p class="proto-eyebrow">AI 解析</p><h2>${escapeHtml(ai.text)}</h2></div><button class="proto-link" id="aiClose">關閉</button></div>`;
-  let body;
-  if(ai.loading)body='<div class="proto-status"><strong>AI 解析中…</strong><p>通常需要幾秒鐘。</p></div>';
+  const ai=state.ai;if(!ai){target.innerHTML='';target.hidden=true;return;}
+  let eyebrow='AI 解析',body;
+  const existingPreset=ai.result?.status==='existing'?(()=>{const condition=registryCondition(ai.result.proposal);return condition?presetFor(condition):null;})():null;
+  if(ai.loading)body=`<div class="proto-ai-body"><div class="proto-skeleton proto-skeleton-line" aria-hidden="true"></div><div class="proto-skeleton proto-skeleton-line short" aria-hidden="true"></div><p>正在把『${escapeHtml(ai.text)}』轉成可監控的過濾…</p><p class="proto-signature">通常幾秒鐘</p></div>`;
   else if(ai.error){const systemSide=['INDICATOR_AGENT_PROVIDER_FAILED','INDICATOR_AGENT_RATE_LIMITED','INDICATOR_AGENT_TIMEOUT','INDICATOR_AGENT_CREDENTIALS_REJECTED','INDICATOR_AGENT_ACCESS_DENIED','INDICATOR_AGENT_NOT_CONFIGURED','INDICATOR_AGENT_SCHEMA_MISSING'].includes(ai.errorCode);
-    body=`<div class="proto-status"><strong>${systemSide?'AI 服務這次沒有回應':'這次沒有解析成功'}</strong><p>${escapeHtml(ai.error)}</p><p class="proto-signature">${systemSide?'這是服務端的問題，和你的描述無關；稍等幾秒按「同樣文字再試一次」通常就好。':'可以換個更具體的說法，例如寫出指標名稱、期數和方向：「KD 黃金交叉」「收盤上穿 SMA(60)」「成交量大於 20 根均量 2 倍」。'}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法重新描述" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">送出需求</button><button class="${systemSide?'proto-primary':'proto-secondary'}" id="aiRetry">同樣文字再試一次</button><button class="${systemSide?'proto-secondary':'proto-primary'}" id="aiSendReply">重新解析</button></div></div>`;}
+    body=`<div class="proto-ai-body"><strong>${systemSide?'AI 服務這次沒回應':'這次沒有解析成功'}</strong><p>${escapeHtml(ai.error)}</p>${systemSide?'<p class="proto-signature">和你的描述無關，稍等再試即可</p>':''}<div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiRetry">再試一次</button></div></div>`;}
   else{
     const result=ai.result||{};
-    if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
-    else if(result.status==='formula')body=`<div class="proto-status">${result.library?'<p class="proto-eyebrow">來自公式庫・立即可用</p>':''}<strong>${escapeHtml(result.summary)}</strong><p>計算方式：${escapeHtml(result.formulaSummary)}</p><p class="proto-signature">AI 自訂條件會單獨使用，會取代目前已加入的條件。</p><button class="proto-primary" id="aiUseFormula">使用這個條件</button></div>`;
-    else if(result.status==='clarification')body=`<div class="proto-status"><strong>AI 需要多一點資訊</strong><p>${escapeHtml(result.message)}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答上面的問題" aria-label="回答 AI"></label><button class="proto-primary" id="aiSendReply">送出</button></div>`;
-    // Not computable yet: keep the user moving with a rephrase (AI already suggests the closest computable
-    // alternative in its message); filing a request is the fallback, not the main action.
-    else body=ai.requested?quickRequestCard(ai,'',''):`<div class="proto-status"><strong>這個條件目前還算不出來</strong><p>${escapeHtml(result.message||'這個條件超出目前可計算的範圍。')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法，例如 AI 建議的寫法" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">還是想要這個指標？送出需求</button><button class="proto-primary" id="aiSendReply">重新解析</button></div></div>`;
+    if(result.status==='existing'){eyebrow='內建指標';body=existingPreset?`<div class="proto-ai-body"><strong>${escapeHtml(existingPreset.label)}</strong><p class="proto-signature">清單裡有這個指標，直接加入即可。</p><div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseExisting">加入過濾</button></div></div>`:`<div class="proto-ai-body"><strong>${escapeHtml(result.summary||'')}目前不能從這裡建立</strong><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiQuickRequest">送出需求，之後通知我</button></div></div>`;}
+    else if(result.status==='formula'){
+      const name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow=result.library?'公式庫・已驗證':'AI 新建立';
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">第一次使用需單獨監控；建立監控後會進入清單，下次可和其他過濾組合。建議先跑 7 日回查，看觸發次數合不合理。</p>'}<div id="aiConfirmBox"></div><div class="proto-inline-actions">${result.library?'<button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">加入過濾</button>':'<button type="button" class="proto-secondary" id="aiUseFormula">只加入</button><button type="button" class="proto-primary" id="aiUseFormulaHistory">加入並回查 7 日</button>'}</div></div>`;}
+    else if(result.status==='clarification'){eyebrow='AI 想確認一件事';body=`<div class="proto-ai-body"><strong>AI 想確認一件事</strong><p>${escapeHtml(result.message||result.question||'')}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答這裡" aria-label="回答 AI 的問題"></label><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiSendReply">送出</button></div></div>`;}
+    else if(ai.requested)body=requestedCard(ai);
+    else{const message=result.message||'這個條件超出目前可計算的範圍。',alternative=alternativeOf(message);eyebrow='這個目前還算不出來';
+      body=`<div class="proto-ai-body"><strong>這個目前還算不出來</strong><p>${escapeHtml(message)}</p>${alternative?`<div class="proto-chip-row proto-alt-row"><button type="button" class="proto-chip" data-alt="${escapeHtml(alternative)}">改用：『${escapeHtml(alternative)}』</button></div>`:''}<div class="proto-inline-actions"><button type="button" class="${alternative?'proto-secondary':'proto-primary'}" id="aiQuickRequest">送出需求，之後通知我</button>${alternative?`<button type="button" class="proto-primary" data-alt="${escapeHtml(alternative)}">改用：『${escapeHtml(alternative)}』</button>`:''}</div></div>`;}
   }
-  target.className='proto-condition-editor';target.innerHTML=head+body;
-  target.querySelector('#aiClose').addEventListener('click',()=>{state.ai=null;save();drawAi();});
+  target.hidden=false;target.className='proto-ai-card';
+  target.innerHTML=`<div class="proto-history-head"><div><p class="proto-eyebrow">${escapeHtml(eyebrow)}</p><h2>『${escapeHtml(ai.text)}』</h2></div><button type="button" class="proto-link" id="aiClose">關閉</button></div>${body}`;
+  const dismiss=()=>{state.ai=null;save();drawAi();drawTemplates();};
+  target.querySelector('#aiClose').addEventListener('click',()=>{dismiss();focusSearch({scroll:false});});
+  target.querySelector('#aiRephrase')?.addEventListener('click',()=>{dismiss();focusSearch({select:true});});
   target.querySelectorAll('[data-go]').forEach((button)=>button.addEventListener('click',()=>go(button.dataset.go)));
   target.querySelector('#aiRetry')?.addEventListener('click',()=>{aiCache.delete(ai.text);runAi();});
-  target.querySelector('#aiRequest')?.addEventListener('click',()=>{state.requestText=ai.text;state.ai=null;save();go('request');});
+  target.querySelectorAll('[data-alt]').forEach((button)=>button.addEventListener('click',()=>{const text=button.dataset.alt;const search=root.querySelector('#indicatorSearch');if(search)search.value=text;state.requestText=text;save();startAi(text);}));
   target.querySelector('#aiQuickRequest')?.addEventListener('click',async(event)=>{
-    const button=event.currentTarget;button.disabled=true;button.textContent='送出中…';
+    const button=event.currentTarget,label=button.textContent;button.disabled=true;button.textContent='送出中…';
     try{const result=await api('/api/indicator-requests',quickRequestPayload(ai.text));ai.requested={duplicate:result.duplicate,name:result.request.indicatorName};save();drawAi();}
-    catch(error){button.disabled=false;button.textContent='送出需求';alertInline(errorText(error));}
+    catch(error){button.disabled=false;button.textContent=label;alertInline(errorText(error));}
   });
-  target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{
-    const condition=registryCondition(ai.result.proposal);
-    if(state.formula){alertInline(ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS);return;}
-    if(state.conditions.length>=2){alertInline('目前最多只能組合 2 個條件。');return;}
-    state.conditions.push({id:crypto.randomUUID(),...condition});state.ai=null;state.requestText='';state.history=null;save();render();
-  });
-  target.querySelector('#aiUseFormula')?.addEventListener('click',()=>{
-    const result=ai.result;
-    state.formula={name:result.summary.replace(/ · 一分鐘$/,''),summary:result.formulaSummary,token:result.proposalToken,text:ai.text,context:ai.context};
-    state.conditions=[];state.ai=null;state.requestText='';state.history=null;save();render();
-  });
+  // An AI-built formula isn't in the library yet, so the backend can't join it with other filters: confirm the replacement inline.
+  const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>AI 新過濾第一次使用需單獨監控，會先取代目前的 ${count} 個過濾，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
+  target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{if(!existingPreset)return;addFilter({id:crypto.randomUUID(),label:existingPreset.label,formulaSummary:'',spec:existingPreset.spec});});
+  const useFormula=(withHistory)=>{
+    const result=ai.result,name=String(result.summary||'').replace(/ · 一分鐘$/,'');
+    if(result.library&&result.proposal?.fingerprint){addFilter({id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{fingerprint:result.proposal.fingerprint}},{withHistory});return;}
+    const filter={id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{ai:{text:ai.text,context:ai.context}},token:result.proposalToken};
+    const apply=async()=>{if(await addFilter(filter,{withHistory,replace:true}))showToast('已加入。建立監控後，這個指標會進入清單，下次直接選。');};
+    if(state.filters.length)return confirmReplace(state.filters.length,apply);
+    apply();
+  };
+  target.querySelector('#aiUseFormula')?.addEventListener('click',()=>useFormula(false));
+  target.querySelector('#aiUseFormulaHistory')?.addEventListener('click',()=>useFormula(true));
   const reply=target.querySelector('#aiReply');
   const send=()=>{const text=reply.value.trim();if(!text)return;if(ai.result?.message)ai.context=[...ai.context,{request:ai.text.slice(0,500),response:String(ai.result.message).slice(0,500)}].slice(-4);else ai.context=[];ai.text=text;ai.result=null;ai.error=null;save();runAi();};
   target.querySelector('#aiSendReply')?.addEventListener('click',send);
   reply?.addEventListener('keydown',(event)=>{if(event.key==='Enter')send();});
+  reply?.focus({preventScroll:true});
 }
-// 7-day M1 history: replays the current conditions over HF daily one-minute files on the server.
+// E. 7-day M1 history: replays the current filters over HF daily one-minute files on the server.
+// Shown as a one-line summary; details expand on request. Never runs on its own unless the AI card asked for it.
 const HISTORY_WINDOW=7;
-function historySignature(){return JSON.stringify([HISTORY_WINDOW,monitorSpec(),state.formula?.summary||null]);}
+let historyDetail=false,historyAll=false;
+function historySignature(){return JSON.stringify([HISTORY_WINDOW,monitorSpec(),filterSignature()]);}
 function historyFresh(){return state.history&&state.history.signature===historySignature()?state.history:null;}
 function historySummaryText(history){return`過去 ${history.availableDays} 個交易日，${history.symbolsCount} 檔股票共觸發 ${history.totalEvents} 次${history.failedDays?`（${history.failedDays} 天資料讀取失敗）`:''}`;}
-async function drawHistory(options={}){
+function drawHistory(options={}){
   const target=root.querySelector('#historyPanel');if(!target)return;
-  const head=(right)=>`<div class="proto-history-head"><div><p class="proto-eyebrow">過去 7 個交易日</p><h2>這組條件會多常觸發？</h2></div>${right}</div>`;
-  if(!hasConditions()){target.innerHTML=head('')+'<div class="proto-status"><strong>先加入條件</strong><p>加入條件後，可以回查這組條件在過去 7 個交易日的觸發時間點。</p></div>';return;}
-  const history=historyFresh();
-  if(options.loading){target.innerHTML=head('<span>回查中…</span>')+`<div class="proto-status" aria-live="polite"><strong>回查中…</strong><p id="historyProgress">${escapeHtml(options.progress||'準備中')}</p><p class="proto-signature">第一次回查要下載近兩個月的一分鐘資料，可能需要 1～3 分鐘；之後 10 分鐘內重查同一組條件會很快。可以先繼續設定，回查會在背景跑完。</p></div>`;return;}
-  if(options.error){target.innerHTML=head('')+`<div class="proto-status"><strong>回查失敗</strong><p>${escapeHtml(options.error)}</p><button class="proto-secondary" id="runHistory">再試一次</button></div>`;}
-  else if(!history){target.innerHTML=head('')+'<div class="proto-status"><strong>看看這組條件過去的表現</strong><p>用真實一分鐘 K、和盤中監控相同的規則（同一檔 30 分鐘內只通知一次），先看看會不會太常或太少觸發。</p><button class="proto-secondary" id="runHistory">回查過去 7 個交易日</button></div>';}
+  if(!hasFilters()){target.innerHTML='';target.hidden=true;return;}
+  target.hidden=false;
+  const history=historyFresh(),stale=state.history&&!history;
+  const row=(text,action,extra='')=>`<div class="proto-history-line"><span>${text}</span>${action}</div>${extra}`;
+  if(options.loading)target.innerHTML=row('過去 7 個交易日：',`<span class="proto-note">回查中…</span>`,`<p id="historyProgress" class="proto-signature" aria-live="polite">${escapeHtml(options.progress||'準備中')}</p><p class="proto-signature">第一次回查要下載近兩個月的一分鐘資料，可能需要 1～3 分鐘。可以先繼續下一步，回查會在背景跑完。</p>`);
+  else if(options.error)target.innerHTML=row(`回查失敗：${escapeHtml(options.error)}`,'<button type="button" class="proto-link" id="runHistory">再試一次</button>');
+  else if(!history)target.innerHTML=row(stale?'<strong>過濾已變，重新回查</strong>':'過去 7 個交易日：尚未回查','<button type="button" class="proto-link" id="runHistory">回查</button>');
   else{
-    const limit=options.all?history.events.length:30;
-    const rows=history.events.slice(0,limit).map((event)=>`<div class="proto-history-row"><span><strong>${escapeHtml(event.symbol)}</strong> ${escapeHtml(event.name||'')}</span><time>${formatWhen(event.at)}</time><span>收盤 ${escapeHtml(formatPrice(event.price))}</span></div>`).join('');
-    const busiest=history.days.filter((day)=>day.count).sort((a,b)=>b.count-a.count).slice(0,3).map((day)=>`${day.date.slice(5)}：${day.count} 次`).join('、');
-    target.innerHTML=head(`<button class="proto-link" id="runHistory">重新回查</button>`)+`<p class="proto-signature">${escapeHtml(historySummaryText(history))}${busiest?`・最多：${escapeHtml(busiest)}`:''}</p>${history.events.length?`<div class="proto-history-table"><div class="proto-history-row header"><span>股票</span><span>時間</span><span>價格</span></div>${rows}</div>${history.events.length>limit?`<button class="proto-link" id="showAllHistory">顯示全部 ${history.events.length} 筆${history.truncated?`（共 ${history.totalEvents} 筆，只列最近 ${history.events.length} 筆）`:''}</button>`:''}`:'<div class="proto-status"><strong>這段期間沒有觸發</strong><p>條件可能太嚴格，可以調整參數再回查。</p></div>'}`;
+    const busiest=history.days.filter((day)=>day.count).sort((a,b)=>b.count-a.count)[0];
+    const summary=`過去 7 個交易日：共觸發 ${history.totalEvents} 次${busiest?`・最多 ${escapeHtml(busiest.date.slice(5).replace('-','/'))} ${busiest.count} 次`:''}`;
+    let detail='';
+    if(historyDetail){
+      const limit=historyAll?history.events.length:30;
+      const rows=history.events.slice(0,limit).map((event)=>`<div class="proto-history-row"><span><strong>${escapeHtml(event.symbol)}</strong> ${escapeHtml(event.name||'')}</span><time>${formatWhen(event.at)}</time><span>收盤 ${escapeHtml(formatPrice(event.price))}</span></div>`).join('');
+      detail=`<p class="proto-signature">${escapeHtml(historySummaryText(history))}</p>${history.events.length?`<div class="proto-history-table"><div class="proto-history-row header"><span>股票</span><span>時間</span><span>價格</span></div>${rows}</div>${history.events.length>limit?`<button type="button" class="proto-link" id="showAllHistory">顯示全部 ${history.events.length} 筆${history.truncated?`（共 ${history.totalEvents} 筆，只列最近 ${history.events.length} 筆）`:''}</button>`:''}`:'<div class="proto-status"><strong>這段期間沒有觸發</strong><p>過濾可能太嚴格，可以換一個變體再回查。</p></div>'}<p class="proto-signature"><button type="button" class="proto-link" id="runHistory">重新回查</button></p>`;
+    }
+    target.innerHTML=row(summary,`<button type="button" class="proto-link" id="toggleHistory" aria-expanded="${historyDetail}">${historyDetail?'收合':'看明細'}</button>`,detail);
   }
-  target.querySelector('#showAllHistory')?.addEventListener('click',()=>drawHistory({all:true}));
-  target.querySelector('#runHistory')?.addEventListener('click',async()=>{
-    const signature=historySignature();drawHistory({loading:true});
-    try{const result=await runHistoryJob();state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();if(node()==='conditions')drawHistory();}
-    catch(error){if(node()==='conditions')drawHistory({error:errorText(error)});}
-  });
+  target.querySelector('#toggleHistory')?.addEventListener('click',()=>{historyDetail=!historyDetail;drawHistory();});
+  target.querySelector('#showAllHistory')?.addEventListener('click',()=>{historyAll=true;drawHistory();});
+  target.querySelector('#runHistory')?.addEventListener('click',runHistory);
+}
+async function runHistory(){
+  if(!hasFilters()||historyBusy)return;
+  const signature=historySignature();historyBusy=true;historyAll=false;historyDetail=false;drawHistory({loading:true});drawSticky();
+  try{const result=await runHistoryJob();state.history={signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||result.events.length>100,days:result.days,events:result.events.slice(0,100)};save();historyBusy=false;if(node()==='conditions'){drawHistory();drawSticky();}}
+  catch(error){historyBusy=false;if(node()==='conditions'){drawHistory({error:errorText(error)});drawSticky();}}
 }
 // Backtest runs as a server job: POST returns 202 + jobId (or 200 when cached), then poll until done/failed.
 async function runHistoryJob(){
@@ -390,17 +509,29 @@ async function runHistoryJob(){
   }
   return data;
 }
-function alertInline(message){const target=root.querySelector('#aiPanel .proto-status');if(target)target.insertAdjacentHTML('beforeend',`<p class="proto-error" role="alert">${escapeHtml(message)}</p>`);}
-// Formula tokens expire after 10 minutes and after a server restart; re-plan from the saved text once.
-async function refreshFormulaToken(){
-  const formula=state.formula;const result=await api('/api/indicator-agent/parse',{text:formula.text,context:formula.context||[]});
-  if(result.status!=='formula')throw Object.assign(new Error('AI 重新解析的結果和原本不同，請回到條件頁重新設定。'),{code:null});
-  formula.token=result.proposalToken;save();return formula.token;
+function alertInline(message){const target=root.querySelector('#aiPanel .proto-ai-body');if(target)target.insertAdjacentHTML('beforeend',`<p class="proto-error" role="alert">${escapeHtml(message)}</p>`);}
+// One path for history, confirm and configure: the filters become a signed formula token.
+// Preset / library filters → /api/indicator-templates/instantiate {items}; a single AI-built filter → parse again.
+// Tokens expire after 10 minutes and after a server restart, so withFormula rebuilds once on a stale token.
+async function buildFormulaToken(){
+  if(legacyFilters().length)throw Object.assign(new Error('有舊版條件無法沿用，請移除後重新加入。'),{code:'LEGACY_FILTER'});
+  if(!state.filters.length)throw Object.assign(new Error(ERROR_TEXT.CONDITIONS_REQUIRED),{code:'CONDITIONS_REQUIRED'});
+  const signature=filterSignature();
+  if(state.formulaToken&&state.formulaTokenSignature===signature)return state.formulaToken;
+  const specs=state.filters.map((filter)=>filter.spec);let result;
+  if(specs.every((spec)=>spec.shapeKey||spec.fingerprint))result=await api('/api/indicator-templates/instantiate',{items:specs.map(instantiateItem),text:state.filters.map((filter)=>filter.label).join(' 且 ')});
+  else{
+    if(specs.length!==1)throw Object.assign(new Error(ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS),{code:'FORMULA_WITH_OTHER_CONDITIONS'});
+    result=await api('/api/indicator-agent/parse',{text:specs[0].ai.text,context:specs[0].ai.context||[]});
+    if(result.status!=='formula')throw Object.assign(new Error('AI 重新解析的結果和原本不同，請移除這個過濾後重新建立。'),{code:'FORMULA_REPARSE_MISMATCH'});
+  }
+  if(!result.proposalToken)throw Object.assign(new Error('沒有拿到可用的條件，請重新加入過濾。'),{code:'FORMULA_TOKEN_MISSING'});
+  state.formulaToken=result.proposalToken;state.formulaTokenSignature=signature;save();return state.formulaToken;
 }
-async function withFormula(body){
-  if(!state.formula)return api(body[0],body[1]);
-  try{return await api(body[0],{...body[1],formulaToken:state.formula.token});}
-  catch(error){if(!['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code))throw error;await refreshFormulaToken();return api(body[0],{...body[1],formulaToken:state.formula.token});}
+async function withFormula([url,body]){
+  let token=await buildFormulaToken();
+  try{return await api(url,{...body,formulaToken:token});}
+  catch(error){if(!['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code))throw error;state.formulaToken=null;token=await buildFormulaToken();return api(url,{...body,formulaToken:token});}
 }
 
 function request(){
@@ -420,10 +551,10 @@ function request(){
 }
 
 function confirmPage(){
-  if(!hasConditions())return go('conditions');
+  if(!hasFilters())return go('conditions');
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>條件</dt><dd>${state.formula?`${escapeHtml(state.formula.name)}<br><small>${escapeHtml(state.formula.summary)}</small>`:state.conditions.map((item)=>`${directionTag(item.direction)}${escapeHtml(conditionLabel(item))}`).join('<br>')}</dd></div><div><dt>條件組合</dt><dd>${state.formula?'AI 自訂條件':state.conditions.length>1?'全部同時成立才通知':'單一條件'}</dd></div><div><dt>過去 7 日</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div></dl><details class="proto-details"><summary>監控細節</summary><p>資料：一分鐘 K・台股 09:00–13:30（Asia/Taipei）</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>同一檔 30 分鐘內只通知一次</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>過濾</dt><dd class="proto-filter-summary">${state.filters.map((filter)=>`<span>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}${filter.formulaSummary?`<br><small>${escapeHtml(filter.formulaSummary)}</small>`:''}</span>`).join('<span class="proto-and-pill">且</span>')}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'兩個都成立才通知':'單一過濾'}</dd></div><div><dt>過去 7 日</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div></dl><details class="proto-details"><summary>監控細節</summary><p>資料：一分鐘 K・台股 09:00–13:30（Asia/Taipei）</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>同一檔 30 分鐘內只通知一次</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
@@ -435,6 +566,7 @@ function confirmPage(){
     button.disabled=true;button.textContent='建立中…';
     try{
       await withFormula(['/api/monitor/configure',monitorSpec()]);
+      templateCache=null; // an AI-built formula is now in the library; reload the list next time
       resetDraft();go('success');
     }catch(error){root.querySelector('#createError').textContent=errorText(error);button.disabled=false;button.textContent=label();}
   });
