@@ -14,11 +14,11 @@ import { applyScopedMarketBars } from './signalEngine.js';
 import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateStrategy } from './indicatorRegistry.js';
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
-import { createDocumentBackend, dbConfigFromEnv } from './db.js';
+import { createDocumentBackend, createFormulaLibraryBackend, dbConfigFromEnv } from './db.js';
 import { HISTORY_DAYS, listHfM1Dates, listHfM1Months, runHistory } from './history.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
-import { planMonitorCondition } from './formulaPlanner.js';
+import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
 import { conditionsName, parseConditions, planConditionStrategy } from './monitorConditions.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -27,6 +27,7 @@ loadProjectEnv(join(ROOT, '.env'));
 const PUBLIC_DIR = join(ROOT, 'public');
 const DATA_FILE = process.env.WATCH365_DATA_FILE || join(ROOT, 'data', 'watch365.json');
 const INDICATOR_REQUESTS_FILE = process.env.WATCH365_INDICATOR_REQUESTS_FILE || join(ROOT, 'data', 'indicator-requests.json');
+const FORMULA_LIBRARY_FILE = process.env.WATCH365_FORMULA_LIBRARY_FILE || join(ROOT, 'data', 'formula-library.json');
 const PORT = Number(process.env.PORT || 3650);
 const indicatorRegistry = new IndicatorRegistry();
 const formulaTokenSecret=randomBytes(32).toString('base64url');
@@ -39,6 +40,8 @@ const documentBackend = await createDocumentBackend(dbConfigFromEnv());
 console.log(documentBackend ? `Storage: database ${documentBackend.label}` : `Storage: local files under ${join(ROOT, 'data')}`);
 const store = new JsonStore(DATA_FILE, { backend: documentBackend, key: 'state' });
 const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE, { backend: documentBackend, key: 'indicator-requests' });
+// Formula library: DB tables when DB_HOST is set, otherwise data/formula-library.json. Seeded from FORMULA_RECIPES on boot.
+const formulaLibrary = new FormulaLibrary(FORMULA_LIBRARY_FILE, { backend: await createFormulaLibraryBackend(dbConfigFromEnv()) });
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
@@ -47,7 +50,8 @@ const historyCache = new Map();
 let historyQueue = Promise.resolve();
 const HISTORY_CACHE_MS = 10 * 60 * 1000;
 
-await Promise.all([store.load(),indicatorRequests.load()]);
+await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load()]);
+console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
 syncMonitorTimer();
 
 const server = createServer(async (request, response) => {
@@ -132,8 +136,9 @@ async function routeApi(request, response) {
     const body=await readJson(request);
     try {
       const registry=await indicatorRegistry.load();
-      const result=await planMonitorCondition(body.text,registry.items,{context:body.context});
-      if(result.status==='formula'){result.proposalId=randomUUID();result.proposalToken=issueFormulaToken({...result.proposal,proposalId:result.proposalId},formulaTokenSecret);}
+      // Library first (exact alias match, active formulas only), AI planner on a miss. Both paths return the same shape.
+      const result=await resolveMonitorCondition(body.text,registry.items,{library:formulaLibrary,context:body.context});
+      if(result.status==='formula'){result.proposalId=randomUUID();result.proposalToken=issueFormulaToken({...result.proposal,proposalId:result.proposalId,sourceText:typeof body.text==='string'?body.text:undefined},formulaTokenSecret);}
       delete result.proposal?.ast;
       sendJson(response,200,result);
     } catch(error) {
@@ -150,7 +155,7 @@ async function routeApi(request, response) {
       const strategy=validateFormulaStrategy({id:'formula.custom',version:payload.capabilityRevision,executor:'formula_v1',name:payload.name,timeframe:'1m',source:'db/m1_live/{tradingDate}.parquet',definitionFingerprint:payload.fingerprint,params:{},formula:{ast:payload.ast}},current?.definitionFingerprint===payload.fingerprint?current.activatedAt:new Date().toISOString());
       const watchlist=parseWatchlist(body.watchlist,{allowEmpty:true});
       await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed)revokePendingDeliveryAuthorizations(state);appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
-      syncMonitorTimer();sendJson(response,200,publicState(store.getState()));
+      syncMonitorTimer();await recordFormulaActivation(payload);sendJson(response,200,publicState(store.getState()));
     }catch(error){sendJson(response,error.statusCode||400,{error:error.code||'FORMULA_ACTIVATION_FAILED'});}return;
   }
 
@@ -162,6 +167,14 @@ async function routeApi(request, response) {
     } catch(error) {
       sendJson(response,error.statusCode||422,{error:error.code||'INDICATOR_AGENT_PROPOSAL_INVALID'});
     }
+    return;
+  }
+
+  // Formulas people apply, without the AST (for a "commonly used formulas" list). ?status=active|pending_review|disabled
+  if (method === 'GET' && url.pathname === '/api/formula-library') {
+    const status = url.searchParams.get('status');
+    if (status && !['active','pending_review','disabled'].includes(status)) { sendJson(response, 400, { error:'FORMULA_LIBRARY_STATUS_INVALID' }); return; }
+    sendJson(response, 200, { items: formulaLibrary.list({ status }).map(({ fingerprint, name, summary, source, status, hitCount, aliases }) => ({ fingerprint, name, summary, source, status, hitCount, aliases })) });
     return;
   }
 
@@ -295,9 +308,9 @@ async function routeApi(request, response) {
     catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
     if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
-    let conditions, strategy, watchlist, taskName;
+    let conditions, strategy, watchlist, taskName, formulaPayload;
     try {
-      ({ strategy, conditions, name: taskName } = await strategyFromRequest(body, store.getState().settings.strategy));
+      ({ strategy, conditions, name: taskName, formulaPayload } = await strategyFromRequest(body, store.getState().settings.strategy));
       watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
     } catch (error) {
       sendJson(response, error.statusCode || 400, { error:error.code || 'MONITOR_CONFIGURE_FAILED' });
@@ -316,6 +329,7 @@ async function routeApi(request, response) {
       appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:taskName, symbols:watchlist.length });
     });
     syncMonitorTimer();
+    if (formulaPayload) await recordFormulaActivation(formulaPayload);
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
@@ -485,7 +499,7 @@ async function strategyFromRequest(body, current) {
   if (typeof body?.formulaToken === 'string') {
     const payload = verifyFormulaToken(body.formulaToken, formulaTokenSecret);
     const strategy = validateFormulaStrategy({ id:'formula.custom', version:payload.capabilityRevision, executor:'formula_v1', name:payload.name, timeframe:'1m', source:'db/m1_live/{tradingDate}.parquet', definitionFingerprint:payload.fingerprint, params:{}, formula:{ ast:payload.ast } }, current?.definitionFingerprint === payload.fingerprint ? current.activatedAt : new Date().toISOString());
-    return { strategy, conditions:[], name:payload.name };
+    return { strategy, conditions:[], name:payload.name, formulaPayload:payload };
   }
   const conditions = parseConditions(body?.conditions);
   const plan = planConditionStrategy(conditions);
@@ -498,6 +512,12 @@ async function strategyFromRequest(body, current) {
     strategy = validateFormulaStrategy(plan.strategy, current?.definitionFingerprint === plan.strategy.definitionFingerprint ? current.activatedAt : new Date().toISOString());
   }
   return { strategy, conditions, name:conditionsName(conditions) };
+}
+
+// A formula the user applied goes into the library (AI formulas start as pending_review). Never fails the request.
+async function recordFormulaActivation(payload) {
+  try { await formulaLibrary.recordActivation({ ast:payload.ast, name:payload.name, sourceText:payload.sourceText ?? null }); }
+  catch (error) { console.error('formula-library: record activation failed', error.code || error.message); }
 }
 
 async function runMonitor(source = 'scheduler') {

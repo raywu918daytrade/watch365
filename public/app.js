@@ -218,7 +218,7 @@ function conditions(){
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔指定股票`:'今日監控名單';
   const blocked=addBlockReason(item.id);
   const templates=!hasConditions()?`<section class="proto-templates" aria-label="常用條件"><p class="proto-eyebrow">常用條件・一鍵帶入</p><div class="proto-template-grid">${TEMPLATES.map((template)=>`<button class="proto-template" data-template="${template.id}"><strong>${escapeHtml(template.name)}</strong><small>${escapeHtml(template.desc)}</small></button>`).join('')}</div></section>`:'';
-  shell({step:'conditions',title:'設定監控條件',lead:`範圍：${scope}。以一分鐘 K 收盤判斷，最多 2 個條件、同時成立才通知。`,back:state.purpose==='watchlist'?'stocks':'home',body:`${templates}${conditionMarkup()}<label class="proto-search proto-ai-search"><span class="proto-ai-tag" aria-hidden="true">AI</span><input id="indicatorSearch" type="search" placeholder="例如：MACD 黃金交叉、KD 低檔上穿" aria-label="搜尋指標或用一句話描述條件" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到想要的指標？直接用一句話描述，AI 會轉成可監控的條件；暫時做不到的會列入新指標開發。</p><div class="proto-library proto-inline-library" id="indicatorResults"></div><section id="aiPanel"></section><section class="proto-condition-editor"><details id="editorDetails" ${state.editorOpen&&!blocked?'open':''}><summary><span class="proto-eyebrow">自訂參數</span> <strong>${escapeHtml(item.name)}</strong></summary><p class="proto-signature">${escapeHtml(item.desc)}</p><div class="proto-form"><label>方向<select id="direction">${item.directions.map((value)=>`<option value="${value}" ${draft.direction===value?'selected':''}>${DIRECTION_LABEL[value]}</option>`).join('')}</select></label><label>期數<input id="period" type="number" inputmode="numeric" min="2" max="${item.periodMax}" value="${escapeHtml(draft.period)}"></label>${item.threshold?`<label>門檻<input id="threshold" type="number" inputmode="numeric" min="1" max="99" value="${escapeHtml(draft.threshold)}"></label>`:''}<p id="paramError" class="proto-error" role="alert"></p></div><button id="addCondition" class="proto-secondary" ${blocked?'disabled aria-describedby="addBlocked"':''}>加入這個條件</button>${blocked?`<p id="addBlocked" class="proto-signature">${escapeHtml(blocked)}</p>`:''}</details></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span>${state.formula?'AI 自訂條件':`${state.conditions.length}/2 個條件`}</span><button id="confirmConditions" class="proto-primary" ${hasConditions()?'':'disabled'}>下一步：確認</button></div>`});
+  shell({step:'conditions',title:'設定監控條件',lead:`範圍：${scope}。以一分鐘 K 收盤判斷，最多 2 個條件、同時成立才通知。`,back:state.purpose==='watchlist'?'stocks':'home',body:`${templates}${!hasConditions()?'<section class="proto-templates" id="libraryPanel" aria-label="公式庫"></section>':''}${conditionMarkup()}<label class="proto-search proto-ai-search"><span class="proto-ai-tag" aria-hidden="true">AI</span><input id="indicatorSearch" type="search" placeholder="例如：MACD 黃金交叉、KD 低檔上穿" aria-label="搜尋指標或用一句話描述條件" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到想要的指標？直接用一句話描述，AI 會轉成可監控的條件；暫時做不到的會列入新指標開發。</p><div class="proto-library proto-inline-library" id="indicatorResults"></div><section id="aiPanel"></section><section class="proto-condition-editor"><details id="editorDetails" ${state.editorOpen&&!blocked?'open':''}><summary><span class="proto-eyebrow">自訂參數</span> <strong>${escapeHtml(item.name)}</strong></summary><p class="proto-signature">${escapeHtml(item.desc)}</p><div class="proto-form"><label>方向<select id="direction">${item.directions.map((value)=>`<option value="${value}" ${draft.direction===value?'selected':''}>${DIRECTION_LABEL[value]}</option>`).join('')}</select></label><label>期數<input id="period" type="number" inputmode="numeric" min="2" max="${item.periodMax}" value="${escapeHtml(draft.period)}"></label>${item.threshold?`<label>門檻<input id="threshold" type="number" inputmode="numeric" min="1" max="99" value="${escapeHtml(draft.threshold)}"></label>`:''}<p id="paramError" class="proto-error" role="alert"></p></div><button id="addCondition" class="proto-secondary" ${blocked?'disabled aria-describedby="addBlocked"':''}>加入這個條件</button>${blocked?`<p id="addBlocked" class="proto-signature">${escapeHtml(blocked)}</p>`:''}</details></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span>${state.formula?'AI 自訂條件':`${state.conditions.length}/2 個條件`}</span><button id="confirmConditions" class="proto-primary" ${hasConditions()?'':'disabled'}>下一步：確認</button></div>`});
   bindConditionList();
   root.querySelectorAll('[data-template]').forEach((button)=>button.addEventListener('click',()=>{const template=TEMPLATES.find((entry)=>entry.id===button.dataset.template);state.conditions=template.conditions.map((condition)=>({id:crypto.randomUUID(),...condition}));state.activeIndicator=template.conditions[0].indicator;state.history=null;save();render();}));
   const search=root.querySelector('#indicatorSearch'),results=root.querySelector('#indicatorResults');
@@ -233,7 +233,7 @@ function conditions(){
     if(!matches.length&&value.length>=2)aiTimer=setTimeout(()=>startAi(value),700);
   };
   search.addEventListener('keydown',(event)=>{const value=search.value.trim();if(event.key==='Enter'&&value.length>=2&&!INDICATORS.some((entry)=>`${entry.id} ${entry.name} ${entry.desc}`.toLowerCase().includes(value.toLowerCase())))startAi(value);});
-  search.addEventListener('input',drawSearch);drawSearch();drawAi();drawHistory();
+  search.addEventListener('input',drawSearch);drawSearch();drawAi();drawHistory();drawLibrary(startAi);
   const capture=()=>{state.drafts[item.id]={direction:root.querySelector('#direction').value,period:root.querySelector('#period').value,threshold:root.querySelector('#threshold')?.value??null};save();};
   root.querySelectorAll('#direction,#period,#threshold').forEach((input)=>input.addEventListener('input',()=>{capture();root.querySelector('#paramError').textContent='';}));
   root.querySelector('#addCondition').addEventListener('click',()=>{
@@ -268,6 +268,20 @@ function bindConditionList(){root.querySelectorAll('[data-remove]').forEach((but
 
 // AI parsing: /api/indicator-agent/parse returns existing (registry indicator), formula (signed proposal),
 // clarification (needs a reply, sent back with the conversation as context) or discussion (not computable).
+// Formula library (server-side, seeded with common TA conditions and grown from applied AI formulas).
+// Picking one sends its alias through the normal parse path, which hits the library and returns instantly.
+let libraryCache=null;
+async function drawLibrary(startAi){
+  const target=root.querySelector('#libraryPanel');if(!target)return;
+  try{
+    if(!libraryCache)libraryCache=(await api('/api/formula-library?status=active')).items||[];
+    if(!root.contains(target))return;
+    const items=libraryCache.filter((item)=>item.aliases?.length).slice(0,8);
+    if(!items.length){target.remove();return;}
+    target.innerHTML=`<p class="proto-eyebrow">公式庫・AI 已整理好的條件</p><div class="proto-template-grid">${items.map((item,index)=>`<button class="proto-template" data-library="${index}"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.summary)}</small></button>`).join('')}</div>`;
+    target.querySelectorAll('[data-library]').forEach((button)=>button.addEventListener('click',()=>{const item=items[Number(button.dataset.library)];const search=root.querySelector('#indicatorSearch');search.value=item.aliases[0];state.requestText=item.aliases[0];save();startAi(item.aliases[0]);search.scrollIntoView({block:'center',behavior:'smooth'});}));
+  }catch{target.remove();}
+}
 async function runAi(){
   const ai=state.ai;if(!ai)return;
   ai.loading=true;ai.error=null;drawAi();
@@ -299,7 +313,7 @@ function drawAi(){
   else{
     const result=ai.result||{};
     if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
-    else if(result.status==='formula')body=`<div class="proto-status"><strong>${escapeHtml(result.summary)}</strong><p>計算方式：${escapeHtml(result.formulaSummary)}</p><p class="proto-signature">AI 自訂條件會單獨使用，會取代目前已加入的條件。</p><button class="proto-primary" id="aiUseFormula">使用這個條件</button></div>`;
+    else if(result.status==='formula')body=`<div class="proto-status">${result.library?'<p class="proto-eyebrow">來自公式庫・立即可用</p>':''}<strong>${escapeHtml(result.summary)}</strong><p>計算方式：${escapeHtml(result.formulaSummary)}</p><p class="proto-signature">AI 自訂條件會單獨使用，會取代目前已加入的條件。</p><button class="proto-primary" id="aiUseFormula">使用這個條件</button></div>`;
     else if(result.status==='clarification')body=`<div class="proto-status"><strong>AI 需要多一點資訊</strong><p>${escapeHtml(result.message)}</p><label class="proto-search"><input id="aiReply" type="text" placeholder="回答上面的問題" aria-label="回答 AI"></label><button class="proto-primary" id="aiSendReply">送出</button></div>`;
     // Not computable yet: keep the user moving with a rephrase (AI already suggests the closest computable
     // alternative in its message); filing a request is the fallback, not the main action.

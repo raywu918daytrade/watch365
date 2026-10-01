@@ -43,3 +43,62 @@ export async function createDocumentBackend(config) {
     async close() { await pool.end(); }
   };
 }
+
+// Formula library tables (see src/formulaLibrary.js). Same pattern: created on boot, mysql2 loaded lazily.
+const LIBRARY_TABLE = 'watch365_formula_library';
+const ALIAS_TABLE = 'watch365_formula_alias';
+
+export async function createFormulaLibraryBackend(config) {
+  if (!config) return null;
+  const { createPool } = await import('mysql2/promise');
+  const pool = createPool(config);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ${LIBRARY_TABLE} (
+    fingerprint CHAR(64) NOT NULL PRIMARY KEY,
+    ast LONGTEXT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    summary TEXT NOT NULL,
+    warmup_bars INT NOT NULL DEFAULT 0,
+    source VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    hit_count INT NOT NULL DEFAULT 0,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ${ALIAS_TABLE} (
+    alias_norm VARCHAR(255) NOT NULL PRIMARY KEY,
+    fingerprint CHAR(64) NOT NULL,
+    alias_raw VARCHAR(255) NOT NULL,
+    hits INT NOT NULL DEFAULT 0,
+    last_used_at DATETIME(3) NULL,
+    source VARCHAR(16) NOT NULL,
+    INDEX idx_formula_alias_fingerprint (fingerprint)
+  )`);
+  const iso = (value) => (value instanceof Date ? value.toISOString() : typeof value === 'string' ? new Date(value).toISOString() : null);
+  const at = (value) => (value ? new Date(value) : null);
+  return {
+    label: `${config.host}/${config.database}`,
+    async loadAll() {
+      const [formulas] = await pool.query(`SELECT fingerprint, ast, name, summary, warmup_bars, source, status, hit_count, created_at, updated_at FROM ${LIBRARY_TABLE}`);
+      const [aliases] = await pool.query(`SELECT alias_norm, fingerprint, alias_raw, hits, last_used_at, source FROM ${ALIAS_TABLE}`);
+      return {
+        formulas: formulas.map((row) => ({ fingerprint: row.fingerprint, ast: row.ast, name: row.name, summary: row.summary, warmupBars: row.warmup_bars, source: row.source, status: row.status, hitCount: row.hit_count, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) })),
+        aliases: aliases.map((row) => ({ aliasNorm: row.alias_norm, fingerprint: row.fingerprint, aliasRaw: row.alias_raw, hits: row.hits, lastUsedAt: iso(row.last_used_at), source: row.source }))
+      };
+    },
+    async upsertFormula(formula) {
+      await pool.query(
+        `INSERT INTO ${LIBRARY_TABLE} (fingerprint, ast, name, summary, warmup_bars, source, status, hit_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE ast = VALUES(ast), name = VALUES(name), summary = VALUES(summary), warmup_bars = VALUES(warmup_bars), source = VALUES(source), status = VALUES(status), hit_count = VALUES(hit_count), updated_at = VALUES(updated_at)`,
+        [formula.fingerprint, JSON.stringify(formula.ast), formula.name, formula.summary, formula.warmupBars, formula.source, formula.status, formula.hitCount, at(formula.createdAt), at(formula.updatedAt)]
+      );
+    },
+    async upsertAlias(alias) {
+      await pool.query(
+        `INSERT INTO ${ALIAS_TABLE} (alias_norm, fingerprint, alias_raw, hits, last_used_at, source) VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE fingerprint = VALUES(fingerprint), alias_raw = VALUES(alias_raw), hits = VALUES(hits), last_used_at = VALUES(last_used_at), source = VALUES(source)`,
+        [alias.aliasNorm, alias.fingerprint, alias.aliasRaw, alias.hits, at(alias.lastUsedAt), alias.source]
+      );
+    },
+    async close() { await pool.end(); }
+  };
+}
