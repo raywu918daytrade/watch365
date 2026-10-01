@@ -72,5 +72,14 @@ export const FORMULA_RECIPES = Object.freeze([
   { key:'ichimoku_tk_cross', name:'一目均衡表 轉換線(9) 向上穿越 基準線(26)', ast:bin('crosses_above', ichimokuTenkan(), ichimokuKijun()) },
   { key:'vwap_above', name:'收盤價向上穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_above', src('close'), vwap()) },
   { key:'vwap_below', name:'收盤價向下穿越 VWAP(當日成交量加權均價)', ast:bin('crosses_below', src('close'), vwap()) },
-  { key:'open_gain', name:'收盤價相對當日開盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', { op:'first', input:src('open') }, num(1.02))) }
+  { key:'open_gain', name:'收盤價相對當日開盤漲幅 ≥ 2%', ast:bin('gte', src('close'), bin('mul', { op:'first', input:src('open') }, num(1.02))) },
+  // Moving-average family: close crossing one MA, and a fast/slow MA cross.
+  { key:'close_above_sma', name:'收盤價向上穿越 SMA(20)', ast:bin('crosses_above', src('close'), win('sma', src('close'), 20)) },
+  { key:'close_above_ema', name:'收盤價向上穿越 EMA(20)', ast:bin('crosses_above', src('close'), win('ema', src('close'), 20)) },
+  { key:'sma_cross', name:'SMA(5) 向上穿越 SMA(20)', ast:bin('crosses_above', win('sma', src('close'), 5), win('sma', src('close'), 20)) },
+  // Declines mirror the gains with lte and 1 − X% (same template shape as the gains, direction = below).
+  { key:'pct_drop', name:'收盤價相對前5根收盤跌幅 ≥ 2%', ast:bin('lte', src('close'), bin('mul', win('prev', src('close'), 5), num(0.98))) },
+  { key:'open_drop', name:'收盤價相對當日開盤跌幅 ≥ 2%', ast:bin('lte', src('close'), bin('mul', { op:'first', input:src('open') }, num(0.98))) },
+  // Volatility as a percentage of price: ATR(14) ≥ close × 2%.
+  { key:'atr_pct', name:'ATR(14) ≥ 收盤價 × 2%', ast:bin('gte', win('rma', { op:'tr' }, 14), bin('mul', src('close'), num(0.02))) }
 ]);

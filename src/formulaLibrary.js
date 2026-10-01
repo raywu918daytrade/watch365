@@ -21,10 +21,13 @@ import { dirname } from 'node:path';
 import { formulaSummary, validateFormula } from './formulaEngine.js';
 import { FORMULA_RECIPES } from './formulaRecipes.js';
 import { planMonitorCondition } from './formulaPlanner.js';
+import { FAMILY_ORDER, extractTemplate, instantiateTemplate, templatePresets, templateSummaryName } from './indicatorTemplates.js';
 
 export const FORMULA_LIBRARY_STATUSES = Object.freeze(['active', 'pending_review', 'disabled']);
 export const FORMULA_LIBRARY_SOURCES = Object.freeze(['preset', 'ai']);
 export const LIBRARY_PROVIDER = Object.freeze({ provider: 'library', model: 'alias' });
+export const TEMPLATE_PROVIDER = Object.freeze({ provider: 'library', model: 'template' });
+const MAX_COMPOSE_ITEMS = 2;
 const PROMOTE_MIN_HITS = 3;
 const PROMOTE_MIN_ALIASES = 2;
 const MAX_ALIAS_RAW = 200;
@@ -77,7 +80,13 @@ export const PRESET_ALIASES = Object.freeze({
   ichimoku_tk_cross: ['一目均衡表黃金交叉', '轉換線上穿基準線', '一目雲黃金交叉', '轉換線向上穿越基準線', 'ichimoku黃金交叉', '一目均衡表金叉'],
   vwap_above: ['vwap', '站上vwap', '收盤站上vwap', '收盤價站上vwap', '突破vwap', '收盤上穿vwap', '成交量加權平均價', '股價站上vwap', '站上成交量加權均價'],
   vwap_below: ['跌破vwap', '收盤跌破vwap', '收盤價下穿vwap', '股價跌破vwap', '跌破成交量加權均價'],
-  open_gain: ['開盤漲幅2%', '相對開盤漲2%', '今日漲幅2%', '當日漲幅超過2%', '比開盤價高2%', '開盤以來漲幅2%']
+  open_gain: ['開盤漲幅2%', '相對開盤漲2%', '今日漲幅2%', '當日漲幅超過2%', '比開盤價高2%', '開盤以來漲幅2%'],
+  close_above_sma: ['站上20日均線', '收盤站上SMA20', '收盤價上穿SMA20', '突破20均線', '站上MA20', '收盤上穿20均線'],
+  close_above_ema: ['站上EMA20', '收盤站上EMA20', '收盤價上穿EMA20', '突破EMA20', '收盤上穿指數移動平均20'],
+  sma_cross: ['均線黃金交叉', '5均上穿20均', 'SMA5上穿SMA20', '均線金叉', 'MA5上穿MA20', '5日線上穿20日線'],
+  pct_drop: ['5根內跌幅2%', '5分鐘跌2%', '五根跌幅超過2%', '相對5根前跌幅2%', '5根K跌2%'],
+  open_drop: ['開盤跌幅2%', '相對開盤跌2%', '今日跌幅2%', '當日跌幅超過2%', '比開盤價低2%', '開盤以來跌幅2%'],
+  atr_pct: ['ATR超過2%', 'ATR大於股價2%', '波動率2%', 'ATR14超過收盤2%', '真實波幅超過2%']
 });
 
 export class FormulaLibrary {
@@ -169,6 +178,76 @@ export class FormulaLibrary {
   }
   aliasesOf(fingerprint) { return [...this.aliases.values()].filter((alias) => alias.fingerprint === fingerprint).map((alias) => alias.aliasRaw); }
 
+  // Indicator templates: formulas grouped by shapeKey (same structure, different numbers / direction).
+  // Parameter defaults and the direction default come from the representative (most-applied member,
+  // presets first on a tie); hitCount is the sum over members, so an activation of any instantiation
+  // (recordActivation on the resulting AST) accumulates onto the same indicator. Never returns ASTs.
+  templates({ includePending = true } = {}) {
+    const groups = new Map();
+    for (const formula of this.formulas.values()) {
+      if (formula.status !== 'active' && !(includePending && formula.status === 'pending_review')) continue;
+      const template = this.templateOf(formula); if (!template) continue;
+      const group = groups.get(template.shapeKey) || { shapeKey: template.shapeKey, members: [] };
+      group.members.push(formula); groups.set(template.shapeKey, group);
+    }
+    return [...groups.values()].map((group) => this.publicTemplate(group)).sort((a, b) => FAMILY_ORDER.indexOf(a.family) - FAMILY_ORDER.indexOf(b.family) || b.hitCount - a.hitCount || a.name.localeCompare(b.name, 'zh-Hant'));
+  }
+  template(shapeKey) { return this.templates().find((template) => template.shapeKey === shapeKey) ?? null; }
+  templateOf(formula) {
+    if (!formula.ast) return null;
+    if (!this.templateCache) this.templateCache = new Map();
+    const cached = this.templateCache.get(formula.fingerprint); if (cached) return cached;
+    let template; try { template = extractTemplate(formula.ast); } catch { return null; }
+    this.templateCache.set(formula.fingerprint, template); return template;
+  }
+  publicTemplate({ shapeKey, members }) {
+    // Representative: most applied, then preset, then the "above" variant (so the group reads as the canonical direction), then fingerprint.
+    const rank = (formula) => (formula.source === 'preset' ? 0 : 1) * 2 + (this.templateOf(formula)?.direction?.default === 'below' ? 1 : 0);
+    const sorted = [...members].sort((a, b) => b.hitCount - a.hitCount || rank(a) - rank(b) || a.fingerprint.localeCompare(b.fingerprint));
+    const representative = sorted[0]; const template = this.templateOf(representative);
+    const info = templateSummaryName(representative.ast, template); const { name, family, category } = info;
+    return {
+      shapeKey, family, category, name,
+      params: template.params.map(({ key, label, type, default: value, min, max }) => ({ key, label, type, default: value, min, max })),
+      direction: template.direction ? { key: template.direction.key, options: template.direction.options, default: template.direction.default } : null,
+      presets: templatePresets(representative.ast, template, info, representative.name),
+      members: sorted.map((formula) => ({ fingerprint: formula.fingerprint, name: formula.name, summary: formula.summary, status: formula.status, source: formula.source, hitCount: formula.hitCount, aliases: this.aliasesOf(formula.fingerprint) })),
+      hitCount: members.reduce((sum, formula) => sum + formula.hitCount, 0),
+      source: members.some((formula) => formula.source === 'preset') ? 'preset' : 'ai',
+      representative: representative.fingerprint
+    };
+  }
+  // Writes user parameters into the representative's AST and returns a planner-shaped formula result
+  // (proposal carries the AST; the server strips it and signs the token, like /api/indicator-agent/parse).
+  instantiate(shapeKey, { values = {}, direction = null } = {}) { return this.compose([{ shapeKey, values, direction }]); }
+  // 1–2 filters, each either a template instantiation ({ shapeKey, values, direction }) or an existing
+  // library formula as is ({ fingerprint }); two filters are joined with `all` (PM: "多個指標就是多個過濾").
+  compose(items) {
+    if (!Array.isArray(items) || items.length < 1 || items.length > MAX_COMPOSE_ITEMS) throw requestError('TEMPLATE_REQUEST_INVALID', { message: `items 必須是 1–${MAX_COMPOSE_ITEMS} 個過濾` });
+    const parts = items.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw requestError('TEMPLATE_REQUEST_INVALID', { message: `items[${index}] 必須是物件`, index });
+      if (typeof item.fingerprint === 'string') {
+        const formula = this.formulas.get(item.fingerprint);
+        if (!formula || !formula.ast || !['active', 'pending_review'].includes(formula.status)) throw requestError('TEMPLATE_NOT_FOUND', { message: `items[${index}] 的 fingerprint 不在公式庫`, index }, 404);
+        return { ast: structuredClone(formula.ast), fingerprint: formula.fingerprint, shapeKey: this.templateOf(formula)?.shapeKey ?? null };
+      }
+      if (typeof item.shapeKey !== 'string') throw requestError('TEMPLATE_REQUEST_INVALID', { message: `items[${index}] 需要 shapeKey 或 fingerprint`, index });
+      const group = this.template(item.shapeKey);
+      if (!group) throw requestError('TEMPLATE_NOT_FOUND', { message: `items[${index}] 的 shapeKey 不存在`, index }, 404);
+      const representative = this.formulas.get(group.representative); const template = this.templateOf(representative);
+      try { return { ast: instantiateTemplate(representative.ast, template, item.values ?? {}, item.direction ?? null), shapeKey: item.shapeKey }; }
+      catch (error) { if (error.detail) error.detail.index = index; throw error; }
+    });
+    const ast = parts.length === 1 ? parts[0].ast : { op: 'all', items: parts.map((part) => part.ast) };
+    const validated = validateFormula(ast);
+    const summaries = parts.map((part) => formulaSummary(part.ast));
+    const name = summaries.join(' 且 ').slice(0, 100);
+    const result = { status: 'formula', summary: `${name} · 一分鐘`, formulaSummary: formulaSummary(validated.ast), proposal: { name, ast: validated.ast, fingerprint: validated.fingerprint, warmupBars: validated.warmupBars }, provider: { ...TEMPLATE_PROVIDER }, library: true, template: true };
+    if (parts.length === 1) result.shapeKey = parts[0].shapeKey;
+    else result.items = parts.map((part, index) => ({ ...(part.fingerprint ? { fingerprint: part.fingerprint } : {}), shapeKey: part.shapeKey, formulaSummary: summaries[index] }));
+    return result;
+  }
+
   enqueue(task) { const operation = this.queue.then(task); this.queue = operation.catch(() => {}); return operation; }
   async readStored() {
     if (this.backend) return this.backend.loadAll();
@@ -195,6 +274,7 @@ export async function resolveMonitorCondition(text, definitions, { library = nul
 
 function publicFormula(formula, aliases) { return { fingerprint: formula.fingerprint, name: formula.name, summary: formula.summary, warmupBars: formula.warmupBars, source: formula.source, status: formula.status, hitCount: formula.hitCount, createdAt: formula.createdAt, updatedAt: formula.updatedAt, aliases }; }
 function stripTimes({ createdAt, updatedAt, ...rest }) { return rest; }
+function requestError(code, detail, statusCode = 422) { return Object.assign(new Error(code), { code, statusCode, detail }); }
 function validNorm(value) { return typeof value === 'string' && value.length >= MIN_ALIAS_NORM && value.length <= MAX_ALIAS_NORM; }
 
 // Stored rows are untrusted: shape is checked, the AST is re-validated and its fingerprint must match the

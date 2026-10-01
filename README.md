@@ -54,6 +54,17 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 
 成本依指定 provider/model 的輸入與輸出 token 定價計算。每次請求包含 registry 與結構化輸出 schema，因此除了客戶文字外會有固定 schema token 成本；正式啟用前應依選定模型的官方即時價格估算。
 
+### 指標模板
+
+產品流程是「看到指標 → 選參數 → 加入條件」，找不到指標才交給 AI 解析；解析成功套用的公式存入公式庫，下次直接用。公式庫因此不只列「寫死參數的條件」，而是把 formula_v1 的 AST 升級成「帶可調參數的指標模板」（`src/indicatorTemplates.js`）：
+
+- `extractTemplate(ast)` 走訪 AST，把每個 window／prev 的 `period` 與有意義的 `constant` 抽成參數槽（整數期數 2–200、往前根數 1–60、門檻 ±1e6、倍數 0.01–100、標準差倍數 0.1–100，最多 6 個）。同語意同數值的槽合併為一個參數（KD 的兩個 RMA(3)、布林的 SMA(20)+標準差(20)）；0、除數（÷2、÷3）與 ×±100 的百分比縮放是結構常數，保持固定。根節點是比較運算時另給 `direction`（above／below，對應 crosses_above↔crosses_below、gt↔lt、gte↔lte）。
+- `shapeKey` 是把參數值換成佔位符、方向統一為 above 後的 canonical AST 的 sha256：同 shapeKey 的公式視為同一個指標，例如「RSI(14) 上穿 30」與「RSI(14) 下穿 70」只是參數與方向不同。
+- `GET /api/indicator-templates`：公式庫（active 與 pending_review，`?includePending=false` 只列 active）依 shapeKey 分組，每組有 `family`／`category`、不含具體數字的 `name`（RSI(N, Wilder) 穿越 N）、`params`、`direction`、`presets`、`members`、累計 `hitCount` 與 `representative`，依 family（均線、MACD、KD、RSI、布林、VWAP、一目、威廉、ATR、量能、漲跌幅、其他）再依 hitCount 排序，不含 AST。
+- `presets`（老闆決策：刻度要粗，不是每個指標都可調）：每個 family 固定幾個變體 `{ label, values, direction }`，例如均線 5／10／20／60 各上穿下穿、RSI 上穿 20／30、下穿 70／80、量能 1.5／2／3 倍、漲跌幅 1–5%（上漲 gte×1.0X、下跌 lte×0.9X）、ATR 1–5%；沒有規則的指標（AI 新建立的）只有一個 preset＝原公式（不可調）。前端呈現為「類別 → 變體」清單即可，不必做參數輸入。
+- `POST /api/indicator-templates/instantiate`：單一模板 body `{ shapeKey, values:{p1:21,…}, direction?, text? }`，或 1～2 個過濾 `{ items:[{ shapeKey, values?, direction? } | { fingerprint }], text? }`（`fingerprint` 直接使用公式庫既有成員的 AST；兩個過濾以 `all` 合併，摘要為「A 且 B」）。代入參數後重新 `validateFormula`，回傳與 `/api/indicator-agent/parse` 相同形狀的 formula 結果（`provider:{provider:'library',model:'template'}`、`library:true`、`template:true`，含簽章 `proposalToken`），可直接走既有 `/api/formula/activate`、歷史查詢流程。shapeKey／fingerprint 不存在回 404 `TEMPLATE_NOT_FOUND`；items 數量或形狀錯誤回 422 `TEMPLATE_REQUEST_INVALID`；參數型別或範圍錯誤回 422 `TEMPLATE_PARAM_INVALID` 並附 `detail`（含 `index`）。兩個大型指標（例如兩個 KD）合併可能超過公式節點上限而回 400 `FORMULA_COMPLEXITY_EXCEEDED`。
+- 套用後 `recordActivation` 寫入的公式（AI 或模板產生）自然依 shapeKey 歸入同一個指標，該指標的 hitCount 隨之累加。
+
 ### 固定突破量能規則
 
 - 市場：台股 regular session 09:00–13:30（Asia/Taipei）

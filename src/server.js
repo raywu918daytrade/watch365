@@ -240,6 +240,30 @@ async function routeApi(request, response) {
     return;
   }
 
+  // Indicator templates: library formulas grouped into "indicator + adjustable parameters" (no AST).
+  if (method === 'GET' && url.pathname === '/api/indicator-templates') {
+    sendJson(response, 200, { items: formulaLibrary.templates({ includePending: url.searchParams.get('includePending') !== 'false' }) });
+    return;
+  }
+
+  // Pick an indicator, set parameters (and direction), get a signed proposal in the same shape as
+  // /api/indicator-agent/parse so the existing activate / history flows apply unchanged.
+  if (method === 'POST' && url.pathname === '/api/indicator-templates/instantiate') {
+    let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    try {
+      if (!body || typeof body !== 'object' || Array.isArray(body) || (typeof body.shapeKey !== 'string' && !Array.isArray(body.items))) throw Object.assign(new Error('TEMPLATE_REQUEST_INVALID'), { code:'TEMPLATE_REQUEST_INVALID', statusCode:422 });
+      // Single template ({ shapeKey, values, direction }) or 1–2 filters ({ items:[{ shapeKey|fingerprint, values, direction }] }) joined with `all`.
+      const result = formulaLibrary.compose(Array.isArray(body.items) ? body.items : [{ shapeKey: body.shapeKey, values: body.values ?? {}, direction: body.direction ?? null }]);
+      result.proposalId = randomUUID();
+      result.proposalToken = issueFormulaToken({ ...result.proposal, proposalId: result.proposalId, sourceText: typeof body.text === 'string' && body.text.trim() ? body.text : result.proposal.name }, formulaTokenSecret);
+      delete result.proposal.ast;
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, error.statusCode || 500, { error: error.code || 'TEMPLATE_INSTANTIATE_FAILED', ...(error.detail ? { detail: error.detail } : {}) });
+    }
+    return;
+  }
+
   if (method === 'GET' && url.pathname === '/api/indicator-requests') {
     sendJson(response,200,{items:indicatorRequests.list()});
     return;
