@@ -105,7 +105,7 @@ test('指紋與 canonical 涵蓋新積木：鍵序無關、參數不同即不同
   const c = validateFormula(bin('gt', close, win('prev', win('highest', src('high'), 20), 2)));
   assert.equal(a.fingerprint, b.fingerprint);
   assert.notEqual(a.fingerprint, c.fingerprint);
-  assert.deepEqual([...FORMULA_OPS].sort(), ['abs', 'add', 'all', 'any', 'constant', 'crosses_above', 'crosses_below', 'div', 'ema', 'gt', 'gte', 'highest', 'lowest', 'lt', 'lte', 'max', 'min', 'mul', 'prev', 'rma', 'sma', 'source', 'stddev', 'sub']);
+  assert.deepEqual([...FORMULA_OPS].sort(), ['abs', 'add', 'all', 'any', 'constant', 'crosses_above', 'crosses_below', 'div', 'ema', 'gt', 'gte', 'highest', 'lowest', 'lt', 'lte', 'max', 'min', 'mul', 'prev', 'rma', 'sma', 'source', 'stddev', 'sub', 'tr']);
 });
 
 // ---- Reference implementations (plain loops, independent of the engine) ----------------------
@@ -261,4 +261,13 @@ test('Ichimoku recipes validate, warm up within a session and label readably', (
   const tk = validateFormula(recipe('ichimoku_tk_cross'));
   assert.equal(tk.warmupBars, 27);
   assert.match(formulaSummary(tk.ast), /轉換線\(9\).*基準線\(26\)/);
+});
+
+test('tr block equals Wilder true range and ATR labels readably', () => {
+  const bars = [{ open:10, high:11, low:9, close:10.5, volume:1 }, { open:10.5, high:13, low:10, close:12, volume:1 }, { open:12, high:12.5, low:8, close:9, volume:1 }];
+  const series = evaluateFormulaSeries({ op:'gt', left:{ op:'tr' }, right:{ op:'constant', value:0 } }, bars);
+  assert.deepEqual(series, [null, true, true]);
+  const atr = validateFormula({ op:'gt', left:{ op:'rma', input:{ op:'tr' }, period:14 }, right:{ op:'constant', value:1 } });
+  assert.equal(atr.warmupBars, 15);
+  assert.match(formulaSummary(atr.ast), /ATR\(14\)/);
 });

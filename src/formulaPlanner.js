@@ -61,13 +61,13 @@ export function buildPlannerSystem(definitions){
     '你是台股盤中監控條件規劃器，只輸出一個 JSON 物件，不得執行程式，說明一律繁體中文。',
     '輸出格式（硬性規定）：頂層欄位 status/message/name/timeframe/indicatorId/version/params/nodes/rootId 都要有。每個 node 一律輸出 9 個 key：id,op,field,value,period,inputId,leftId,rightId,itemIds，不適用的填 null，不可省略。status=formula 時 params 一律 {"period":null,"threshold":null}、indicatorId/version 為 null，數字只寫在 node 的 period/value。status=discussion/clarification 時 nodes 必須是空陣列 []、rootId 為 null。',
     `完整範例「收盤上穿 SMA 20」：${JSON.stringify({status:'formula',message:'',name:'收盤上穿 SMA 20',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[{id:'n1',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},{id:'n2',op:'sma',field:null,value:null,period:20,inputId:'n1',leftId:null,rightId:null,itemIds:null},{id:'n3',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'n1',rightId:'n2',itemIds:null}],rootId:'n3'})}`,
-    '系統只有一分鐘K；沒講週期一律視為一分鐘K，timeframe填1m，絕不為週期追問。只用當日已完成的一分鐘K。積木：source(open/high/low/close/volume)、constant、add/sub/mul/div/max/min、abs、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
+    '系統只有一分鐘K；沒講週期一律視為一分鐘K，timeframe填1m，絕不為週期追問。只用當日已完成的一分鐘K。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
     'nodes依相依順序排列、id唯一、可重複引用。source填field；constant填value；sma/ema/rma/highest/lowest/stddev/prev填inputId+period；abs填inputId；算術與比較填leftId/rightId；all/any填itemIds。rootId指向最後一個布林節點。',
     '更多範例（只列非null欄位，實際輸出其餘填null）：',
     ...FORMULA_RECIPES.filter((recipe)=>PROMPT_EXAMPLE_KEYS.includes(recipe.key)).map((recipe)=>`- ${recipe.name}：${compactGraph(toGraph(recipe.ast))}`),
-    '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1), …)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」先highest再prev 1。「量增／爆量」未指定用volume≥sma(volume,20)×2。ATR=rma(max(high−low,max(abs(high−prev(close,1)),abs(low−prev(close,1)))),14)。CCI以stddev近似平均絕對偏差：(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。威廉%R=(highest−close)÷(highest−lowest)×(−100)。一目：轉換線=(highest(high,9)+lowest(low,9))/2、基準線同26、先行A=prev((轉換+基準)/2,26)、先行B=prev((highest(high,52)+lowest(low,52))/2,26)。',
+    '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1), …)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」先highest再prev 1。「量增／爆量」未指定用volume≥sma(volume,20)×2。ATR(14)=rma(tr,14)（tr 是現成積木，不要自己組真實波幅）。DMI/ADX 需要 +DM/−DM 的方向判斷，無法表達，回discussion並建議 ATR 波動或均線條件。CCI以stddev近似平均絕對偏差：(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。威廉%R=(highest−close)÷(highest−lowest)×(−100)。一目：轉換線=(highest(high,9)+lowest(low,9))/2、基準線同26、先行A=prev((轉換+基準)/2,26)、先行B=prev((highest(high,52)+lowest(low,52))/2,26)。',
     '需要昨收、當日第一根或當日累計（跳空、VWAP、OBV、開盤價漲幅）的條件無法表達：回discussion並給替代（如量增、收盤 vs sma）。',
-    '這是公式階段，只能回formula、clarification或discussion，禁止existing。只要能用積木組出就回formula。參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。要求其他週期、跨股票、籌碼、財報、新聞、未完成K、超過270根暖機或積木組不出時回discussion：message一句話說原因，並且必須包含一句「可改用：…」寫出一個可用一分鐘K計算、最接近的具體替代條件。',
+    '這是公式階段，只能回formula、clarification或discussion，禁止existing。只要能用積木組出就回formula。參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。要求其他週期、跨股票、籌碼、財報、新聞、未完成K、超過270根暖機或積木組不出時回discussion：message一句話說原因，並且必須包含一句「可改用：…」寫出一個可用一分鐘K計算、最接近的具體替代條件；替代條件要和原需求同類（量能→量能、趨勢→均線或 MACD、波動→ATR 或布林、動能→RSI 或 KD），不要每次都寫同一組。',
     'name與message只描述條件，用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。',
     `Registry: ${JSON.stringify(registry)}`
   ].join('\n');
@@ -87,6 +87,9 @@ export function normalizePlan(raw){
     for(const key of ['inputId','leftId','rightId'])if(typeof out[key]==='number')out[key]=String(out[key]);
     if(Array.isArray(out.itemIds))out.itemIds=out.itemIds.map((id)=>typeof id==='number'?String(id):id);
     if(['all','any'].includes(out.op)){out.leftId=null;out.rightId=null;}else out.itemIds=null;
+    // Models write prev as n/shift/offset or leave it out meaning "the previous bar".
+    if(out.op==='prev'&&out.period===null){const alias=toNumber(node.n??node.shift??node.offset??node.bars);out.period=alias??1;}
+    if(out.op==='tr'){out.field=null;out.value=null;out.period=null;out.inputId=null;out.leftId=null;out.rightId=null;}
     return out;
   });
   if(plan.status==='formula'){plan.params={period:null,threshold:null};plan.indicatorId=null;plan.version=null;if(plan.timeframe===null)plan.timeframe='1m';
@@ -145,7 +148,7 @@ function compileGraph(nodes,rootId){
   if(!Array.isArray(nodes)||nodes.length<1)throw invalid('formula needs at least one node');if(nodes.length>MAX_GRAPH_NODES)throw invalid(`too many nodes (${nodes.length} > ${MAX_GRAPH_NODES})`);
   if(typeof rootId!=='string')throw invalid('rootId required for formula');
   const built=new Map(),ops=new Map();
-  for(const [index,node] of nodes.entries()){
+  for(const [index,node] of orderNodes(nodes).entries()){
     exactObject(node,NODE_KEYS,`node #${index+1}`);
     if(typeof node.id!=='string'||!/^[a-z0-9][a-z0-9_]{0,31}$/i.test(node.id))throw invalid(`node #${index+1}: id '${node.id}' invalid`);
     if(built.has(node.id))throw invalid(`node ${node.id}: duplicate id`);
@@ -155,6 +158,7 @@ function compileGraph(nodes,rootId){
     let ast;
     if(node.op==='source')ast={op:'source',field:node.field};
     else if(node.op==='constant')ast={op:'constant',value:node.value};
+    else if(node.op==='tr')ast={op:'tr'};
     else if(INPUT_PERIOD_OPS.includes(node.op))ast={op:node.op,input:ref('inputId',node.inputId),period:node.period};
     else if(node.op==='abs')ast={op:'abs',input:ref('inputId',node.inputId)};
     else if(['all','any'].includes(node.op))ast={op:node.op,items:node.itemIds.map((id)=>ref('itemIds',id))};
@@ -165,9 +169,20 @@ function compileGraph(nodes,rootId){
   if(!BOOLEAN_OPS.includes(ops.get(rootId)))throw invalid(`rootId ${rootId} not boolean (${ops.get(rootId)})`);
   return root;
 }
+// Models sometimes list a node before the nodes it refers to; order by dependencies (stable for valid input),
+// leaving genuinely undefined references to be reported by compileGraph.
+function orderNodes(nodes){
+  const byId=new Map();for(const node of nodes)if(node&&typeof node.id==='string'&&!byId.has(node.id))byId.set(node.id,node);
+  const refs=(node)=>[node.inputId,node.leftId,node.rightId,...(Array.isArray(node.itemIds)?node.itemIds:[])].filter((id)=>typeof id==='string');
+  const ordered=[],seen=new Set(),visiting=new Set();
+  const visit=(node)=>{if(!node||seen.has(node)||visiting.has(node))return;visiting.add(node);for(const id of refs(node)){const dep=byId.get(id);if(dep&&dep!==node)visit(dep);}visiting.delete(node);seen.add(node);ordered.push(node);};
+  for(const node of nodes)visit(node);
+  return ordered;
+}
 function validateNodeFields(node){
   const id=(value)=>typeof value==='string';const label=`node ${node.id}`;
   const requireNull=(...keys)=>{for(const key of keys)if(node[key]!==null)throw invalid(`${label}: ${key} must be null for ${node.op}`);};
+  if(node.op==='tr'){requireNull('field','value','period','inputId','leftId','rightId','itemIds');return;}
   if(node.op==='source'){if(!FORMULA_SOURCE_FIELDS.includes(node.field))throw invalid(`${label}: field '${node.field}' not one of ${FORMULA_SOURCE_FIELDS.join('/')}`);requireNull('value','period','inputId','leftId','rightId','itemIds');return;}
   if(node.op==='constant'){if(typeof node.value!=='number'||!Number.isFinite(node.value))throw invalid(`${label}: value required for constant`);requireNull('field','period','inputId','leftId','rightId','itemIds');return;}
   if(INPUT_PERIOD_OPS.includes(node.op)){if(!Number.isInteger(node.period))throw invalid(`${label}: period required for ${node.op}`);if(!id(node.inputId))throw invalid(`${label}: inputId required for ${node.op}`);requireNull('field','value','leftId','rightId','itemIds');return;}

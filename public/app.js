@@ -327,7 +327,7 @@ function drawAi(){
   target.className='proto-condition-editor';target.innerHTML=head+body;
   target.querySelector('#aiClose').addEventListener('click',()=>{state.ai=null;save();drawAi();});
   target.querySelectorAll('[data-go]').forEach((button)=>button.addEventListener('click',()=>go(button.dataset.go)));
-  target.querySelector('#aiRetry')?.addEventListener('click',runAi);
+  target.querySelector('#aiRetry')?.addEventListener('click',()=>{aiCache.delete(ai.text);runAi();});
   target.querySelector('#aiRequest')?.addEventListener('click',()=>{state.requestText=ai.text;state.ai=null;save();go('request');});
   target.querySelector('#aiQuickRequest')?.addEventListener('click',async(event)=>{
     const button=event.currentTarget;button.disabled=true;button.textContent='送出中…';

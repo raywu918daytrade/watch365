@@ -16,7 +16,9 @@ const ARITH=['add','sub','mul','div','max','min'];
 const WINDOW=['sma','ema','rma','highest','lowest','stddev'];
 const COMPARE=['crosses_above','crosses_below','gte','lte','gt','lt'];
 const LOGIC=['all','any'];
-export const FORMULA_OPS=Object.freeze(['source','constant',...ARITH,'abs',...WINDOW,'prev',...COMPARE,...LOGIC]);
+// 'tr' is Wilder's true range max(high−low, |high−prev close|, |low−prev close|) as one block, so the model
+// cannot get the definition wrong (a live test produced a plausible-looking ATR with a wrong TR).
+export const FORMULA_OPS=Object.freeze(['source','constant','tr',...ARITH,'abs',...WINDOW,'prev',...COMPARE,...LOGIC]);
 const MIN_PERIOD=2,MAX_PERIOD=200,MAX_PREV=60,MIN_ITEMS=2,MAX_ITEMS=4;
 const MAX_SOURCE_TEXT=200;
 
@@ -36,6 +38,7 @@ function visit(node,depth,budget){
   const keys=Object.keys(node);const number=(child)=>{if(visit(child,depth+1,budget)!=='number')throw formulaError('FORMULA_TYPE_INVALID');};
   if(node.op==='source'){exact(keys,['op','field']);if(!FORMULA_SOURCE_FIELDS.includes(node.field))throw formulaError('FORMULA_SOURCE_UNSUPPORTED');return'number';}
   if(node.op==='constant'){exact(keys,['op','value']);if(typeof node.value!=='number'||!Number.isFinite(node.value)||Math.abs(node.value)>1e9)throw formulaError('FORMULA_NUMBER_INVALID');return'number';}
+  if(node.op==='tr'){exact(keys,['op']);return'number';}
   if(ARITH.includes(node.op)){exact(keys,['op','left','right']);number(node.left);number(node.right);return'number';}
   if(node.op==='abs'){exact(keys,['op','input']);number(node.input);return'number';}
   if(WINDOW.includes(node.op)){exact(keys,['op','input','period']);if(!Number.isInteger(node.period)||node.period<MIN_PERIOD||node.period>MAX_PERIOD)throw formulaError('FORMULA_PERIOD_INVALID');number(node.input);return'number';}
@@ -47,6 +50,7 @@ function visit(node,depth,budget){
 // Bars needed before the first non-null value (within one uninterrupted run of data).
 function warmupBars(node){
   if(['source','constant'].includes(node.op))return 1;
+  if(node.op==='tr')return 2;
   if(ARITH.includes(node.op)||COMPARE.includes(node.op))return Math.max(warmupBars(node.left),warmupBars(node.right))+(node.op.startsWith('crosses_')?1:0);
   if(node.op==='abs')return warmupBars(node.input);
   if(WINDOW.includes(node.op))return warmupBars(node.input)+node.period-1;
@@ -64,6 +68,7 @@ function compute(node,context){
   const {bars}=context;
   if(node.op==='source')return bars.map((bar)=>finite(bar?.[node.field]));
   if(node.op==='constant')return bars.map(()=>node.value);
+  if(node.op==='tr')return bars.map((bar,index)=>{const high=finite(bar?.high),low=finite(bar?.low),prevClose=index>0?finite(bars[index-1]?.close):null;if(high==null||low==null||prevClose==null)return null;return Math.max(high-low,Math.abs(high-prevClose),Math.abs(low-prevClose));});
   if(ARITH.includes(node.op)){const a=series(node.left,context),b=series(node.right,context);return a.map((value,index)=>arith(node.op,value,b[index]));}
   if(node.op==='abs')return series(node.input,context).map((value)=>value==null?null:Math.abs(value));
   if(WINDOW.includes(node.op))return rolling(node.op,series(node.input,context),node.period);
@@ -132,6 +137,7 @@ function knownLabel(node){
   if(node.op==='sub'){const f=node.left?.period,l=node.right?.period;if(Number.isInteger(f)&&Number.isInteger(l)&&same(macdLine(f,l)))return `MACD DIF(${f},${l})`;}
   if(node.op==='ema'){const f=node.input?.left?.period,l=node.input?.right?.period;if(Number.isInteger(f)&&Number.isInteger(l)&&same(macdSignal(f,l,node.period)))return `MACD DEA(${f},${l},${node.period})`;}
   if(node.op==='add'||node.op==='sub'){const p=node.left?.period,k=node.right?.right?.value;if(node.left?.op==='sma'&&Number.isInteger(p)&&typeof k==='number'&&same(bollinger(p,k,node.op==='add'?'upper':'lower')))return `布林${node.op==='add'?'上軌':'下軌'}(${p}, ${k}σ)`;}
+  if(node.op==='rma'&&node.input?.op==='tr')return `ATR(${node.period})`;
   if(node.op==='max'&&same(ichimokuCloudTop()))return '一目雲層上緣(9,26,52)';
   if(node.op==='min'&&same(ichimokuCloudBottom()))return '一目雲層下緣(9,26,52)';
   if(node.op==='div'){const n=node.left?.left?.period;if(Number.isInteger(n)&&same(ichimokuMid(n)))return n===9?'一目轉換線(9)':n===26?'一目基準線(26)':`一目中值線(${n})`;}
@@ -141,6 +147,7 @@ function summarize(node){
   const known=knownLabel(node);if(known)return known;
   if(node.op==='source')return SOURCE_LABEL[node.field];
   if(node.op==='constant')return String(node.value);
+  if(node.op==='tr')return '真實波幅';
   if(WINDOW.includes(node.op))return `${WINDOW_LABEL[node.op]}(${summarize(node.input)}, ${node.period})`;
   if(node.op==='prev')return `前${node.period}根的${summarize(node.input)}`;
   if(node.op==='abs')return `|${summarize(node.input)}|`;

@@ -155,3 +155,23 @@ test('normalizeAgentOutput 補齊 registry 解析器省略的欄位，但不吞�
   assert.throws(() => validateAgentOutput(normalizeAgentOutput({ ...repaired, executor:'eval' }), definitions), /INDICATOR_AGENT_OUTPUT_INVALID/);
   assert.equal(normalizeAgentOutput(null), null);
 });
+
+test('planner tolerates forward references, prev without period and the tr block', () => {
+  const nodes = [
+    { id:'root', op:'crosses_above', leftId:'c', rightId:'atr' },
+    { id:'atr', op:'rma', inputId:'tr', period:14 },
+    { id:'tr', op:'tr' },
+    { id:'c', op:'source', field:'close' },
+    { id:'p', op:'prev', inputId:'c' }
+  ];
+  const plan = validatePlan(normalizePlan({ status:'formula', name:'收盤上穿 ATR(14)', nodes, rootId:'root' }), []);
+  assert.equal(plan.status, 'formula');
+  assert.match(plan.formulaSummary, /ATR\(14\)/);
+  const red3 = normalizePlan({ status:'formula', name:'連續三根紅K', nodes:[
+    { id:'c', op:'source', field:'close' }, { id:'o', op:'source', field:'open' },
+    { id:'c1', op:'prev', inputId:'c', n:1 }, { id:'o1', op:'prev', inputId:'o', n:1 }, { id:'c2', op:'prev', inputId:'c', n:2 }, { id:'o2', op:'prev', inputId:'o', n:2 },
+    { id:'b0', op:'gt', leftId:'c', rightId:'o' }, { id:'b1', op:'gt', leftId:'c1', rightId:'o1' }, { id:'b2', op:'gt', leftId:'c2', rightId:'o2' },
+    { id:'all', op:'all', itemIds:['b0','b1','b2'] } ], rootId:'all' });
+  assert.equal(red3.nodes.find((n) => n.id === 'c2').period, 2);
+  assert.equal(validatePlan(red3, []).status, 'formula');
+});
