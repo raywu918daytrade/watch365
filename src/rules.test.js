@@ -648,7 +648,11 @@ test('registry-first 修復固定 RSI 根因、單次分流、補問 context 與
 
   // Engine-unsupported timeframe: answered in one call with a 1m alternative.
   calls=0;const d1Pass=agentOutput({status:'unsupported',indicatorId:'sma.cross',requestedIndicator:'sma',requestedTimeframe:'d1',requestedDirection:'crosses_above',params:{period:20,threshold:null},unsupportedReason:'日線目前不支援'});
-  const d1Result=await planMonitorCondition('日線站上 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(d1Pass);}});assert.equal(d1Result.status,'discussion');assert.match(d1Result.message,/一分鐘/);assert.equal(calls,1);
+  // Timeframe wording is intercepted before any model call (zero calls) and names a 1m rewrite.
+  const d1Result=await planMonitorCondition('日線站上 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(d1Pass);}});assert.equal(d1Result.status,'discussion');assert.match(d1Result.message,/一分鐘/);assert.match(d1Result.message,/SMA\(20\)/);assert.equal(calls,0);
+  const monthly=await planMonitorCondition('日線站上月線',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(d1Pass);}});assert.equal(monthly.status,'discussion');assert.match(monthly.message,/月線/);assert.match(monthly.message,/SMA\(20\)/);assert.equal(calls,0);
+  // The model's own d1 verdict on wording the rule misses still ends in a 1m alternative.
+  const d1Model=await planMonitorCondition('以每天收盤站上 SMA 20',definitions,{env,fetchImpl:async()=>{calls++;return groqResponse(d1Pass);}});assert.equal(d1Model.status,'discussion');assert.match(d1Model.message,/一分鐘/);assert.equal(calls,1);
   // Other registry misses on 1m go on to formula planning instead of stopping at a request.
   calls=0;const rsiBelow=agentOutput({status:'unsupported',indicatorId:'rsi.cross',requestedIndicator:'rsi',requestedTimeframe:'1m',requestedDirection:'crosses_below',params:{period:14,threshold:30},unsupportedReason:'RSI 下穿目前不支援'});
   const planDiscussion={status:'discussion',message:'RSI 下穿需要的運算尚未提供，可改用收盤下穿 SMA(20)。',name:'RSI 下穿',timeframe:null,indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[],rootId:null};

@@ -23,6 +23,9 @@ export const FORMULA_PLAN_SCHEMA={type:'object',additionalProperties:false,prope
 export async function planMonitorCondition(text,definitions,{context=[],...options}={}){
   const request=String(text||'').trim();if(!request)throw plannerError('INDICATOR_AGENT_INPUT_REQUIRED',400);if(request.length>500)throw plannerError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
   const history=validateContext(context);
+  // Other timeframes are an engine limit, not something the model should guess at: answer at once with a 1m rewrite.
+  const otherTimeframe=detectOtherTimeframe(request);
+  if(otherTimeframe&&!history.length)return{status:'discussion',message:otherTimeframe,provider:{provider:'rules',model:'timeframe'}};
   const registryResult=await analyzeIndicatorRequest(request,definitions,{...options,context:history});
   if(registryResult.status==='matched')return{status:'existing',summary:registryResult.summary,proposal:registryResult.proposal,provider:registryResult.provider};
   // A registry match that only lacked parameters is applied with the registry defaults (shown in the summary)
@@ -73,6 +76,17 @@ export function validatePlan(raw,definitions,provider={provider:'stub',model:'st
   return{status:'formula',summary:`${name} · 一分鐘`,formulaSummary:formulaSummary(ast),proposal:{name,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider};
 }
 
+// Matches 日線／週線／月線／季線／年線／5分／15分／60分／小時 K and offers the closest 1m condition.
+export function detectOtherTimeframe(text){
+  const t=String(text).normalize('NFKC').toLowerCase();
+  const MA_NAMES=[['月線','20'],['季線','60'],['半年線','120'],['年線','240'],['週線','5'],['周線','5']];
+  const hitMa=MA_NAMES.find(([name])=>t.includes(name));
+  const hitTf=/(日線|日k|日k線|daily|週k|周k|weekly|月k|monthly|(\d+)\s*分(?:鐘|k|線)|小時|hour)/i.exec(t);
+  if(!hitMa&&!hitTf)return null;
+  const alt=hitMa?`收盤上穿 SMA(${hitMa[1]})`:'收盤上穿 SMA(20)';
+  const what=hitMa?`「${hitMa[0]}」是日線上的均線`:'日線、週線或其他分鐘週期';
+  return `目前只支援一分鐘 K 的盤中監控，${what}，暫時還不能用來監控。最接近的一分鐘 K 寫法是「${alt}」（以一分鐘 K 計算的均線），可以直接輸入試試。`;
+}
 function knownUnsupportedFormula(result,definitions){const draft=result.requestDraft;if(!draft||draft.requestedIndicator!=='sma'||!['1m','unknown'].includes(draft.requestedTimeframe)||draft.requestedDirection!=='crosses_below'||(draft.params?.period!=null&&!Number.isFinite(draft.params.period))||draft.params?.threshold!=null)return null;const definition=definitions.find((item)=>item.executor==='sma_cross');if(!definition)return null;const period=draft.params?.period??definition.params.find((item)=>item.key==='period')?.default;let strategy;try{strategy=validateStrategy({id:definition.id,version:definition.version,timeframe:'1m',params:{period}},definition);}catch{return null;}const ast={op:'crosses_below',left:{op:'source',field:'close'},right:{op:'sma',input:{op:'source',field:'close'},period:strategy.params.period}};const validated=validateFormula(ast);return{status:'formula',summary:`價格下穿 SMA ${strategy.params.period} · 一分鐘`,formulaSummary:formulaSummary(validated.ast),proposal:{name:`價格下穿 SMA ${strategy.params.period}`,ast:validated.ast,fingerprint:validated.fingerprint,warmupBars:validated.warmupBars},provider:result.provider};}
 
 function compileGraph(nodes,rootId){if(!Array.isArray(nodes)||nodes.length<1||nodes.length>MAX_GRAPH_NODES||typeof rootId!=='string')throw plannerError('FORMULA_PLAN_INVALID',422);const built=new Map();for(const node of nodes){exactObject(node,NODE_KEYS);if(typeof node.id!=='string'||!/^[a-z0-9][a-z0-9_]{0,31}$/i.test(node.id)||built.has(node.id)||!NODE_OPS.includes(node.op))throw plannerError('FORMULA_PLAN_INVALID',422);validateNodeFields(node);let ast;if(node.op==='source')ast={op:'source',field:node.field};else if(node.op==='constant')ast={op:'constant',value:node.value};else if(INPUT_PERIOD_OPS.includes(node.op))ast={op:node.op,input:lookup(built,node.inputId),period:node.period};else if(node.op==='abs')ast={op:'abs',input:lookup(built,node.inputId)};else if(['all','any'].includes(node.op))ast={op:node.op,items:node.itemIds.map((id)=>lookup(built,id))};else ast={op:node.op,left:lookup(built,node.leftId),right:lookup(built,node.rightId)};built.set(node.id,ast);}return lookup(built,rootId);}

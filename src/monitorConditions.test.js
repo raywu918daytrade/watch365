@@ -29,9 +29,12 @@ test('two SMA/EMA conditions combine with formula all', () => {
   assert.equal(plan.strategy.name, 'SMA 5 上穿 ＋ EMA 20 上穿');
 });
 
-test('RSI cannot cross downward or combine with other conditions', () => {
-  assert.throws(() => planConditionStrategy([{ indicator:'rsi', direction:'below', period:14, threshold:70 }]), { code:'CONDITION_RSI_BELOW_UNSUPPORTED' });
-  assert.throws(() => planConditionStrategy([{ indicator:'rsi', direction:'above', period:14, threshold:30 }, { indicator:'sma', direction:'above', period:20 }]), { code:'CONDITION_RSI_COMBINATION_UNSUPPORTED' });
+test('RSI downward cross and RSI combinations become Wilder RSI formulas', () => {
+  const below = planConditionStrategy([{ indicator:'rsi', direction:'below', period:14, threshold:70 }]);
+  assert.equal(below.kind, 'formula'); assert.equal(below.strategy.formula.ast.op, 'crosses_below'); assert.equal(below.strategy.formula.ast.right.value, 70);
+  const combo = planConditionStrategy([{ indicator:'rsi', direction:'above', period:14, threshold:30 }, { indicator:'sma', direction:'above', period:20 }]);
+  assert.equal(combo.kind, 'formula'); assert.equal(combo.strategy.formula.ast.op, 'all'); assert.equal(combo.strategy.formula.ast.items.length, 2);
+  assert.equal(combo.strategy.name, 'RSI 14 上穿 30 ＋ SMA 20 上穿');
 });
 
 test('invalid condition input is rejected', () => {

@@ -3,7 +3,7 @@
 // Also: AI parsing of new indicators, 7-trading-day M1 history lookup, request progress and notification retry.
 const KEY='watch365_ui_v2';
 const INDICATORS=[
-  {id:'rsi',name:'RSI',desc:'Wilder RSI 由下往上穿越門檻',directions:['above'],periodMax:100,threshold:true,defaults:{period:14,threshold:30}},
+  {id:'rsi',name:'RSI',desc:'Wilder RSI 穿越門檻（上穿或下穿）',directions:['above','below'],periodMax:100,threshold:true,defaults:{period:14,threshold:30}},
   {id:'sma',name:'SMA 簡單移動平均',desc:'收盤價穿越 SMA',directions:['above','below'],periodMax:200,threshold:false,defaults:{period:20}},
   {id:'ema',name:'EMA 指數移動平均',desc:'收盤價穿越 EMA',directions:['above','below'],periodMax:200,threshold:false,defaults:{period:20}}
 ];
@@ -238,8 +238,8 @@ function conditions(){
   root.querySelectorAll('#direction,#period,#threshold').forEach((input)=>input.addEventListener('input',()=>{capture();root.querySelector('#paramError').textContent='';}));
   root.querySelector('#addCondition').addEventListener('click',()=>{
     capture();
-    const values=state.drafts[item.id],period=Number(values.period),threshold=item.threshold?Number(values.threshold):null,hasRsi=state.conditions.some((entry)=>entry.indicator==='rsi');
-    const error=!Number.isInteger(period)||period<2||period>item.periodMax?`期數需為 2–${item.periodMax} 的整數。`:item.threshold&&(!values.threshold||!Number.isFinite(threshold)||threshold<1||threshold>99)?'門檻需介於 1–99。':state.formula?ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS:state.conditions.length>=2?'目前最多只能組合 2 個條件。':state.conditions.length&&(hasRsi||item.id==='rsi')?'RSI 目前不能與其他條件組合，請單獨使用。':'';
+    const values=state.drafts[item.id],period=Number(values.period),threshold=item.threshold?Number(values.threshold):null;
+    const error=!Number.isInteger(period)||period<2||period>item.periodMax?`期數需為 2–${item.periodMax} 的整數。`:item.threshold&&(!values.threshold||!Number.isFinite(threshold)||threshold<1||threshold>99)?'門檻需介於 1–99。':state.formula?ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS:state.conditions.length>=2?'目前最多只能組合 2 個條件。':'';
     if(error){root.querySelector('#paramError').textContent=error;return;}
     state.conditions.push({id:crypto.randomUUID(),indicator:item.id,direction:values.direction,period,threshold});state.editorOpen=false;state.history=null;save();render();
   });
@@ -256,7 +256,6 @@ function conditionLabel(condition){
 function addBlockReason(indicatorId){
   if(state.formula)return'已使用 AI 自訂條件，要加入其他條件請先移除它。';
   if(state.conditions.length>=2)return'已達 2 個條件上限，要換條件請先移除一個。';
-  if(state.conditions.length&&(indicatorId==='rsi'||state.conditions.some((entry)=>entry.indicator==='rsi')))return'RSI 目前只能單獨使用，不能和其他條件組合。';
   return'';
 }
 function directionTag(direction){return`<span class="proto-dir ${direction==='below'?'down':'up'}">${DIRECTION_LABEL[direction]||''}</span>`;}
@@ -309,7 +308,7 @@ function drawAi(){
   const head=`<div class="proto-history-head"><div><p class="proto-eyebrow">AI 解析</p><h2>${escapeHtml(ai.text)}</h2></div><button class="proto-link" id="aiClose">關閉</button></div>`;
   let body;
   if(ai.loading)body='<div class="proto-status"><strong>AI 解析中…</strong><p>通常需要幾秒鐘。</p></div>';
-  else if(ai.error)body=`<div class="proto-status"><strong>解析失敗</strong><p>${escapeHtml(ai.error)}</p><div class="proto-inline-actions"><button class="proto-secondary" id="aiRetry">再試一次</button><button class="proto-secondary" id="aiQuickRequest">直接送出需求</button></div></div>`;
+  else if(ai.error)body=`<div class="proto-status"><strong>這次沒有解析成功</strong><p>${escapeHtml(ai.error)}</p><p class="proto-signature">可以換個更具體的說法，例如寫出指標名稱、期數和方向：「KD 黃金交叉」「收盤上穿 SMA(60)」「成交量大於 20 根均量 2 倍」。</p><label class="proto-search"><input id="aiReply" type="text" placeholder="換個說法重新描述" aria-label="換個說法重新解析"></label><div class="proto-inline-actions"><button class="proto-link" id="aiQuickRequest">送出需求</button><button class="proto-secondary" id="aiRetry">同樣文字再試一次</button><button class="proto-primary" id="aiSendReply">重新解析</button></div></div>`;
   else{
     const result=ai.result||{};
     if(result.status==='existing'){const condition=registryCondition(result.proposal);body=condition?`<div class="proto-status"><strong>對應到已有指標：${escapeHtml(result.summary)}</strong><p>加入後可以和其他條件一起使用。</p><button class="proto-primary" id="aiUseExisting">加入這個條件</button></div>`:quickRequestCard(ai,`${result.summary}目前不能從這裡建立`,'');}
@@ -333,7 +332,6 @@ function drawAi(){
     const condition=registryCondition(ai.result.proposal);
     if(state.formula){alertInline(ERROR_TEXT.FORMULA_WITH_OTHER_CONDITIONS);return;}
     if(state.conditions.length>=2){alertInline('目前最多只能組合 2 個條件。');return;}
-    if(state.conditions.length&&(condition.indicator==='rsi'||state.conditions.some((item)=>item.indicator==='rsi'))){alertInline('RSI 目前不能與其他條件組合，請單獨使用。');return;}
     state.conditions.push({id:crypto.randomUUID(),...condition});state.ai=null;state.requestText='';state.history=null;save();render();
   });
   target.querySelector('#aiUseFormula')?.addEventListener('click',()=>{
@@ -342,7 +340,7 @@ function drawAi(){
     state.conditions=[];state.ai=null;state.requestText='';state.history=null;save();render();
   });
   const reply=target.querySelector('#aiReply');
-  const send=()=>{const text=reply.value.trim();if(!text)return;ai.context=[...ai.context,{request:ai.text.slice(0,500),response:String(ai.result.message||'').slice(0,500)}].slice(-4);ai.text=text;ai.result=null;save();runAi();};
+  const send=()=>{const text=reply.value.trim();if(!text)return;if(ai.result?.message)ai.context=[...ai.context,{request:ai.text.slice(0,500),response:String(ai.result.message).slice(0,500)}].slice(-4);else ai.context=[];ai.text=text;ai.result=null;ai.error=null;save();runAi();};
   target.querySelector('#aiSendReply')?.addEventListener('click',send);
   reply?.addEventListener('keydown',(event)=>{if(event.key==='Enter')send();});
 }

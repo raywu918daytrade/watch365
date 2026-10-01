@@ -1,4 +1,5 @@
 import { validateFormula, FORMULA_VERSION } from './formulaEngine.js';
+import { wilderRsi } from './formulaRecipes.js';
 
 // Translates the structured conditions from the new UI into a single backend strategy.
 // Registry executors cover single RSI/SMA upward crosses; everything else (EMA, downward crosses,
@@ -30,8 +31,7 @@ export function planConditionStrategy(conditions){
   const parsed=parseConditions(conditions);
   if(parsed.length===1&&parsed[0].direction==='above'&&parsed[0].indicator==='rsi')return{kind:'registry',request:{id:'rsi.cross',version:'1.0.0',params:{period:parsed[0].period,threshold:parsed[0].threshold}}};
   if(parsed.length===1&&parsed[0].direction==='above'&&parsed[0].indicator==='sma')return{kind:'registry',request:{id:'sma.cross',version:'1.0.0',params:{period:parsed[0].period}}};
-  // RSI only exists as a registry executor (upward cross); the formula engine has no RSI operator.
-  if(parsed.some((item)=>item.indicator==='rsi'))throw conditionError(parsed.length>1?'CONDITION_RSI_COMBINATION_UNSUPPORTED':'CONDITION_RSI_BELOW_UNSUPPORTED');
+  // RSI downward crosses and RSI combined with other conditions use the Wilder RSI recipe as a formula.
   const nodes=parsed.map(crossNode);
   const ast=nodes.length===1?nodes[0]:{op:'all',items:nodes};
   const validated=validateFormula(ast);
@@ -42,9 +42,11 @@ export function conditionsName(conditions){
   return conditions.map((item)=>`${item.indicator.toUpperCase()} ${item.period} ${item.direction==='above'?'上穿':'下穿'}${item.threshold===null?'':` ${item.threshold}`}`).join(' ＋ ');
 }
 
-function crossNode({indicator,direction,period}){
+function crossNode({indicator,direction,period,threshold}){
+  const op=direction==='above'?'crosses_above':'crosses_below';
+  if(indicator==='rsi')return{op,left:wilderRsi(period),right:{op:'constant',value:threshold}};
   const close={op:'source',field:'close'};
-  return{op:direction==='above'?'crosses_above':'crosses_below',left:close,right:{op:indicator,input:{op:'source',field:'close'},period}};
+  return{op,left:close,right:{op:indicator,input:{op:'source',field:'close'},period}};
 }
 
 function conditionError(code){return Object.assign(new Error(code),{code,statusCode:422});}
