@@ -35,12 +35,14 @@ export class DailyIndex {
   ready() { return Boolean(this.series); }
   latestDate() { return this.dates.at(-1) ?? null; }
 
-  ensure(conditions) {
+  // skipUnsupported: leave session-only conditions out instead of failing (list candidates; they count as 0).
+  ensure(conditions, { skipUnsupported = false } = {}) {
     if (!this.series) return 0;
     const missing = [];
     for (const { key, ast } of conditions) {
       if (this.conditions.has(key) || missing.some((item) => item.key === key)) continue;
       const validated = validateFormula(ast);
+      if (!dailyCapable(validated.ast) && skipUnsupported) continue;
       if (!dailyCapable(validated.ast)) throw Object.assign(new Error('DAILY_CONDITION_UNSUPPORTED'), { code:'DAILY_CONDITION_UNSUPPORTED', key, statusCode:422 });
       missing.push({ key, ast:validated.ast, met:new Map() });
     }
@@ -85,7 +87,7 @@ export class DailyIndex {
   // candidates: keys tried as the next filter (stocks met on the latest date with it added).
   // events: the last step also lists every newly met stock per day ({ date, symbol, price } newest first).
   query({ filters = [], candidates = [], symbols = null, list = false, events = false } = {}) {
-    for (const key of [...filters, ...candidates]) this.#condition(key);
+    for (const key of filters) this.#condition(key);
     const latest = this.latestDate();
     const steps = filters.map((_, index) => {
       const keys = filters.slice(0, index + 1);
@@ -96,7 +98,7 @@ export class DailyIndex {
       if (events && index === filters.length - 1) step.events = this.dates.flatMap((date, slot) => slot ? [...perDay[slot]].filter((symbol) => !perDay[slot - 1].has(symbol)).sort().map((symbol) => ({ date, symbol, price:this.#closeOn(symbol, date) })) : []).reverse();
       return step;
     });
-    const candidateResults = candidates.map((key) => ({ key, latestCount:latest ? this.metOn([...filters, key], latest, symbols).size : 0 }));
+    const candidateResults = candidates.map((key) => ({ key, latestCount:latest && this.conditions.has(key) ? this.metOn([...filters, key], latest, symbols).size : 0 }));
     return { dates:[...this.dates], latestDate:latest, steps, candidates:candidateResults };
   }
 

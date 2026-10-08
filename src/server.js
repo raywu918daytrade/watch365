@@ -290,7 +290,7 @@ async function routeApi(request, response) {
     if (filters.length > MAX_INDEX_FILTERS) { sendJson(response, 422, { error:'CONDITIONS_TOO_MANY' }); return; }
     if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
     try {
-      const result = await historyIndex.example(filters.map((spec) => resolveIndexCondition(spec)));
+      const result = await historyIndex.example(filters.map((spec) => resolveIndexCondition(spec)), { timeframe:body.timeframe === 'd1' ? 'd1' : null });
       if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || '準備資料' }); return; }
       sendJson(response, 200, { status:'ready', example:result.example ?? null });
     } catch (error) {
@@ -418,7 +418,7 @@ async function routeApi(request, response) {
       const payload=verifyFormulaToken(body.proposalToken,formulaTokenSecret);const current=store.getState().settings.strategy;
       const strategy=validateFormulaStrategy({id:'formula.custom',version:payload.capabilityRevision,executor:'formula_v1',name:payload.name,timeframe:'1m',source:'db/m1_live/{tradingDate}.parquet',definitionFingerprint:payload.fingerprint,params:{},formula:{ast:payload.ast}},current?.definitionFingerprint===payload.fingerprint?current.activatedAt:new Date().toISOString());
       const watchlist=parseWatchlist(body.watchlist,{allowEmpty:true});
-      await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed){revokePendingDeliveryAuthorizations(state);dropEarlierSignals(state);}appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
+      await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.daily=null;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed){revokePendingDeliveryAuthorizations(state);dropEarlierSignals(state);}appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
       syncMonitorTimer();await recordFormulaActivation(payload);sendJson(response,200,publicState(store.getState()));
     }catch(error){sendJson(response,error.statusCode||400,{error:error.code||'FORMULA_ACTIVATION_FAILED'});}return;
   }
@@ -930,11 +930,6 @@ async function runMonitor(source = 'scheduler') {
       settings.watchlist = watchlist;
     }
     scope = buildMonitorScope(settings.watchlist, universe);
-    await store.update((state)=>{applyMonitorScope(state,scope);appendLog(state,'info','本輪系統監控範圍已確認',{source,revision:scope.revision,selected:scope.selectedCount,effective:scope.effectiveCount,uncovered:scope.uncoveredCount});});
-    if (!scope.effectiveCount) {
-      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
-      return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
-    }
     if (settings.daily?.filters?.length) {
       // D1 + M1: only today's daily list (met on the previous daily close) is watched intraday.
       const list = await dailyListToday(settings);
@@ -943,11 +938,17 @@ async function runMonitor(source = 'scheduler') {
         return { signals:[], skipped:true, reason:'daily_list_pending', state:publicState(store.getState()) };
       }
       const allowed = new Set(list.symbols);
-      scope = { ...scope, effectiveWatchlist:scope.effectiveWatchlist.filter((item) => allowed.has(item.symbol)) };
+      const effectiveWatchlist = scope.effectiveWatchlist.filter((item) => allowed.has(item.symbol));
+      scope = { ...scope, effectiveWatchlist, effectiveCount:effectiveWatchlist.length };
       if (!scope.effectiveWatchlist.length) {
         await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_empty';state.runtime.lastError=null;});
         return { signals:[], skipped:true, reason:'daily_list_empty', state:publicState(store.getState()) };
       }
+    }
+    await store.update((state)=>{applyMonitorScope(state,scope);appendLog(state,'info','本輪系統監控範圍已確認',{source,revision:scope.revision,selected:scope.selectedCount,effective:scope.effectiveCount,uncovered:scope.uncoveredCount});});
+    if (!scope.effectiveCount) {
+      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
+      return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
     }
     const bars = filterBarsToMonitorScope(await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist }), scope);
     const ruleTriggers = await runConditionLayer(settings, bars);

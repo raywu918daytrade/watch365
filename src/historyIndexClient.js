@@ -52,7 +52,8 @@ export class HistoryIndexClient {
   }
   known(key) { return this.conditions.get(key) ?? null; }
   // One candlestick example where all these filters hold ([{ key, ast }]); { example:null } when none was found.
-  example(filters) { this.#remember(filters); return this.#request({ type:'example', conditions:filters, filters }); }
+  // timeframe 'd1': daily history only (the daily filter step), no one-minute fallback.
+  example(filters, { timeframe = null } = {}) { this.#remember(filters); return this.#request({ type:'example', conditions:filters, filters, timeframe }); }
 
   // Monitor engine (daily step). conditions: [{ key, ast }] all ANDed; date: today's Taipei date.
   dailyList({ conditions, date, symbols = null }) { return this.#request({ type:'daily_list', conditions, date, symbols }); }

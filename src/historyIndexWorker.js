@@ -128,11 +128,11 @@ process.on('message', (message) => {
       const computed = index.ensure(message.conditions || []);
       if (message.type === 'ensure') { reply({ type:'result', result:{ computed, ...info() } }); return; }
       if (message.type === 'example') {
-        const cacheKey = (message.filters || []).map((item) => item.key).sort().join('|');
+        const cacheKey = `${message.timeframe || ''}:${(message.filters || []).map((item) => item.key).sort().join('|')}`;
         const day = `${taipeiDay()}|${dailyStatus}`;
         const cached = examples.get(cacheKey);
         if (cached && cached.day === day) { reply({ type:'result', result:{ example:cached.example, cached:true } }); return; }
-        const example = findExample({ filters:message.filters || [], daily:dailyStatus === 'ready' ? daily : null, index });
+        const example = findExample({ filters:message.filters || [], daily:dailyStatus === 'ready' ? daily : null, index:message.timeframe === 'd1' ? null : index });
         examples.set(cacheKey, { day, example }); if (examples.size > 500) examples.delete(examples.keys().next().value);
         reply({ type:'result', result:{ example, cached:false, dailyReady:dailyStatus === 'ready' } }); return;
       }
@@ -144,7 +144,8 @@ process.on('message', (message) => {
       if (message.daily && (dailyFilters.length || message.daily.candidates?.length)) {
         if (dailyStatus !== 'ready' || !dailyIndex.ready()) dailyResult = { loading:true, status:dailyStatus };
         else {
-          dailyIndex.ensure(message.daily.conditions || []);
+          dailyIndex.ensure((message.daily.conditions || []).filter((item) => dailyFilters.includes(item.key)));
+          dailyIndex.ensure(message.daily.conditions || [], { skipUnsupported:true });
           dailyResult = dailyIndex.query({ filters:dailyFilters, candidates:message.daily.candidates || [], symbols:symbolSet, list:Boolean(message.daily.list), events:Boolean(message.daily.events) });
           if (dailyFilters.length) symbolsByDate = new Map(index.dates().map((date) => [date, dailyIndex.listFor(dailyFilters, date, symbolSet)]));
         }
