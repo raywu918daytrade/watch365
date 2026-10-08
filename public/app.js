@@ -210,7 +210,7 @@ function stocks(){
 // formula; up to 2 filters are joined with 且 by /api/indicator-templates/instantiate. The AI is only the
 // fallback for indicators the list doesn't have; once such a formula is used it enters the library and
 // shows up in the list next time.
-let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[];
+let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[],listView='ranked';
 // Daily chart patterns (日線型態) come from a precomputed HF dataset that is not wired up yet. The family is shown so the
 // place is reserved; rows are disabled until the data source is connected.
 const PATTERN_FAMILY='型態（日線）';
@@ -372,6 +372,10 @@ function drawTemplates(){
   if(value&&!templateRows.length&&!patterns){target.innerHTML='';target.hidden=true;return;} // the AI row says it
   if(value&&!templateRows.length){aiRow.hidden=true;aiRow.innerHTML='';}
   const block=addBlockReason(),full=Boolean(block),families=[...groups.keys()];
+  // With at least one filter picked and counts ready, the list becomes a ranking (owner decision 2026-10): every
+  // remaining row sorted by how many stocks are left after adding it, as a bar against the current result.
+  const ranked=rankedSection(value,full,block);
+  if(ranked){target.hidden=false;target.innerHTML=ranked+patterns;bindRanked(target);return;}
   if(!value&&(openFamily===null||!groups.has(openFamily)))openFamily=families[0]||null;
   let index=0;
   const sections=families.map((family)=>{
@@ -380,10 +384,35 @@ function drawTemplates(){
     return`<details class="proto-family" name="indicator-family" data-family="${escapeHtml(family)}" data-was-open="${open?'1':'0'}" ${open?'open':''}><summary><span>${escapeHtml(family)}</span><small>${value?`符合 ${rows.length} 個`:`${totals.get(family)||rows.length} 個變體`}</small></summary><div class="proto-preset-list">${body}</div></details>`;
   }).join('');
   target.hidden=false;
-  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}${patterns}`;
+  const canRank=state.filters.length&&!full&&indexFresh()?.counts;
+  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${canRank?'<button type="button" class="proto-link" data-view="ranked">依剩餘檔數排序</button>':''}${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}${patterns}`;
   // Chrome also fires toggle for details parsed with the open attribute, so only a real change (open !== the rendered state) counts.
   target.querySelectorAll('details.proto-family').forEach((details)=>details.addEventListener('toggle',()=>{const was=details.dataset.wasOpen==='1';if(details.open===was)return;details.dataset.wasOpen=details.open?'1':'0';if(value)return;if(details.open)openFamily=details.dataset.family;else if(openFamily===details.dataset.family)openFamily=null;}));
   target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
+  target.querySelector('[data-view="ranked"]')?.addEventListener('click',()=>{listView='ranked';drawTemplates();});
+}
+// Ranked view: base = stocks left after all current filters; each row = stocks left if it were added next.
+// ≥ 95 % of the base is flagged as barely filtering; 0 is folded away at the bottom.
+const NEAR_ALL=0.95; // barely filtering = keeps ≥ 95 % of both the stocks and the triggers
+function rankedSection(value,full,block){
+  if(!state.filters.length||full||listView!=='ranked')return'';
+  const data=indexFresh();const base=data?.steps?.at(-1);
+  if(!data||!data.counts||!base)return'';
+  const rows=templateRows.filter((row)=>!hasSpec(row.spec)).map((row)=>({row,count:data.counts.get(specKey(row.spec))})).filter((item)=>item.count);
+  if(!rows.length)return'';
+  rows.sort((a,b)=>b.count.triggeredSymbols-a.count.triggeredSymbols||b.count.totalEvents-a.count.totalEvents||a.row.label.localeCompare(b.row.label,'zh-Hant'));
+  const baseCount=base.triggeredSymbols||0,baseEvents=base.totalEvents||0;
+  const live=rows.filter((item)=>item.count.triggeredSymbols>0),zero=rows.filter((item)=>!item.count.triggeredSymbols);
+  const line=(item)=>{
+    const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=baseCount?Math.min(1,n/baseCount):0,pct=Math.round(share*100),eventShare=baseEvents?item.count.totalEvents/baseEvents:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
+    return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong><span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${n} 檔・${item.count.totalEvents} 次・剩 ${pct}%`:'0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
+  };
+  const filters=state.filters.map((filter)=>escapeHtml(filter.label)).join(' 且 ');
+  return`<div class="proto-list-head"><p class="proto-eyebrow">下一個過濾</p><button type="button" class="proto-link" data-view="family">依類別瀏覽</button></div><p class="proto-signature proto-rank-base">以「${filters}」為基準：過去 7 日 <strong>${baseCount} 檔・${baseEvents} 次</strong>。長條＝加入後還剩幾檔，由多到少。</p>${value?`<p class="proto-signature">符合「${escapeHtml(value)}」的 ${rows.length} 個</p>`:''}<div class="proto-rank-list">${live.map(line).join('')||'<div class="proto-status"><p>加入任何一個都會變成 0 檔。</p></div>'}</div>${zero.length?`<details class="proto-family proto-rank-zero"><summary><span>加入後 0 檔</span><small>${zero.length} 個</small></summary><div class="proto-rank-list">${zero.map(line).join('')}</div></details>`:''}`;
+}
+function bindRanked(target){
+  target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
+  target.querySelector('[data-view]')?.addEventListener('click',()=>{listView='family';drawTemplates();});
 }
 // Labels for the server's structured conditions (dashboard / home) and for legacy drafts.
 function conditionLabel(condition){

@@ -137,6 +137,7 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 - 預先計算：啟動時把指標清單每一列（每個模板的每個 preset，加上 AI 建立的成員，目前 71 個）全部算好；AI 新建立的過濾第一次被查詢時算一次，之後沿用。過去的日子不再重算；盤中（平日 08:55–13:45）每 3 分鐘只重讀今天的 m1_live 檔並重算今天；新交易日出現時最舊的一天移出。
 - 查詢只做組合：選了 A、B、C → 逐根 K 棒把已存的位元做「且」，再用與即時通知相同的狀態機（`ruleState.ruleTriggerIndexes`）數觸發，不重算任何指標。
 - `POST /api/history/index { purpose, watchlist?, filters:[spec], candidates?:[spec] }`，spec＝`{ shapeKey, values, direction }`｜`{ fingerprint }`｜`{ proposalToken }`（尚未入庫的 AI 過濾）｜`{ conditionKey }`。回 200 `{ status:'ready', steps:[{ triggeredSymbols, totalEvents, days, events? }], candidates:[{ index, triggeredSymbols, totalEvents }], filterKeys, verdict, availableDays, symbolsCount }`；第 i 步＝前 i 個過濾全部成立（漏斗），candidates＝把該列加在目前所有過濾之後的結果。資料準備中回 202 `{ status:'loading', progress }`。
+- 下一個過濾（老闆決策：排序長條清單，不做星狀圖）：選了至少一個過濾後，清單改成「加入後剩幾檔」由多到少排序，長條＝相對目前結果還剩幾 %；檔數與次數都剩 ≥ 95% 的標灰並註明「幾乎沒有篩選效果」；加入後 0 檔的收合在最下方。可切回「依類別瀏覽」。
 - 前端條件頁：已選過濾每一步顯示「過去 7 日／加上這個後：N 檔・M 次」，變成 0 檔時標紅並指出是這個過濾篩光的；清單每一列顯示「加入後 N 檔」。加入、移除都自動更新，不需要按回查。過濾上限 2 → 3 個。
 - 記憶體：約 600 檔 × 7 天的一分鐘 K 以 typed array 保存，加上每個條件約 0.3 MB 位元。子程序死掉時下一個請求會自動重啟並重算記住的條件。`HISTORY_INDEX=off` 關閉。測試可用 `WATCH365_HISTORY_FIXTURE`（JSON）代替 HF 資料。
 
