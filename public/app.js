@@ -210,16 +210,12 @@ function stocks(){
 // formula; up to 2 filters are joined with 且 by /api/indicator-templates/instantiate. The AI is only the
 // fallback for indicators the list doesn't have; once such a formula is used it enters the library and
 // shows up in the list next time.
-let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[],listView='ranked';
+let templateCache=null,templateError='',autoHistory=false,historyBusy=false,openFamily=null,templateRows=[],rankAll=false,familyPicked=false;
 // Daily chart patterns (日線型態) come from a precomputed HF dataset that is not wired up yet. The family is shown so the
 // place is reserved; rows are disabled until the data source is connected.
 const PATTERN_FAMILY='型態（日線）';
 const PATTERNS=['三角收斂','M 頭','W 底','頭肩頂','頭肩底','上升旗形','下降旗形','上升楔形','下降楔形','箱型整理'];
-function patternSection(tokens,value){
-  const rows=PATTERNS.filter((name)=>!tokens.length||tokens.every((token)=>normalizeQuery(name).includes(token)));
-  if(!rows.length)return'';
-  return`<details class="proto-family proto-family-soon" name="indicator-family" data-family="${PATTERN_FAMILY}" data-was-open="${value?'1':'0'}" ${value?'open':''}><summary><span>${PATTERN_FAMILY}</span><small>${rows.length} 種・即將推出</small></summary><div class="proto-preset-list"><p class="proto-signature proto-soon-note">以日線型態篩出今天帶型態的股票，再搭配一分鐘 K 的條件通知。資料接上後開放。</p>${rows.map((name)=>`<div class="proto-preset soon"><span class="proto-preset-text"><strong>${escapeHtml(name)}</strong></span><button type="button" class="proto-add" disabled title="資料接上後開放">即將推出</button></div>`).join('')}</div></details>`;
-}
+function patternRows(tokens){return PATTERNS.filter((name)=>!tokens.length||tokens.every((token)=>normalizeQuery(name).includes(token)));}
 function normalizeQuery(text){let value=String(text||'').normalize('NFKC').toLowerCase().replace(/\s+/g,'');for(const [pattern,replacement]of SYNONYMS)value=value.replace(pattern,replacement);return value;}
 function queryTokens(text){return String(text||'').normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean).map(normalizeQuery).filter(Boolean);}
 async function loadTemplates(){if(!templateCache){try{templateCache=((await api('/api/indicator-templates')).items||[]).filter((item)=>item&&item.shapeKey);templateError='';}catch(error){templateCache=[];templateError=errorText(error);}}return templateCache;}
@@ -274,7 +270,7 @@ function resolveLegacy(){
 function conditions(){
   if(!state.purpose)return go('home');
   if(state.purpose==='watchlist'&&!state.watchlist.length)return go('stocks');
-  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><section id="examplePanel" class="proto-example" hidden></section><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
+  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
   // Typing again drops a first-turn AI card for other text, so the list comes back.
@@ -368,51 +364,59 @@ function drawTemplates(){
   aiRow.innerHTML=showAi?(value.length>=2?`<button type="button" class="proto-row proto-row-ai" id="aiCreateRow"><strong><span class="proto-ai-tag" aria-hidden="true">AI</span>清單沒有這個指標，用 AI 建立：『${escapeHtml(value)}』</strong><small>按 Enter 也可以</small></button>`:'<p class="proto-dropdown-head">再多打一個字</p>'):'';
   aiRow.querySelector('#aiCreateRow')?.addEventListener('click',()=>startAi(value));
   if(!templateCache.length){target.hidden=false;target.innerHTML=`<p class="proto-eyebrow">指標清單</p><div class="proto-status"><strong>${templateError?'無法讀取指標清單':'清單還是空的'}</strong><p>${escapeHtml(templateError||'描述你要的指標，AI 會建立並加進清單。')}</p></div>`;return;}
-  const patterns=patternSection(tokens,value);
-  if(value&&!templateRows.length&&!patterns){target.innerHTML='';target.hidden=true;return;} // the AI row says it
+  const patterns=patternRows(tokens);
+  if(value&&!templateRows.length&&!patterns.length){target.innerHTML='';target.hidden=true;return;} // the AI row says it
   if(value&&!templateRows.length){aiRow.hidden=true;aiRow.innerHTML='';}
   const block=addBlockReason(),full=Boolean(block),families=[...groups.keys()];
-  // With at least one filter picked and counts ready, the list becomes a ranking (owner decision 2026-10): every
-  // remaining row sorted by how many stocks are left after adding it, as a bar against the current result.
-  const ranked=rankedSection(value,full,block);
-  if(ranked){target.hidden=false;target.innerHTML=ranked+patterns;bindRanked(target);return;}
-  if(!value&&(openFamily===null||!groups.has(openFamily)))openFamily=families[0]||null;
-  let index=0;
-  const sections=families.map((family)=>{
-    const rows=groups.get(family),open=value?true:family===openFamily;
-    const body=rows.map((row)=>{const i=index++;const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;}).join('');
-    return`<details class="proto-family" name="indicator-family" data-family="${escapeHtml(family)}" data-was-open="${open?'1':'0'}" ${open?'open':''}><summary><span>${escapeHtml(family)}</span><small>${value?`符合 ${rows.length} 個`:`${totals.get(family)||rows.length} 個變體`}</small></summary><div class="proto-preset-list">${body}</div></details>`;
-  }).join('');
+  // With at least one filter picked and counts ready, rows become ranked bars (owner decision 2026-10): stocks left
+  // after adding the row, against the current result, most to least.
+  const base=rankBase(full);
+  const tabs=value?[]:[...(base?[RANK_TAB]:[]),...families,...(patterns.length?[PATTERN_FAMILY]:[])];
+  // Categories are a horizontal strip of chips (owner decision 2026-10); only the picked one's rows are listed below.
+  // The ranking is the default view once it exists, until the user picks a category themselves.
+  if(!value&&(!tabs.includes(openFamily)||(!familyPicked&&base)))openFamily=tabs[0]||null;
+  const tab=value?null:openFamily;
+  let rows=value?templateRows:tab===RANK_TAB?templateRows:groups.get(tab)||[];
+  let body;
+  if(tab===PATTERN_FAMILY)body=`<p class="proto-signature proto-soon-note">以日線型態篩出今天帶型態的股票，再搭配一分鐘 K 的條件通知。資料接上後開放。</p><div class="proto-preset-list">${patterns.map((name)=>`<div class="proto-preset soon"><span class="proto-preset-text"><strong>${escapeHtml(name)}</strong></span><button type="button" class="proto-add" disabled title="資料接上後開放">即將推出</button></div>`).join('')}</div>`;
+  else if(base){
+    const items=rows.filter((row)=>!hasSpec(row.spec)).map((row)=>({row,count:base.data.counts.get(specKey(row.spec))})).filter((item)=>item.count);
+    items.sort((a,b)=>b.count.triggeredSymbols-a.count.triggeredSymbols||b.count.totalEvents-a.count.totalEvents||a.row.label.localeCompare(b.row.label,'zh-Hant'));
+    const live=items.filter((item)=>item.count.triggeredSymbols>0),zero=items.filter((item)=>!item.count.triggeredSymbols);
+    const line=(item)=>rankLine(item,base);
+    if(tab===RANK_TAB){
+      const shown=rankAll?live:live.slice(0,RANK_TOP);
+      body=`<div class="proto-rank-list">${shown.map(line).join('')||'<div class="proto-status"><p>加入任何一個都會變成 0 檔。</p></div>'}</div>${live.length>shown.length?`<button type="button" class="proto-link proto-rank-more" data-rank-all>顯示全部 ${live.length} 個</button>`:''}${zero.length?`<p class="proto-signature proto-rank-zero-note">另有 ${zero.length} 個加入後 0 檔，未列出</p>`:''}`;
+    }else body=`<div class="proto-rank-list">${[...live,...zero].map(line).join('')||'<div class="proto-status"><p>這一類都已經加入了。</p></div>'}</div>`;
+  }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
+  const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
+  const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
+  const head=base?`<p class="proto-signature proto-rank-base">以「${state.filters.map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：過去 7 日 <strong>${base.count} 檔・${base.events} 次</strong>。長條＝加入後還剩幾檔。</p>`:'';
+  const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
+  const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
-  const canRank=state.filters.length&&!full&&indexFresh()?.counts;
-  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">指標清單</p>${canRank?'<button type="button" class="proto-link" data-view="ranked">依剩餘檔數排序</button>':''}${full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?'':`<small class="proto-signature">${templateCache.length} 個指標</small>`}</div>${sections}${patterns}`;
-  // Chrome also fires toggle for details parsed with the open attribute, so only a real change (open !== the rendered state) counts.
-  target.querySelectorAll('details.proto-family').forEach((details)=>details.addEventListener('toggle',()=>{const was=details.dataset.wasOpen==='1';if(details.open===was)return;details.dataset.wasOpen=details.open?'1':'0';if(value)return;if(details.open)openFamily=details.dataset.family;else if(openFamily===details.dataset.family)openFamily=null;}));
+  target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">${base?'下一個過濾':'指標清單'}</p>${note}</div>${head}${strip}${body}${value&&patterns.length?`<div class="proto-preset-list">${patterns.map((name)=>`<div class="proto-preset soon"><span class="proto-preset-text"><strong>${escapeHtml(name)}</strong><small>${PATTERN_FAMILY}</small></span><button type="button" class="proto-add" disabled>即將推出</button></div>`).join('')}</div>`:''}`;
+  const strip2=target.querySelector('.proto-family-tabs');if(strip2)strip2.scrollLeft=previous;
+  target.querySelectorAll('[data-tab]').forEach((button)=>button.addEventListener('click',()=>{openFamily=button.dataset.tab;familyPicked=true;rankAll=false;drawTemplates();target.querySelector('.proto-family-tab[aria-selected="true"]')?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'});}));
+  target.querySelector('[data-rank-all]')?.addEventListener('click',()=>{rankAll=true;drawTemplates();});
   target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
-  target.querySelector('[data-view="ranked"]')?.addEventListener('click',()=>{listView='ranked';drawTemplates();});
 }
-// Ranked view: base = stocks left after all current filters; each row = stocks left if it were added next.
-// ≥ 95 % of the base is flagged as barely filtering; 0 is folded away at the bottom.
+// Ranked rows: base = stocks left after all current filters; each row = stocks left if it were added next.
+// ≥ 95 % of the base is flagged as barely filtering.
 const NEAR_ALL=0.95; // barely filtering = keeps ≥ 95 % of both the stocks and the triggers
-function rankedSection(value,full,block){
-  if(!state.filters.length||full||listView!=='ranked')return'';
-  const data=indexFresh();const base=data?.steps?.at(-1);
-  if(!data||!data.counts||!base)return'';
-  const rows=templateRows.filter((row)=>!hasSpec(row.spec)).map((row)=>({row,count:data.counts.get(specKey(row.spec))})).filter((item)=>item.count);
-  if(!rows.length)return'';
-  rows.sort((a,b)=>b.count.triggeredSymbols-a.count.triggeredSymbols||b.count.totalEvents-a.count.totalEvents||a.row.label.localeCompare(b.row.label,'zh-Hant'));
-  const baseCount=base.triggeredSymbols||0,baseEvents=base.totalEvents||0;
-  const live=rows.filter((item)=>item.count.triggeredSymbols>0),zero=rows.filter((item)=>!item.count.triggeredSymbols);
-  const line=(item)=>{
-    const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=baseCount?Math.min(1,n/baseCount):0,pct=Math.round(share*100),eventShare=baseEvents?item.count.totalEvents/baseEvents:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
-    return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong><span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${n} 檔・${item.count.totalEvents} 次・剩 ${pct}%`:'0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
-  };
-  const filters=state.filters.map((filter)=>escapeHtml(filter.label)).join(' 且 ');
-  return`<div class="proto-list-head"><p class="proto-eyebrow">下一個過濾</p><button type="button" class="proto-link" data-view="family">依類別瀏覽</button></div><p class="proto-signature proto-rank-base">以「${filters}」為基準：過去 7 日 <strong>${baseCount} 檔・${baseEvents} 次</strong>。長條＝加入後還剩幾檔，由多到少。</p>${value?`<p class="proto-signature">符合「${escapeHtml(value)}」的 ${rows.length} 個</p>`:''}<div class="proto-rank-list">${live.map(line).join('')||'<div class="proto-status"><p>加入任何一個都會變成 0 檔。</p></div>'}</div>${zero.length?`<details class="proto-family proto-rank-zero"><summary><span>加入後 0 檔</span><small>${zero.length} 個</small></summary><div class="proto-rank-list">${zero.map(line).join('')}</div></details>`:''}`;
+const RANK_TAB='剩餘最多',RANK_TOP=10;
+function rankBase(full){
+  if(!state.filters.length||full)return null;
+  const data=indexFresh(),step=data?.steps?.at(-1);
+  if(!data||!data.counts||!step)return null;
+  return{data,count:step.triggeredSymbols||0,events:step.totalEvents||0};
 }
-function bindRanked(target){
-  target.querySelectorAll('[data-add]').forEach((button)=>button.addEventListener('click',()=>{const row=templateRows[Number(button.dataset.add)];if(!row)return;addFilter({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec});}));
-  target.querySelector('[data-view]')?.addEventListener('click',()=>{listView='family';drawTemplates();});
+function rankLine(item,base){
+  const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=base.count?Math.min(1,n/base.count):0,pct=Math.round(share*100),eventShare=base.events?item.count.totalEvents/base.events:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
+  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong><span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${n} 檔・${item.count.totalEvents} 次・剩 ${pct}%`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
+}
+function presetLine(full,block){
+  return(row)=>{const i=templateRows.indexOf(row);const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;};
 }
 // Labels for the server's structured conditions (dashboard / home) and for legacy drafts.
 function conditionLabel(condition){

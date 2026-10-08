@@ -301,3 +301,23 @@
 .proto-example-chart .ex-axis { fill:#7a8a8e; font-size:9px; font-variant-numeric:tabular-nums; }
 .proto-example-legend { display:flex; flex-wrap:wrap; gap:.25rem .8rem; margin:0; padding:0; list-style:none; color:#566b70; font-size:.72rem; }
 .proto-example-legend i { display:inline-block; width:.8rem; height:.18rem; margin-right:.3rem; vertical-align:middle; border-radius:1px; }
+/* Conditions page layout (owner decision 2026-10): example chart left, selected filters right (scrolls when long);
+   indicator categories as a horizontal chip strip, only the picked category's rows below. */
+.proto-cond-top { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:.8rem; align-items:start; margin:.4rem 0 1rem; }
+.proto-cond-top:has(#examplePanel[hidden]) { grid-template-columns:minmax(0,1fr); }
+.proto-cond-top .proto-example { margin:0; }
+.proto-cond-top #addedPanel:empty { display:none; }
+.proto-cond-top .proto-condition-list { margin:0; max-height:24rem; overflow-y:auto; overscroll-behavior:contain; padding-right:.2rem; scrollbar-width:thin; }
+.proto-family-tabs { display:flex; gap:.4rem; margin:0 0 .6rem; padding:.1rem 0 .4rem; overflow-x:auto; scroll-snap-type:x proximity; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+.proto-family-tab { flex:0 0 auto; scroll-snap-align:start; display:inline-flex; align-items:center; gap:.35rem; border:1px solid #d0dddd; border-radius:999px; padding:.42rem .8rem; background:#fff; color:#244247; font-size:.82rem; font-weight:700; white-space:nowrap; cursor:pointer; }
+.proto-family-tab small { color:#6b7f83; font-size:.7rem; font-weight:700; }
+.proto-family-tab[aria-selected="true"] { border-color:#078777; background:#078777; color:#fff; }
+.proto-family-tab[aria-selected="true"] small { color:#d8f1ec; }
+.proto-family-tab.soon { color:#8a6d1f; }
+.proto-family-rows { border:1px solid #d0dddd; border-radius:.5rem; background:#fff; }
+.proto-rank-more { margin-top:.5rem; }
+.proto-rank-zero-note { margin-top:.4rem; }
+@media (max-width:640px) {
+  .proto-cond-top { grid-template-columns:minmax(0,1fr); }
+  .proto-cond-top .proto-condition-list { max-height:20rem; }
+}
