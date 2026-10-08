@@ -60,6 +60,12 @@ test('worker process: daily filters answer from daily history and restrict each 
     assert.equal(result.steps[0].triggeredSymbols, 1);
     const plain = await client.query({ filters:[cond(100)] });
     assert.equal(plain.steps[0].totalEvents, 3);
+    // Monitor engine: today's list comes from the previous close; after the close today's bar is built from minutes.
+    assert.deepEqual(await client.dailyList({ conditions:[cond(100)], date:'2026-10-07' }), { listDate:'2026-10-06', symbols:['2330'] });
+    assert.deepEqual(await client.dailyList({ conditions:[cond(100)], date:'2026-10-08' }), { listDate:'2026-10-07', symbols:[] });
+    const closed = await client.dailyClose({ conditions:[cond(100)], date:'2026-10-08', symbols:['2330', '2317'] });
+    assert.deepEqual(closed, { date:'2026-10-08', met:['2330'], newly:[{ symbol:'2330', close:102 }] });
+    assert.deepEqual(await client.dailyClose({ conditions:[cond(100)], date:'2026-10-09' }), { noSession:true });
   } finally {
     client.stop(); delete process.env.WATCH365_HISTORY_FIXTURE; delete process.env.WATCH365_DAILY_FIXTURE; await rm(dir, { recursive:true, force:true });
   }

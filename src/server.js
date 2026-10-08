@@ -10,7 +10,8 @@ import { appendLog, JsonStore, publicState } from './storage.js';
 import { resolveWatchlistInput } from './watchlist.js';
 import { calculateUniverseCoverage } from './universeCoverage.js';
 import { applyMonitorScope, buildMonitorScope, filterBarsToMonitorScope, markMonitorScopeUnknown, notificationEligibility, signalMatchesCurrentStrategy } from './monitorScope.js';
-import { applyScopedMarketBars, STATE_SIGNAL_MAX_AGE_MS } from './signalEngine.js';
+import { applyDailyClose, applyScopedMarketBars, STATE_SIGNAL_MAX_AGE_MS } from './signalEngine.js';
+import { dailyCapable } from './dailyIndex.js';
 import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateStrategy } from './indicatorRegistry.js';
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
@@ -216,14 +217,21 @@ async function routeApi(request, response) {
   // this condition would have triggered over the past 7 trading days, next to today's records).
   if (method === 'GET' && url.pathname === '/api/monitor/history') {
     const settings = store.getState().settings;
-    const ast = settings.strategy?.formula?.ast;
-    if (!ast) { sendJson(response, 200, { status:'unsupported' }); return; }
+    const ast = settings.strategy?.formula?.ast, dailyOnly = settings.strategy?.executor === 'daily_close';
+    if (!ast && !dailyOnly) { sendJson(response, 200, { status:'unsupported' }); return; }
     if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
     try {
       const watchlist = settings.scopeMode === 'universe' ? null : settings.watchlist || [];
-      const result = await historyIndex.query({ filters:[{ key:formulaFingerprint(ast), ast }], candidates:[], symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:true });
-      if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || '準備 7 日資料' }); return; }
+      const dailyFilters = (settings.daily?.filters || []).map(({ key, ast: filterAst }) => ({ key, ast:filterAst }));
+      const result = await historyIndex.query({ filters:dailyOnly ? [] : [{ key:formulaFingerprint(ast), ast }], candidates:[], symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:true, daily:dailyFilters.length ? { filters:dailyFilters, events:dailyOnly } : null });
+      if (result.loading || result.daily?.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || '準備歷史資料' }); return; }
       const names = new Map((watchlist || await getUniverseWatchlist().catch(() => [])).map((item) => [item.symbol, item.name]));
+      if (dailyOnly) {
+        // D1 only: what the after-close notification would have sent on each of the last trading days (13:30 close).
+        const step = result.daily.steps.at(-1), events = step.events || [];
+        sendJson(response, 200, { status:'ready', timeframe:'1d', availableDays:result.daily.dates.length - 1, triggeredSymbols:new Set(events.map((event) => event.symbol)).size, totalEvents:events.length, days:step.days.slice(1).map((day) => ({ date:day.date, count:day.newCount })), truncated:false, events:events.map((event) => ({ date:event.date, at:`${event.date}T05:30:00.000Z`, symbol:event.symbol, price:event.price, name:names.get(event.symbol) || '' })) });
+        return;
+      }
       const last = result.steps.at(-1) || { triggeredSymbols:0, totalEvents:0, days:[], events:[] };
       sendJson(response, 200, { status:'ready', availableDays:result.availableDays, triggeredSymbols:last.triggeredSymbols, totalEvents:last.totalEvents, days:last.days, truncated:Boolean(last.truncated), events:(last.events || []).map((event) => ({ ...event, name:names.get(event.symbol) || '' })) });
     } catch (error) {
@@ -595,17 +603,26 @@ async function routeApi(request, response) {
     catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
     if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
-    let conditions, strategy, watchlist, taskName, formulaPayload;
+    let conditions, strategy, watchlist, taskName, formulaPayload, daily;
     try {
-      ({ strategy, conditions, name: taskName, formulaPayload } = await strategyFromRequest(body, store.getState().settings.strategy));
+      daily = dailyFromRequest(body);
+      const current = store.getState().settings;
+      // D1 only (no intraday condition): notified once after the close (owner decision 2026-10).
+      if (daily && typeof body.formulaToken !== 'string' && !(Array.isArray(body.conditions) && body.conditions.length)) ({ strategy, conditions, name: taskName } = dailyCloseStrategy(daily, current.strategy));
+      else ({ strategy, conditions, name: taskName, formulaPayload } = await strategyFromRequest(body, current.strategy));
+      // A different daily filter is a different monitor even when the intraday part is the same.
+      if (dailySignature(daily) !== dailySignature(current.daily)) strategy = { ...strategy, activatedAt:new Date().toISOString() };
+      if (daily && strategy.executor !== 'daily_close') taskName = `${daily.name}（日 K）→ ${taskName}`;
       watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
     } catch (error) {
       sendJson(response, error.statusCode || 400, { error:error.code || 'MONITOR_CONFIGURE_FAILED' });
       return;
     }
     await store.update((state) => {
-      const changed = strategyIdentity(state.settings.strategy) !== strategyIdentity(strategy);
+      const changed = strategyIdentity(state.settings.strategy) !== strategyIdentity(strategy) || state.settings.strategy?.activatedAt !== strategy.activatedAt;
       state.settings.provider = 'hf_dataset';
+      state.settings.daily = daily;
+      state.runtime.dailyList = null; state.runtime.dailyClose = null;
       state.settings.scopeMode = purpose === 'screen' ? 'universe' : 'watchlist';
       state.settings.watchlist = watchlist;
       state.settings.strategy = strategy;
@@ -786,6 +803,64 @@ async function compactHistorySpec(params) {
 
 // Builds the strategy for a monitor or a history lookup from either the structured UI conditions
 // or an AI-planned formula (signed proposal token from /api/indicator-agent/parse).
+// Daily filters of a monitor (D1 step): body.daily = { filters:[{ spec, label }] } from the indicator list.
+function dailyFromRequest(body) {
+  const items = Array.isArray(body?.daily?.filters) ? body.daily.filters : [];
+  if (!items.length) return null;
+  if (items.length > MAX_INDEX_FILTERS) throw Object.assign(new Error('CONDITIONS_TOO_MANY'), { code:'CONDITIONS_TOO_MANY', statusCode:422 });
+  const filters = items.map((item) => {
+    const { key, ast } = resolveIndexCondition(item?.spec);
+    if (!dailyCapable(ast)) throw Object.assign(new Error('DAILY_CONDITION_UNSUPPORTED'), { code:'DAILY_CONDITION_UNSUPPORTED', statusCode:422 });
+    return { key, ast, label:String(item.label || '').slice(0, 80) || key.slice(0, 8) };
+  });
+  return { filters, name:filters.map((item) => item.label).join(' 且 ') };
+}
+function dailySignature(daily) { return (daily?.filters || []).map((item) => item.key).sort().join('|'); }
+function dailyCloseStrategy(daily, current) {
+  const fingerprint = formulaFingerprint(daily.filters.length === 1 ? daily.filters[0].ast : { op:'all', items:daily.filters.map((item) => item.ast) });
+  return { strategy:{ id:'daily.close', version:'1', executor:'daily_close', name:daily.name, timeframe:'1d', source:'db/d1', definitionFingerprint:fingerprint, params:{}, activatedAt:current?.definitionFingerprint === fingerprint && current?.executor === 'daily_close' ? current.activatedAt : new Date().toISOString() }, conditions:[], name:daily.name };
+}
+// Today's daily list, cached per day in runtime (the previous close does not change during the day).
+async function dailyListToday(settings) {
+  const today = taipeiDate();
+  const cached = store.getState().runtime.dailyList;
+  if (cached?.day === today && cached.signature === dailySignature(settings.daily)) return cached;
+  if (!HISTORY_INDEX_ENABLED) return null;
+  const result = await historyIndex.dailyList({ conditions:settings.daily.filters.map(({ key, ast }) => ({ key, ast })), date:today, symbols:settings.watchlist.map((item) => item.symbol) }).catch(() => null);
+  if (!result || result.loading || !result.listDate) return null;
+  const list = { day:today, signature:dailySignature(settings.daily), listDate:result.listDate, symbols:result.symbols, count:result.symbols.length };
+  await store.update((state) => { state.runtime.dailyList = list; appendLog(state, 'info', `日 K 名單 ${list.count} 檔（${list.listDate} 收盤）`); });
+  return list;
+}
+// D1-only monitors: once per trading day after the close (13:50 Taipei, when the last minute bars are in), today's daily
+// bar is built from today's minute bars and the stocks that newly meet the daily filters are notified.
+const DAILY_CLOSE_AT_MINUTES = 13 * 60 + 50;
+async function runDailyClose(source) {
+  const now = new Date(), settings = store.getState().settings, today = taipeiDate(now);
+  const taipei = new Date(now.getTime() + 8 * 3_600_000), minutes = taipei.getUTCHours() * 60 + taipei.getUTCMinutes(), weekday = taipei.getUTCDay();
+  const done = store.getState().runtime.dailyClose?.day === today;
+  if (done || weekday === 0 || weekday === 6 || minutes < DAILY_CLOSE_AT_MINUTES || !HISTORY_INDEX_ENABLED) {
+    await store.update((state) => { state.runtime.lastRunAt = now.toISOString(); state.runtime.lastProviderStatus = done ? 'daily_done' : 'daily_wait'; state.runtime.lastError = null; });
+    return { signals:[], skipped:true, reason:done ? 'daily_done' : 'daily_wait', state:publicState(store.getState()) };
+  }
+  await historyIndex.refresh({ force:true }).catch(() => {});   // queued before the check in the worker
+  const result = await historyIndex.dailyClose({ conditions:settings.daily.filters.map(({ key, ast }) => ({ key, ast })), date:today, symbols:settings.watchlist.map((item) => item.symbol) }).catch((error) => ({ error:error.code || 'HISTORY_INDEX_FAILED' }));
+  if (result.loading || result.error) {
+    await store.update((state) => { state.runtime.lastRunAt = now.toISOString(); state.runtime.lastProviderStatus = 'daily_wait'; state.runtime.lastError = result.error ?? null; });
+    return { signals:[], skipped:true, reason:'daily_pending', state:publicState(store.getState()) };
+  }
+  let applied;
+  await store.update((state) => {
+    state.runtime.lastRunAt = now.toISOString(); state.runtime.lastError = null;
+    if (result.noSession) { state.runtime.lastProviderStatus = 'daily_no_session'; state.runtime.dailyClose = { day:today, noSession:true, count:0 }; applied = { signals:[] }; return; }
+    applied = applyDailyClose(state, result, state.settings.strategy, now);
+    state.runtime.lastProviderStatus = 'ok';
+    state.runtime.dailyClose = { day:today, count:applied.signals.length, met:result.met.length };
+    appendLog(state, 'info', `收盤日 K 判斷：新符合 ${applied.signals.length} 檔（共符合 ${result.met.length} 檔）`, { source });
+  });
+  return { signals:applied.signals, skipped:false, reason:null, state:publicState(store.getState()) };
+}
+
 async function strategyFromRequest(body, current) {
   if (typeof body?.formulaToken === 'string') {
     const payload = verifyFormulaToken(body.formulaToken, formulaTokenSecret);
@@ -838,6 +913,7 @@ async function runMonitor(source = 'scheduler') {
   let scope;
   try {
     const settings = store.getState().settings;
+    if (settings.strategy?.executor === 'daily_close') return await runDailyClose(source);
     if(settings.strategy.executor==='formula_v1')validateFormulaStrategy(settings.strategy,settings.strategy.activatedAt);
     else {const activeDefinition=await indicatorRegistry.resolve(settings.strategy.id,settings.strategy.version);if(settings.strategy.definitionFingerprint&&settings.strategy.definitionFingerprint!==activeDefinition.fingerprint)throw Object.assign(new Error('INDICATOR_VERSION_MUTATED'),{code:'INDICATOR_VERSION_MUTATED'});}
     let universe;
@@ -858,6 +934,20 @@ async function runMonitor(source = 'scheduler') {
     if (!scope.effectiveCount) {
       await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
       return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
+    }
+    if (settings.daily?.filters?.length) {
+      // D1 + M1: only today's daily list (met on the previous daily close) is watched intraday.
+      const list = await dailyListToday(settings);
+      if (!list) {
+        await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_pending';state.runtime.lastError=null;appendLog(state,'info','日 K 名單準備中，本輪不判斷',{source});});
+        return { signals:[], skipped:true, reason:'daily_list_pending', state:publicState(store.getState()) };
+      }
+      const allowed = new Set(list.symbols);
+      scope = { ...scope, effectiveWatchlist:scope.effectiveWatchlist.filter((item) => allowed.has(item.symbol)) };
+      if (!scope.effectiveWatchlist.length) {
+        await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_empty';state.runtime.lastError=null;});
+        return { signals:[], skipped:true, reason:'daily_list_empty', state:publicState(store.getState()) };
+      }
     }
     const bars = filterBarsToMonitorScope(await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist }), scope);
     const ruleTriggers = await runConditionLayer(settings, bars);

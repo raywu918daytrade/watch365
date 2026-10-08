@@ -27,8 +27,9 @@ export class HistoryIndexClient {
     this.timer.unref?.();
   }
 
-  async refresh() {
-    if (!inSessionWindow()) return;
+  // force: re-read today's file outside the session window too (the after-close check wants the last bars).
+  async refresh({ force = false } = {}) {
+    if (!force && !inSessionWindow()) return;
     const child = await this.#ensureChild();
     child.send({ type:'refresh', symbols:await this.#symbols() });
   }
@@ -38,11 +39,11 @@ export class HistoryIndexClient {
   ensure(conditions) { this.#remember(conditions); return this.#request({ type:'ensure', conditions }, 15 * 60_000); }
 
   // items: [{ key, ast }] for filters and candidates; returns the HistoryIndex.query result, or { loading:true, … }.
-  // daily: optional { filters:[{key, ast}], candidates:[{key, ast}], list } for the daily-candle step.
+  // daily: optional { filters:[{key, ast}], candidates:[{key, ast}], list, events } for the daily-candle step.
   query({ filters = [], candidates = [], symbols = null, events = true, daily = null }) {
     const conditions = [...filters, ...candidates];
     this.#remember(conditions);
-    const dailyMessage = daily ? { conditions:[...(daily.filters || []), ...(daily.candidates || [])], filters:(daily.filters || []).map((item) => item.key), candidates:(daily.candidates || []).map((item) => item.key), list:Boolean(daily.list) } : null;
+    const dailyMessage = daily ? { conditions:[...(daily.filters || []), ...(daily.candidates || [])], filters:(daily.filters || []).map((item) => item.key), candidates:(daily.candidates || []).map((item) => item.key), list:Boolean(daily.list), events:Boolean(daily.events) } : null;
     return this.#request({ type:'query', conditions, filters:filters.map((item) => item.key), candidates:candidates.map((item) => item.key), symbols, events, daily:dailyMessage }).then(async (result) => {
       // A failed initial load (HF down, …) is retried by the next request rather than staying failed.
       if (result?.loading && result.status === 'failed' && this.child) this.child.send({ type:'load', symbols:await this.#symbols() });
@@ -53,6 +54,9 @@ export class HistoryIndexClient {
   // One candlestick example where all these filters hold ([{ key, ast }]); { example:null } when none was found.
   example(filters) { this.#remember(filters); return this.#request({ type:'example', conditions:filters, filters }); }
 
+  // Monitor engine (daily step). conditions: [{ key, ast }] all ANDed; date: today's Taipei date.
+  dailyList({ conditions, date, symbols = null }) { return this.#request({ type:'daily_list', conditions, date, symbols }); }
+  dailyClose({ conditions, date, symbols = null }) { return this.#request({ type:'daily_close', conditions, date, symbols }); }
   status() { return this.#request({ type:'status' }); }
 
   stop() { clearInterval(this.timer); this.child?.kill(); this.child = null; }

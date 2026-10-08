@@ -15,7 +15,7 @@ import { BarCollector, collectHistory, HISTORY_DAYS, listHfD1Months, listHfM1Dat
 import { DailyStore, findExample } from './conditionExample.js';
 import { readFile } from 'node:fs/promises';
 import { HistoryIndex } from './historyIndex.js';
-import { DailyIndex } from './dailyIndex.js';
+import { DailyIndex, dailyBarsFromMinutes } from './dailyIndex.js';
 
 const index = new HistoryIndex({ maxDays:HISTORY_DAYS });
 let status = 'idle', progress = null, error = null, loadedAt = null, refreshedAt = null, symbols = new Set();
@@ -110,6 +110,21 @@ process.on('message', (message) => {
   run(async () => {
     try {
       if (status !== 'ready') { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
+      // Monitor engine, daily step: today's list (met on the previous daily close) / after-close check for D1-only.
+      if (message.type === 'daily_list' || message.type === 'daily_close') {
+        if (dailyStatus !== 'ready' || !dailyIndex.ready()) { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
+        dailyIndex.ensure(message.conditions || []);
+        const keys = (message.conditions || []).map((item) => item.key), symbolSet = Array.isArray(message.symbols) ? new Set(message.symbols) : null;
+        if (message.type === 'daily_list') {
+          const listDate = dailyIndex.dates.filter((date) => date < message.date).at(-1) ?? null;
+          reply({ type:'result', result:{ listDate, symbols:listDate ? [...dailyIndex.metOn(keys, listDate, symbolSet)].sort() : [] } }); return;
+        }
+        const minuteDay = index.days.get(message.date);
+        if (!minuteDay?.size) { reply({ type:'result', result:{ noSession:true } }); return; }
+        const overlapDate = index.dates().filter((date) => date < message.date && dailyIndex.dates.includes(date)).at(-1) ?? null;
+        const bars = dailyBarsFromMinutes(minuteDay, message.date, { series:daily.series, overlapDate, overlapDay:overlapDate ? index.days.get(overlapDate) : null });
+        reply({ type:'result', result:{ date:message.date, ...dailyIndex.closeCheck(keys, bars, symbolSet) } }); return;
+      }
       const computed = index.ensure(message.conditions || []);
       if (message.type === 'ensure') { reply({ type:'result', result:{ computed, ...info() } }); return; }
       if (message.type === 'example') {
@@ -130,7 +145,7 @@ process.on('message', (message) => {
         if (dailyStatus !== 'ready' || !dailyIndex.ready()) dailyResult = { loading:true, status:dailyStatus };
         else {
           dailyIndex.ensure(message.daily.conditions || []);
-          dailyResult = dailyIndex.query({ filters:dailyFilters, candidates:message.daily.candidates || [], symbols:symbolSet, list:Boolean(message.daily.list) });
+          dailyResult = dailyIndex.query({ filters:dailyFilters, candidates:message.daily.candidates || [], symbols:symbolSet, list:Boolean(message.daily.list), events:Boolean(message.daily.events) });
           if (dailyFilters.length) symbolsByDate = new Map(index.dates().map((date) => [date, dailyIndex.listFor(dailyFilters, date, symbolSet)]));
         }
       }

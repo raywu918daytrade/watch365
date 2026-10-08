@@ -83,7 +83,8 @@ export class DailyIndex {
   // filters: keys in pick order; each step = filters[0..i] all met. Per step: stocks met on the latest date, per-day
   // counts, and "new" = stocks that became met that day (what a D1-only monitor notifies after the close).
   // candidates: keys tried as the next filter (stocks met on the latest date with it added).
-  query({ filters = [], candidates = [], symbols = null, list = false } = {}) {
+  // events: the last step also lists every newly met stock per day ({ date, symbol, price } newest first).
+  query({ filters = [], candidates = [], symbols = null, list = false, events = false } = {}) {
     for (const key of [...filters, ...candidates]) this.#condition(key);
     const latest = this.latestDate();
     const steps = filters.map((_, index) => {
@@ -92,13 +93,38 @@ export class DailyIndex {
       const days = this.dates.map((date, slot) => ({ date, count:perDay[slot].size, newCount:slot ? [...perDay[slot]].filter((symbol) => !perDay[slot - 1].has(symbol)).length : null }));
       const step = { latestCount:perDay.at(-1)?.size ?? 0, days, newEvents:days.reduce((sum, day) => sum + (day.newCount ?? 0), 0) };
       if (list && index === filters.length - 1) step.symbols = [...(perDay.at(-1) || [])].sort();
+      if (events && index === filters.length - 1) step.events = this.dates.flatMap((date, slot) => slot ? [...perDay[slot]].filter((symbol) => !perDay[slot - 1].has(symbol)).sort().map((symbol) => ({ date, symbol, price:this.#closeOn(symbol, date) })) : []).reverse();
       return step;
     });
     const candidateResults = candidates.map((key) => ({ key, latestCount:latest ? this.metOn([...filters, key], latest, symbols).size : 0 }));
     return { dates:[...this.dates], latestDate:latest, steps, candidates:candidateResults };
   }
 
+  // After the close (D1-only monitors): today's daily bar is not in the history yet, so it is built from today's minute
+  // bars (extraBars: Map(symbol → { date, open, high, low, close, volume })) and appended. Returns the stocks where every
+  // key is met on that bar but not on the previous daily close (newly met: notified once), with their close.
+  closeCheck(keys, extraBars, symbols = null) {
+    const conditions = keys.map((key) => this.#condition(key));
+    const asts = conditions.map((condition) => condition.ast);
+    const newly = [], met = [];
+    for (const [symbol, extra] of extraBars) {
+      if (symbols && !symbols.has(symbol)) continue;
+      const item = this.series.get(symbol); if (!item || !Number.isFinite(extra.close)) continue;
+      const end = item.dates.findLastIndex((date) => date < extra.date) + 1;   // the history may already hold today's bar
+      const start = Math.max(0, end - EVAL_BARS);
+      const bars = [];
+      for (let index = start; index < end; index++) bars.push({ barEnd:Date.parse(`${item.dates[index]}T05:30:00Z`), open:num(item.o[index]), high:num(item.h[index]), low:num(item.l[index]), close:num(item.c[index]), volume:num(item.v[index]) });
+      bars.push({ barEnd:Date.parse(`${extra.date}T05:30:00Z`), open:extra.open, high:extra.high, low:extra.low, close:extra.close, volume:extra.volume });
+      let values; try { values = evaluateFormulaSet(asts, bars); } catch { continue; }
+      const now = values.every((list) => list.at(-1) === true), before = bars.length > 1 && values.every((list) => list.at(-2) === true);
+      if (now) { met.push(symbol); if (!before) newly.push({ symbol, close:extra.close }); }
+    }
+    return { met, newly };
+  }
+
   stats() { return { dates:[...this.dates], conditions:this.conditions.size, symbols:this.series?.size ?? 0 }; }
+
+  #closeOn(symbol, date) { const item = this.series.get(symbol), at = item ? item.dates.lastIndexOf(date) : -1; return at < 0 ? null : num(item.c[at]); }
 
   #condition(key) {
     const condition = this.conditions.get(key);
@@ -108,3 +134,34 @@ export class DailyIndex {
 }
 
 function num(value) { return Number.isNaN(value) ? null : value; }
+
+// Today's daily bars from today's minute bars. Minute volume may be counted in other units than daily volume, so it is
+// scaled by the median daily/minute volume ratio of the latest day both sources have (1 when none overlap).
+export function dailyBarsFromMinutes(minuteDay, date, { series = null, overlapDate = null, overlapDay = null } = {}) {
+  let scale = 1;
+  if (series && overlapDay && overlapDate) {
+    const ratios = [];
+    for (const [symbol, minutes] of overlapDay) {
+      const item = series.get(symbol); if (!item) continue;
+      const at = item.dates.lastIndexOf(overlapDate); if (at < 0) continue;
+      let sum = 0; for (const value of minutes.v) if (Number.isFinite(value)) sum += value;
+      if (sum > 0 && Number.isFinite(item.v[at]) && item.v[at] > 0) ratios.push(item.v[at] / sum);
+    }
+    if (ratios.length >= Math.min(5, series.size)) { ratios.sort((a, b) => a - b); scale = ratios[Math.floor(ratios.length / 2)]; }
+  }
+  const out = new Map();
+  for (const [symbol, minutes] of minuteDay) {
+    let open = null, high = -Infinity, low = Infinity, close = null, volume = 0;
+    for (let index = 0; index < minutes.t.length; index++) {
+      const o = minutes.o[index], h = minutes.h[index], l = minutes.l[index], c = minutes.c[index], v = minutes.v[index];
+      if (open === null && Number.isFinite(o ?? c)) open = Number.isFinite(o) ? o : c;
+      if (Number.isFinite(h)) high = Math.max(high, h); else if (Number.isFinite(c)) high = Math.max(high, c);
+      if (Number.isFinite(l)) low = Math.min(low, l); else if (Number.isFinite(c)) low = Math.min(low, c);
+      if (Number.isFinite(c)) close = c;
+      if (Number.isFinite(v)) volume += v;
+    }
+    if (close === null) continue;
+    out.set(symbol, { date, open, high, low, close, volume:volume * scale });
+  }
+  return out;
+}

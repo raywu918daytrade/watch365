@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyScopedMarketBars, STATE_SIGNAL_MAX_AGE_MS } from './signalEngine.js';
+import { applyDailyClose, applyScopedMarketBars, STATE_SIGNAL_MAX_AGE_MS } from './signalEngine.js';
 import { planConditionStrategy } from './monitorConditions.js';
 import { strategyIdentity } from './indicatorRegistry.js';
 
@@ -56,4 +56,14 @@ test('legacy engine (no ruleTriggers) keeps the old behaviour', () => {
   const result = applyScopedMarketBars(state, bars, scope, 'test', now);
   assert.equal(result.signals.length, 1);
   assert.equal(result.signals[0].engine, undefined);
+});
+
+test('daily close: one notification per newly met stock in the watchlist, once per day', () => {
+  const state = freshState();
+  const daily = { id:'daily.close', version:'1', executor:'daily_close', name:'站上 20 日均線', timeframe:'1d', definitionFingerprint:'f', params:{}, activatedAt:'2026-10-08T00:00:00.000Z' };
+  const result = { date:'2026-10-08', met:['2330', '9999'], newly:[{ symbol:'2330', close:1015 }, { symbol:'9999', close:10 }] };
+  const first = applyDailyClose(state, result, daily, new Date('2026-10-08T05:50:00.000Z'));
+  assert.deepEqual(first.signals.map((signal) => [signal.symbol, signal.engine, signal.price]), [['2330', 'daily_close', 1015]]);
+  assert.match(state.notifications[0].message, /2330 台積電 條件成立：站上 20 日均線/);
+  assert.equal(applyDailyClose(state, result, daily, new Date('2026-10-08T05:51:00.000Z')).signals.length, 0);
 });
