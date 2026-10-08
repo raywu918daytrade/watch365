@@ -69,12 +69,14 @@ async function loadDaily() {
       daily.add(file.month, await readD1Rows(file.path, { maxAgeSeconds:file.month === current ? 3600 : 30 * 86400, symbols:symbols.size ? symbols : null }));
     }
     daily.finalize();
-    dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
     const stats = daily.stats();
+    // Sanity: months of data must give many bars per stock; a handful means dates were not read correctly.
+    if (stats.symbols && stats.bars / stats.symbols < Math.min(20, stats.months * 5)) throw Object.assign(new Error(`daily data looks wrong: ${stats.bars} bars for ${stats.symbols} symbols over ${stats.months} months`), { code:'HISTORY_D1_IMPLAUSIBLE' });
+    dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
     console.log(`history-index: daily ${stats.months} months × ${stats.symbols} symbols (${stats.bars} bars) in ${Date.now() - started} ms, heap ${info().heapMb} MB`);
   } catch (failure) {
-    dailyStatus = daily.months.size ? 'ready' : 'failed';
-    console.error('history-index: daily load failed', failure.code || failure.message);
+    dailyStatus = failure.code === 'HISTORY_D1_IMPLAUSIBLE' || !daily.months.size ? 'failed' : 'ready';
+    console.error('history-index: daily load failed', failure.code || failure.message, failure.code === 'HISTORY_D1_IMPLAUSIBLE' ? failure.message : '');
   }
 }
 function taipeiDay() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }

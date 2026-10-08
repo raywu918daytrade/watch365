@@ -48,3 +48,14 @@ test('falls back to the one-minute index when daily bars never meet it, and sess
   assert.equal(findExample({ filters:[vwap], daily:null, index })?.timeframe ?? 'm1', 'm1');
   assert.equal(findExample({ filters:[cond({ op:'lt', left:close, right:{ op:'constant', value:1 } })], daily, index:null }), null);
 });
+
+test('daily dates are read from every storage format', async () => {
+  const { dailyDate } = await import('./history.js');
+  assert.equal(dailyDate(20553), '2026-04-10');                    // parquet DATE: days since 1970
+  assert.equal(dailyDate(20261008), '2026-10-08');                 // YYYYMMDD integer
+  assert.equal(dailyDate('2026-10-08'), '2026-10-08');
+  assert.equal(dailyDate('20261008'), '2026-10-08');
+  assert.equal(dailyDate(new Date('2026-10-07T16:00:00Z')), '2026-10-08');   // midnight Taipei
+  assert.equal(dailyDate(Date.parse('2026-10-08T00:00:00+08:00')), '2026-10-08');
+  assert.equal(dailyDate(null), null);
+});

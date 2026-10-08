@@ -63,12 +63,29 @@ export async function readD1Rows(path, { maxAgeSeconds = 7 * 86400, symbols = nu
   for (const row of rows) {
     const symbol = String(row.stock_id);
     if (symbols && !symbols.has(symbol)) continue;
-    const ms = toMs(row.date);
+    const date = dailyDate(row.date);
     const close = roundPrice(row.close);
-    if (!Number.isFinite(ms) || !Number.isFinite(close)) continue;
-    out.push({ symbol, date: new Date(ms + TAIPEI_OFFSET_MS).toISOString().slice(0, 10), open: finitePrice(row.open), high: finitePrice(row.high), low: finitePrice(row.low), close, volume: row.volume == null ? null : Number(row.volume) });
+    if (!date || !Number.isFinite(close)) continue;
+    if (!readD1Rows.sampled) { readD1Rows.sampled = true; console.log(`history: D1 date column sample ${typeof row.date} ${String(row.date).slice(0, 40)} → ${date}`); }
+    out.push({ symbol, date, open: finitePrice(row.open), high: finitePrice(row.high), low: finitePrice(row.low), close, volume: row.volume == null ? null : Number(row.volume) });
   }
   return out;
+}
+
+// A daily bar's trading date (YYYY-MM-DD, Taipei) from whatever the D1 file stores: a Date, an ISO / 'YYYY-MM-DD'
+// string, a parquet DATE (days since 1970), a YYYYMMDD integer, or epoch seconds / ms / µs / ns.
+export function dailyDate(value) {
+  if (value == null) return null;
+  if (typeof value === 'bigint') value = Number(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    if (Number.isInteger(value) && value >= 19_000_101 && value <= 29_991_231) { const text = String(value); return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`; }
+    if (Math.abs(value) < 200_000) return new Date(value * 86_400_000).toISOString().slice(0, 10);
+  }
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (typeof value === 'string' && /^\d{8}$/.test(value)) return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+  const ms = toMs(value);
+  return Number.isFinite(ms) ? new Date(ms + TAIPEI_OFFSET_MS).toISOString().slice(0, 10) : null;
 }
 
 export async function listHfM1Months(options) {
