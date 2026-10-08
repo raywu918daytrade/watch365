@@ -15,11 +15,13 @@ import { BarCollector, collectHistory, HISTORY_DAYS, listHfD1Months, listHfM1Dat
 import { DailyStore, findExample } from './conditionExample.js';
 import { readFile } from 'node:fs/promises';
 import { HistoryIndex } from './historyIndex.js';
+import { DailyIndex } from './dailyIndex.js';
 
 const index = new HistoryIndex({ maxDays:HISTORY_DAYS });
 let status = 'idle', progress = null, error = null, loadedAt = null, refreshedAt = null, symbols = new Set();
 let queue = Promise.resolve();
 const daily = new DailyStore();
+const dailyIndex = new DailyIndex();   // daily filters (D1 step), recomputed whenever the daily history is (re)loaded
 let dailyStatus = 'idle', dailyLoadedDay = null;
 const examples = new Map();   // sorted filter keys → { day, example }
 const send = (message) => { if (process.send) process.send(message); };
@@ -56,7 +58,7 @@ async function loadDaily() {
   if (process.env.WATCH365_DAILY_FIXTURE) {
     const fixture = JSON.parse(await readFile(process.env.WATCH365_DAILY_FIXTURE, 'utf8'));
     daily.add('fixture', Object.entries(fixture).flatMap(([symbol, rows]) => rows.map((row) => ({ ...row, symbol }))));
-    daily.finalize(); dailyStatus = 'ready'; dailyLoadedDay = taipeiDay(); examples.clear(); return;
+    dailyIndex.setSeries(daily.finalize()); dailyStatus = 'ready'; dailyLoadedDay = taipeiDay(); examples.clear(); return;
   }
   if (process.env.WATCH365_HISTORY_FIXTURE) return;
   dailyStatus = 'loading';
@@ -72,7 +74,7 @@ async function loadDaily() {
     const stats = daily.stats();
     // Sanity: months of data must give many bars per stock; a handful means dates were not read correctly.
     if (stats.symbols && stats.bars / stats.symbols < Math.min(20, stats.months * 5)) throw Object.assign(new Error(`daily data looks wrong: ${stats.bars} bars for ${stats.symbols} symbols over ${stats.months} months`), { code:'HISTORY_D1_IMPLAUSIBLE' });
-    dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
+    dailyIndex.setSeries(daily.series); dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
     console.log(`history-index: daily ${stats.months} months × ${stats.symbols} symbols (${stats.bars} bars) in ${Date.now() - started} ms, heap ${info().heapMb} MB`);
   } catch (failure) {
     dailyStatus = failure.code === 'HISTORY_D1_IMPLAUSIBLE' || !daily.months.size ? 'failed' : 'ready';
@@ -119,8 +121,21 @@ process.on('message', (message) => {
         examples.set(cacheKey, { day, example }); if (examples.size > 500) examples.delete(examples.keys().next().value);
         reply({ type:'result', result:{ example, cached:false, dailyReady:dailyStatus === 'ready' } }); return;
       }
-      const result = index.query({ filters:message.filters || [], candidates:message.candidates || [], symbols:Array.isArray(message.symbols) ? new Set(message.symbols) : null, events:message.events !== false });
-      reply({ type:'result', result:{ ...result, computed, loadedAt, refreshedAt } });
+      const symbolSet = Array.isArray(message.symbols) ? new Set(message.symbols) : null;
+      // Daily filters (D1 step): answered from the daily index; each minute-bar day then only counts the stocks on that
+      // day's daily list (met on the previous daily close).
+      let dailyResult = null, symbolsByDate = null;
+      const dailyFilters = message.daily?.filters || [];
+      if (message.daily && (dailyFilters.length || message.daily.candidates?.length)) {
+        if (dailyStatus !== 'ready' || !dailyIndex.ready()) dailyResult = { loading:true, status:dailyStatus };
+        else {
+          dailyIndex.ensure(message.daily.conditions || []);
+          dailyResult = dailyIndex.query({ filters:dailyFilters, candidates:message.daily.candidates || [], symbols:symbolSet, list:Boolean(message.daily.list) });
+          if (dailyFilters.length) symbolsByDate = new Map(index.dates().map((date) => [date, dailyIndex.listFor(dailyFilters, date, symbolSet)]));
+        }
+      }
+      const result = dailyResult?.loading && dailyFilters.length ? { dates:index.dates(), availableDays:index.dates().length, steps:[], candidates:[] } : index.query({ filters:message.filters || [], candidates:message.candidates || [], symbols:symbolSet, symbolsByDate, events:message.events !== false });
+      reply({ type:'result', result:{ ...result, daily:dailyResult, computed, loadedAt, refreshedAt } });
     } catch (failure) {
       reply({ type:'error', code:failure.code || 'HISTORY_INDEX_FAILED', message:failure.message });
     }

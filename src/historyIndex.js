@@ -69,12 +69,13 @@ export class HistoryIndex {
   // filters: condition keys in the order the user picked them. Each step i = filters[0..i] all met.
   // candidates: condition keys to try as "the next filter" on top of all filters (the list rows).
   // symbols: Set to restrict to (a watchlist), or null for every stock in memory.
-  query({ filters = [], candidates = [], symbols = null, events = true } = {}) {
+  // symbolsByDate: Map(date → Set) further restricts each day (the daily-filter list of that day), or null.
+  query({ filters = [], candidates = [], symbols = null, symbolsByDate = null, events = true } = {}) {
     for (const key of [...filters, ...candidates]) if (!this.conditions.has(key)) throw Object.assign(new Error('HISTORY_INDEX_CONDITION_MISSING'), { code:'HISTORY_INDEX_CONDITION_MISSING', key });
     const dates = this.dates();
-    const steps = filters.map((_, index) => this.#combine(filters.slice(0, index + 1), dates, symbols, events && index === filters.length - 1));
+    const steps = filters.map((_, index) => this.#combine(filters.slice(0, index + 1), dates, symbols, events && index === filters.length - 1, symbolsByDate));
     const candidateResults = candidates.map((key) => {
-      const result = this.#combine([...filters, key], dates, symbols, false);
+      const result = this.#combine([...filters, key], dates, symbols, false, symbolsByDate);
       return { key, triggeredSymbols:result.triggeredSymbols, totalEvents:result.totalEvents };
     });
     return { dates, availableDays:dates.length, steps, candidates:candidateResults };
@@ -107,7 +108,7 @@ export class HistoryIndex {
     conditions.forEach((condition, index) => condition.truth.set(date, perCondition[index]));
   }
 
-  #combine(keys, dates, symbols, withEvents) {
+  #combine(keys, dates, symbols, withEvents, symbolsByDate = null) {
     const conditions = keys.map((key) => this.conditions.get(key));
     const kind = conditions.some((condition) => condition.kind === 'event') ? 'event' : 'level';
     const rearm = this.rearmBars[kind];
@@ -118,6 +119,7 @@ export class HistoryIndex {
       let count = 0;
       for (const [symbol, series] of day) {
         if (symbols && !symbols.has(symbol)) continue;
+        if (symbolsByDate && !symbolsByDate.get(date)?.has(symbol)) continue;
         const sets = conditions.map((condition) => condition.truth.get(date)?.get(symbol));
         if (sets.some((set) => !set)) continue;
         // Fast skip: no bar where every condition is met → nothing can trigger.

@@ -245,7 +245,12 @@ async function routeApi(request, response) {
       const usable = resolvedCandidates.filter((item) => !item.error);
       const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : null;
       if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
-      const result = await historyIndex.query({ filters:resolvedFilters, candidates:usable, symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:body.events !== false });
+      // Daily step (D1 filters): body.daily = { filters:[spec], candidates:[spec], list }.
+      const dailyBody = body.daily && typeof body.daily === 'object' ? body.daily : null;
+      const dailyFilters = Array.isArray(dailyBody?.filters) ? dailyBody.filters.slice(0, MAX_INDEX_FILTERS).map((spec) => resolveIndexCondition(spec)) : [];
+      const dailyCandidates = Array.isArray(dailyBody?.candidates) ? dailyBody.candidates.slice(0, 200).map((spec) => { try { return resolveIndexCondition(spec); } catch (error) { return { error:error.code || 'TEMPLATE_REQUEST_INVALID' }; } }) : [];
+      const dailyUsable = dailyCandidates.filter((item) => !item.error);
+      const result = await historyIndex.query({ filters:resolvedFilters, candidates:usable, symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:body.events !== false, daily:dailyBody ? { filters:dailyFilters, candidates:dailyUsable, list:Boolean(dailyBody.list) } : null });
       if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || (result.status === 'failed' ? '資料讀取失敗，重新嘗試中' : '準備 7 日資料'), error:result.error ?? null }); return; }
       const names = new Map((watchlist || await getUniverseWatchlist().catch(() => [])).map((item) => [item.symbol, item.name]));
       const symbolsCount = watchlist ? watchlist.length : names.size;
@@ -257,7 +262,8 @@ async function routeApi(request, response) {
         filterKeys:resolvedFilters.map((item) => item.key),
         steps:result.steps,
         candidates:resolvedCandidates.map((item, index) => item.error ? { index, error:item.error } : { index, triggeredSymbols:byKey.get(item.key)?.triggeredSymbols ?? 0, totalEvents:byKey.get(item.key)?.totalEvents ?? 0 }),
-        verdict:last ? historyVerdict({ totalEvents:last.totalEvents, symbolsCount, availableDays:result.availableDays }) : null
+        verdict:last ? historyVerdict({ totalEvents:last.totalEvents, symbolsCount, availableDays:result.availableDays }) : null,
+        daily:result.daily ? (result.daily.loading ? { status:'loading' } : { status:'ready', dates:result.daily.dates, latestDate:result.daily.latestDate, filterKeys:dailyFilters.map((item) => item.key), steps:result.daily.steps, candidates:dailyCandidates.map((item, index) => { if (item.error) return { index, error:item.error }; const found = result.daily.candidates.find((entry) => entry.key === item.key); return { index, latestCount:found?.latestCount ?? 0 }; }) }) : null
       });
     } catch (error) {
       if (!error.statusCode) console.error(error);

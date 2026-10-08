@@ -21,6 +21,7 @@ import { dirname } from 'node:path';
 import { formulaSummary, validateFormula } from './formulaEngine.js';
 import { FORMULA_RECIPES } from './formulaRecipes.js';
 import { planMonitorCondition } from './formulaPlanner.js';
+import { dailyCapable } from './dailyIndex.js';
 import { FAMILY_ORDER, extractTemplate, instantiateTemplate, templatePresets, templateSummaryName } from './indicatorTemplates.js';
 
 export const FORMULA_LIBRARY_STATUSES = Object.freeze(['active', 'pending_review', 'disabled']);
@@ -235,6 +236,7 @@ export class FormulaLibrary {
     const info = templateSummaryName(representative.ast, template); const { name, family, category } = info;
     return {
       shapeKey, family, category, name,
+      daily: dailyCapable(representative.ast),   // usable as a daily-candle (D1) filter: no session-only blocks (VWAP, first bar)
       params: template.params.map(({ key, label, type, default: value, min, max }) => ({ key, label, type, default: value, min, max })),
       direction: template.direction ? { key: template.direction.key, options: template.direction.options, default: template.direction.default } : null,
       // Each preset carries its formula in words, so the list can show what a row means before it is picked.
