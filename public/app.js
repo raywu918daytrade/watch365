@@ -386,7 +386,11 @@ function drawTemplates(){
     if(tab===RANK_TAB){
       const shown=rankAll?live:live.slice(0,RANK_TOP);
       body=`<div class="proto-rank-list">${shown.map(line).join('')||'<div class="proto-status"><p>加入任何一個都會變成 0 檔。</p></div>'}</div>${live.length>shown.length?`<button type="button" class="proto-link proto-rank-more" data-rank-all>顯示全部 ${live.length} 個</button>`:''}${zero.length?`<p class="proto-signature proto-rank-zero-note">另有 ${zero.length} 個加入後 0 檔，未列出</p>`:''}`;
-    }else body=`<div class="proto-rank-list">${[...live,...zero].map(line).join('')||'<div class="proto-status"><p>這一類都已經加入了。</p></div>'}</div>`;
+    }else{
+      // Rows already picked stay in their category, marked 已加入, so they don't look like they vanished (owner report 2026-10).
+      const added=rows.filter((row)=>hasSpec(row.spec)).map(presetLine(full,block)).join('');
+      body=`<div class="proto-rank-list">${added}${[...live,...zero].map(line).join('')}</div>`;
+    }
   }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';

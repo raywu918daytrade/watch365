@@ -256,9 +256,9 @@ test('compose：items 兩個過濾以 all 合併、token 可驗、summary 為「
     // 單一 item 與舊格式等價
     assert.equal(library.compose([{ shapeKey: rsi.shapeKey }]).proposal.fingerprint, library.instantiate(rsi.shapeKey).proposal.fingerprint);
     assert.equal(library.compose([{ fingerprint: formulaFingerprint(recipe('rsi_down')) }]).proposal.fingerprint, formulaFingerprint(recipe('rsi_down')));
-    // 套用後：合併公式進公式庫成為新指標（其他／唯一 preset），兩個成員指標不受影響
+    // 套用後：過濾的組合不是新指標，不進公式庫（owner report 2026-10：組合曾以「A 且 B 且 C」出現在清單）
     await library.recordActivation({ ast: result.proposal.ast, name: result.proposal.name });
-    assert.equal(library.templates().length, templates.length + 1);
+    assert.equal(library.templates().length, templates.length);
     const rejects = (items, code, status) => assert.throws(() => library.compose(items), (error) => error.code === code && error.statusCode === status);
     rejects([{ shapeKey: rsi.shapeKey }, { shapeKey: rsi.shapeKey }, { shapeKey: volume.shapeKey }, { shapeKey: volume.shapeKey }], 'TEMPLATE_REQUEST_INVALID', 422);   // at most 3 filters
     rejects([], 'TEMPLATE_REQUEST_INVALID', 422);

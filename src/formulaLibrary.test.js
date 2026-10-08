@@ -189,3 +189,25 @@ test('有 DB：寫入透過 backend upsert，不碰 JSON 檔', async () => {
     assert.equal(validateFormula(again.formulas.get(formulaFingerprint(emaCross(5))).ast).fingerprint, formulaFingerprint(emaCross(5)));
   } finally { await rm(dir, { recursive:true, force:true }); }
 });
+
+test('a monitor combination of filters is not saved as an indicator, and old ones are disabled on load', async () => {
+  const { dir, filePath, library } = await tempLibrary();
+  try {
+    const t = library.templates()[0];
+    const pair = library.compose([{ shapeKey:t.shapeKey, values:t.presets[0].values, direction:t.presets[0].direction }, { ast:emaCross(7), name:'x' }]);
+    const before = library.list().length;
+    const result = await library.recordActivation({ ast:pair.proposal.ast, name:pair.proposal.name });
+    assert.equal(result.formula, null);
+    assert.equal(library.list().length, before);
+    // An AI indicator whose own formula is an AND keeps being saved (its name is not the joined summaries).
+    const own = await library.recordActivation({ ast:{ op:'all', items:[emaCross(7), emaCross(9)] }, name:'雙 EMA 確認' });
+    assert.ok(own.formula);
+    // A row stored by an older version is disabled when the library loads.
+    const stored = JSON.parse(await readFile(filePath, 'utf8'));
+    stored.formulas.push({ fingerprint:pair.proposal.fingerprint, ast:pair.proposal.ast, name:pair.proposal.name, summary:'', warmupBars:pair.proposal.warmupBars, source:'ai', status:'pending_review', hitCount:1, createdAt:'2026-10-08T00:00:00Z', updatedAt:'2026-10-08T00:00:00Z' });
+    await writeFile(filePath, JSON.stringify(stored));
+    const reloaded = await new FormulaLibrary(filePath, { log:quiet }).load();
+    assert.equal(reloaded.get(pair.proposal.fingerprint).status, 'disabled');
+    assert.equal(reloaded.get(own.formula.fingerprint).status, 'pending_review');
+  } finally { await rm(dir, { recursive:true, force:true }); }
+});

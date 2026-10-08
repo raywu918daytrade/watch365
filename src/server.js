@@ -308,6 +308,7 @@ async function routeApi(request, response) {
       const existing = formulaLibrary.get(payload.fingerprint);
       const saved = existing && existing.status !== 'disabled' ? existing : (await formulaLibrary.recordActivation({ ast:payload.ast, name:payload.name, sourceText:payload.sourceText ?? null })).formula;
       if (HISTORY_INDEX_ENABLED) historyIndex.ensure([{ key:payload.fingerprint, ast:payload.ast }]).catch(() => {});
+      if (!saved) { sendJson(response, 422, { error:'FORMULA_IS_COMBINATION' }); return; }
       events.record('formula_saved', { fingerprint:saved.fingerprint, name:saved.name, text:payload.sourceText?.slice(0, 200) ?? null, existing:Boolean(existing) }, { visitor });
       sendJson(response, 200, { fingerprint:saved.fingerprint, name:saved.name, summary:saved.summary, status:saved.status });
     } catch (error) {

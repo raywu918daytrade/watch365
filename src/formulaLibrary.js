@@ -107,7 +107,17 @@ export class FormulaLibrary {
       this.aliases.set(alias.aliasNorm, alias);
     }
     await this.seed();
+    await this.enqueue(() => this.retireCombinations());
     return this;
+  }
+  // Monitors used to record the AND of their 2–3 filters as one AI formula, which then showed up in the indicator list
+  // as a long "A 且 B 且 C" row under a wrong family (owner report 2026-10). Such rows are disabled (reversible from admin).
+  async retireCombinations() {
+    const stale = [...this.formulas.values()].filter((formula) => formula.status !== 'disabled' && isFilterCombination(formula.ast, formula.name));
+    if (!stale.length) return;
+    const now = new Date().toISOString();
+    for (const formula of stale) { formula.status = 'disabled'; formula.updatedAt = now; this.log.info?.(`formula-library: disabled filter combination ${formula.fingerprint.slice(0, 8)} "${formula.name}"`); }
+    await this.persist(stale, []);
   }
 
   // Upserts every recipe as a preset. Status and hitCount of an existing row are kept (operators may have
@@ -154,6 +164,8 @@ export class FormulaLibrary {
   recordActivation({ ast, name, sourceText = null }) { return this.enqueue(() => this.recordActivationLocked({ ast, name, sourceText })); }
   async recordActivationLocked({ ast, name, sourceText }) {
     const validated = validateFormula(ast); const now = new Date().toISOString();
+    // A monitor's combination of filters is not an indicator: each filter is already in the library on its own.
+    if (isFilterCombination(validated.ast, name)) return { formula: null, promoted: false, skipped: 'combination' };
     let formula = this.formulas.get(validated.fingerprint);
     if (formula) { formula.hitCount += 1; formula.updatedAt = now; }
     else { formula = { fingerprint: validated.fingerprint, ast: validated.ast, name: String(name || '').trim().slice(0, 100) || formulaSummary(validated.ast).slice(0, 100), summary: formulaSummary(validated.ast), warmupBars: validated.warmupBars, source: 'ai', status: 'pending_review', hitCount: 1, createdAt: now, updatedAt: now }; this.formulas.set(formula.fingerprint, formula); }
@@ -317,3 +329,9 @@ function sanitizeAlias(row) {
   return { aliasNorm, aliasRaw: typeof row.aliasRaw === 'string' ? row.aliasRaw.slice(0, MAX_ALIAS_RAW) : aliasNorm, fingerprint: row.fingerprint, hits: Number.isInteger(row.hits) && row.hits >= 0 ? row.hits : 0, lastUsedAt: typeof row.lastUsedAt === 'string' ? row.lastUsedAt : null, source: FORMULA_LIBRARY_SOURCES.includes(row.source) ? row.source : 'ai' };
 }
 function presetSummary(ast, template, preset) { try { return formulaSummary(instantiateTemplate(ast, template, preset.values ?? {}, preset.direction ?? null)); } catch { return ''; } }
+// The AND that compose() builds from 2–3 filters: root `all` whose name is its parts' summaries joined with 且.
+export function isFilterCombination(ast, name) {
+  if (!ast || ast.op !== 'all' || !Array.isArray(ast.items) || ast.items.length < 2) return false;
+  let joined; try { joined = ast.items.map((item) => formulaSummary(item)).join(' 且 ').slice(0, 100); } catch { return false; }
+  return String(name || '').trim().slice(0, 100) === joined;
+}
