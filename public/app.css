@@ -268,3 +268,7 @@
 .proto-candidates { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.3rem; }
 .proto-candidates .proto-chip { cursor:default; }
 @media (max-width:640px) { .proto-vet-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .proto-vet-stats div:nth-child(2) { border-right:0; } .proto-vet-stats div:nth-child(-n+2) { border-bottom:1px solid #e3ebeb; } .proto-vet-hint { margin:.3rem 0 0; } }
+/* 7-day counts from the precomputed index: on each selected filter (funnel step) and each list row (if added next). */
+.proto-count { color:#2f6f5e; font-size:.74rem; font-variant-numeric:tabular-nums; }
+.proto-count.zero { color:#a4471f; font-weight:600; }
+.proto-count.muted { color:#7a8a8e; }

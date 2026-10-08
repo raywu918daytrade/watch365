@@ -142,3 +142,15 @@ test('snapshot compares shadow triggers with the current engine and reports sess
   assert.equal(sessionClosed('2026-10-08', new Date('2026-10-08T03:00:00Z')), false);
   assert.equal(ruleTruth({ conditionKeys:['a', 'b'] }, new Map([['a', [true]], ['b', [null]]]), 0), null);
 });
+
+test('event rules re-arm 30 minutes after the last notification, even if they keep re-crossing', async () => {
+  const { ruleTriggerIndexes } = await import('./ruleState.js');
+  // A cross every 10 minutes for 100 minutes: notify at 0, 30, 60, 90 (re-crosses in between are suppressed).
+  const truth = Array.from({ length:100 }, (_, index) => index % 10 === 0);
+  assert.deepEqual(ruleTriggerIndexes(truth, 30, 'event'), [0, 30, 60, 90]);
+  // A level rule that never goes off for 3 bars notifies once.
+  assert.deepEqual(ruleTriggerIndexes(Array(100).fill(true), 3, 'level'), [0]);
+  // Unknown bars are skipped; time comes from barEnds when given.
+  const ends = [0, 60_000, 40 * 60_000].map((ms) => ms + 1_000_000);
+  assert.deepEqual(ruleTriggerIndexes([true, true, true], 30, 'event', ends), [0, 2]);
+});

@@ -16,6 +16,7 @@ import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js
 import { loadProjectEnv } from './env.js';
 import { createConditionStateBackend, createRuleStateBackend, createDocumentBackend, createEventBackend, createFormulaLibraryBackend, createUnknownIndicatorBackend, dbConfigFromEnv } from './db.js';
 import { ConditionStateStore, rulesFromSettings } from './conditionState.js';
+import { HistoryIndexClient } from './historyIndexClient.js';
 import { RuleStateStore, taipeiDate } from './ruleState.js';
 import { HISTORY_DAYS, historyVerdict, listHfM1Dates, listHfM1Months } from './history.js';
 import { EventStore } from './events.js';
@@ -24,7 +25,7 @@ import { UnknownIndicatorStore, lookupIndicator } from './indicatorLookup.js';
 import { createAdminApi } from './adminApi.js';
 import { fork } from 'node:child_process';
 import { IndicatorRequestStore } from './indicatorRequests.js';
-import { issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
+import { formulaFingerprint, issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
 import { conditionsName, parseConditions, planConditionStrategy } from './monitorConditions.js';
 
@@ -67,6 +68,10 @@ const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { b
 const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createConditionStateBackend(dbConfigFromEnv()) : null });
 const ruleStates = new RuleStateStore(RULE_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createRuleStateBackend(dbConfigFromEnv()) : null });
 const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0; return state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, secret: formulaTokenSecret });
+// 7-day condition index in a long-lived worker (src/historyIndexWorker.js). HISTORY_INDEX=off disables it.
+const HISTORY_INDEX_ENABLED = process.env.HISTORY_INDEX !== 'off';
+const MAX_INDEX_FILTERS = 3;
+const historyIndex = new HistoryIndexClient({ getSymbols: async () => (await getUniverseWatchlist()).map((item) => item.symbol), heapMb: Number(process.env.HISTORY_INDEX_HEAP_MB || 640) });
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
@@ -137,6 +142,8 @@ await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),e
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
 console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
 syncMonitorTimer();
+// Start the index worker in the background and precompute every indicator-list row once.
+if (HISTORY_INDEX_ENABLED) historyIndex.start().then(() => historyIndex.ensure(libraryConditions())).then((result) => console.log(`history-index: ${result?.loading ? 'loading 7-day data' : `ready, ${result?.conditions} conditions`}`)).catch((error) => console.error('history-index: start failed', error.code || error.message));
 
 const server = createServer(async (request, response) => {
   try {
@@ -197,6 +204,44 @@ async function routeApi(request, response) {
     sendJson(response, 200, historyJobView(job));
     return;
   }
+  // 7-day condition index (src/historyIndex.js): every filter is precomputed once; this only combines stored results.
+  // body { purpose, watchlist?, filters:[spec], candidates?:[spec], events? }, spec = { shapeKey, values, direction } |
+  // { fingerprint } | { proposalToken } (an AI filter not in the library yet) | { conditionKey } (already computed).
+  // → 200 { status:'ready', steps:[{ triggeredSymbols, totalEvents, days, events? }], candidates:[{ index,
+  // triggeredSymbols, totalEvents } | { index, error }], filterKeys, verdict, … } or 202 { status:'loading', progress }.
+  if (method === 'POST' && url.pathname === '/api/history/index') {
+    let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
+    if (!purpose) { sendJson(response, 400, { error:'MONITOR_PURPOSE_INVALID' }); return; }
+    const filters = Array.isArray(body.filters) ? body.filters : [], candidates = Array.isArray(body.candidates) ? body.candidates.slice(0, 200) : [];
+    if (filters.length > MAX_INDEX_FILTERS) { sendJson(response, 422, { error:'CONDITIONS_TOO_MANY' }); return; }
+    try {
+      const resolvedFilters = filters.map((spec) => resolveIndexCondition(spec));
+      const resolvedCandidates = candidates.map((spec) => { try { return resolveIndexCondition(spec); } catch (error) { return { error:error.code || 'TEMPLATE_REQUEST_INVALID' }; } });
+      const usable = resolvedCandidates.filter((item) => !item.error);
+      const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : null;
+      if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
+      const result = await historyIndex.query({ filters:resolvedFilters, candidates:usable, symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:body.events !== false });
+      if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || (result.status === 'failed' ? '資料讀取失敗，重新嘗試中' : '準備 7 日資料'), error:result.error ?? null }); return; }
+      const names = new Map((watchlist || await getUniverseWatchlist().catch(() => [])).map((item) => [item.symbol, item.name]));
+      const symbolsCount = watchlist ? watchlist.length : names.size;
+      const byKey = new Map(result.candidates.map((item) => [item.key, item]));
+      const last = result.steps.at(-1);
+      if (last?.events) last.events = last.events.map((event) => ({ ...event, name:names.get(event.symbol) || event.symbol }));
+      sendJson(response, 200, {
+        status:'ready', availableDays:result.availableDays, dates:result.dates, symbolsCount, refreshedAt:result.refreshedAt ?? result.loadedAt ?? null,
+        filterKeys:resolvedFilters.map((item) => item.key),
+        steps:result.steps,
+        candidates:resolvedCandidates.map((item, index) => item.error ? { index, error:item.error } : { index, triggeredSymbols:byKey.get(item.key)?.triggeredSymbols ?? 0, totalEvents:byKey.get(item.key)?.totalEvents ?? 0 }),
+        verdict:last ? historyVerdict({ totalEvents:last.totalEvents, symbolsCount, availableDays:result.availableDays }) : null
+      });
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_INDEX_FAILED' });
+    }
+    return;
+  }
+
   if ((method === 'POST' || method === 'GET') && url.pathname === '/api/history/backtest') {
     let body;
     try { body = method === 'POST' ? await readJson(request) : url.searchParams.has('c') ? await compactHistorySpec(url.searchParams) : JSON.parse(url.searchParams.get('spec') || 'null'); }
@@ -324,7 +369,7 @@ async function routeApi(request, response) {
     let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     try {
       if (!body || typeof body !== 'object' || Array.isArray(body) || (typeof body.shapeKey !== 'string' && !Array.isArray(body.items))) throw Object.assign(new Error('TEMPLATE_REQUEST_INVALID'), { code:'TEMPLATE_REQUEST_INVALID', statusCode:422 });
-      // Single template ({ shapeKey, values, direction }) or 1–2 filters ({ items:[{ shapeKey|fingerprint, values, direction }] }) joined with `all`.
+      // Single template ({ shapeKey, values, direction }) or 1–3 filters ({ items:[{ shapeKey|fingerprint, values, direction }] }) joined with `all`.
       // An item may be a signed proposalToken from /api/indicator-agent/parse: verify it and compose its AST.
       const items = (Array.isArray(body.items) ? body.items : [{ shapeKey: body.shapeKey, values: body.values ?? {}, direction: body.direction ?? null }]).map((item) => {
         if (item && typeof item === 'object' && typeof item.proposalToken === 'string') { const payload = verifyFormulaToken(item.proposalToken, formulaTokenSecret); return { ast: payload.ast, name: payload.name }; }
@@ -904,4 +949,26 @@ function formatVersion(date) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
     .formatToParts(date).map((part) => [part.type, part.value]));
   return `v${parts.year}.${parts.month}.${parts.day}-${parts.hour}${parts.minute}`;
+}
+
+// A filter spec → { key, ast } for the history index. Library templates and formulas resolve through the library,
+// an AI filter through its signed token, and a key the index already computed is used as is.
+function resolveIndexCondition(spec) {
+  if (!spec || typeof spec !== 'object') throw Object.assign(new Error('TEMPLATE_REQUEST_INVALID'), { code:'TEMPLATE_REQUEST_INVALID', statusCode:422 });
+  if (typeof spec.conditionKey === 'string') { const known = historyIndex.known(spec.conditionKey); if (known) return known; }
+  let ast;
+  if (typeof spec.proposalToken === 'string') ast = verifyFormulaToken(spec.proposalToken, formulaTokenSecret).ast;
+  else if (typeof spec.shapeKey === 'string' || typeof spec.fingerprint === 'string') ast = formulaLibrary.compose([spec.shapeKey ? { shapeKey:spec.shapeKey, values:spec.values ?? {}, direction:spec.direction ?? null } : { fingerprint:spec.fingerprint }]).proposal.ast;
+  else throw Object.assign(new Error('HISTORY_INDEX_CONDITION_MISSING'), { code:'HISTORY_INDEX_CONDITION_MISSING', statusCode:409 });
+  return { key:formulaFingerprint(ast), ast };
+}
+
+// Every row of the indicator list (each preset of each template, and AI-built members) as index conditions.
+function libraryConditions() {
+  const out = [];
+  for (const template of formulaLibrary.templates({ includePending:true })) {
+    if (template.source !== 'ai') for (const preset of template.presets || []) { try { out.push(resolveIndexCondition({ shapeKey:template.shapeKey, values:preset.values || {}, direction:preset.direction ?? null })); } catch {} }
+    for (const member of template.members || []) if (member.source === 'ai') { try { out.push(resolveIndexCondition({ fingerprint:member.fingerprint })); } catch {} }
+  }
+  return out;
 }

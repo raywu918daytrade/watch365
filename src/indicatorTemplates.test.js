@@ -237,7 +237,7 @@ test('presets：每個 family 的粗刻度變體、label 中性具體；每個 p
   } finally { await rm(dir, { recursive:true, force:true }); }
 });
 
-test('compose：items 兩個過濾以 all 合併、token 可驗、summary 為「A 且 B」；fingerprint 直接用既有成員；超過 2 個或無效拒絕', async () => {
+test('compose：items 兩個過濾以 all 合併、token 可驗、summary 為「A 且 B」；fingerprint 直接用既有成員；超過 3 個或無效拒絕', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'indicator-templates-'));
   try {
     const library = await new FormulaLibrary(join(dir, 'formula-library.json'), { log: quiet }).load();
@@ -260,7 +260,7 @@ test('compose：items 兩個過濾以 all 合併、token 可驗、summary 為「
     await library.recordActivation({ ast: result.proposal.ast, name: result.proposal.name });
     assert.equal(library.templates().length, templates.length + 1);
     const rejects = (items, code, status) => assert.throws(() => library.compose(items), (error) => error.code === code && error.statusCode === status);
-    rejects([{ shapeKey: rsi.shapeKey }, { shapeKey: rsi.shapeKey }, { shapeKey: volume.shapeKey }], 'TEMPLATE_REQUEST_INVALID', 422);
+    rejects([{ shapeKey: rsi.shapeKey }, { shapeKey: rsi.shapeKey }, { shapeKey: volume.shapeKey }, { shapeKey: volume.shapeKey }], 'TEMPLATE_REQUEST_INVALID', 422);   // at most 3 filters
     rejects([], 'TEMPLATE_REQUEST_INVALID', 422);
     rejects([{ values: {} }], 'TEMPLATE_REQUEST_INVALID', 422);
     rejects([{ fingerprint: 'f'.repeat(64) }], 'TEMPLATE_NOT_FOUND', 404);

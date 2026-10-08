@@ -124,11 +124,23 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 **通知來源（2026-10 第 3 版起）**：指標類監控（RSI／SMA／EMA／公式）的 signal 與通知改由狀態機產生（`NOTIFY_ENGINE=state`，預設）：只有「待命 → 已觸發」那一刻建立一筆 signal 與通知，訊息為「代號 名稱 條件成立：規則名稱 | 收盤 X」，`signal.engine='state_machine'`。觸發的 K 棒超過 3 分鐘才被發現（重啟、資料延遲）只記 log 不通知；同一（日期、股票、規則、K 棒）以 `state.dedupe` 去重。舊的逐根引擎仍會跑來產生 decision 紀錄，但它本來會發的通知改記為 `superseded_by_state_machine` 並計數（`runtime.legacyShadow`），後台並列比較。舊版「突破今日高點＋成交量放大」規則沒有公式形式，仍由原引擎通知。緊急回退：Railway 設 `NOTIFY_ENGINE=legacy` 後重新部署，即恢復舊的逐根通知，狀態機改回影子模式。
 
 - `idle`（待命）→ 某根 K 棒成立 → `triggered`（已觸發），**只有這一刻算一次通知（trigger）**；持續成立不再通知。
-- `triggered` → 不成立 → `cooldown`（冷卻）；連續 `rearmBars` 根不成立才回 `idle` 重新待命；冷卻中又成立 → 回 `triggered` 但不通知（suppressed）。`rearmBars`：狀態型（≥、≤…）3 根，吸收門檻附近的來回跳動；事件型（穿越，只亮一根）30 根，等同原本 30 分鐘冷卻。
+- 狀態型（≥、≤…）：`triggered` → 不成立 → `cooldown`；連續 3 根不成立才回 `idle`；冷卻中又成立 → 回 `triggered` 但不通知（suppressed）。事件型（穿越，只亮一根）：上次通知 30 分鐘後回 `idle`，期間再穿越都擋下。
 - 暖機或資料缺口（未知）不改變狀態。換交易日全部重置（當沖：每天重新開始）；13:30 之後狀態保留並標示「今日已收盤」。某（規則 × 股票）當天第一次出現時，若已成立則以 `triggered` 起始但不通知（與現行 baseline_only 一致）。
 - 只處理受影響的規則：該股票這輪有條件變化（第 1 層 `changedKeys` × `rulesFor`）、不在待命、或還沒有狀態；其餘待命規則只前移 last bar。
 - 保存：`watch365_rule_state(rule_id, symbol, trading_date, state, since_bar, last_bar, false_bars, triggers_today, suppressed_today, last_trigger_bar, baseline, PK(rule_id, symbol))`，只 upsert 有變的列，保留 7 天；無 DB 時 `data/rule-state.json`（`WATCH365_RULE_STATE_FILE`）。與第 1 層同受 `CONDITION_LAYER=off` 控制（關閉時也強制 `NOTIFY_ENGINE=legacy`）。
 - 後台：`GET /api/admin/conditions` 多了 `ruleStates:{ mode:'live'|'shadow', lastRun:{ symbols, walked, skipped, baselines, triggers, suppressed, rearmed, ms }, rules:[{ ruleId, name, kind, rearmBars, symbols, states:{ idle, triggered, cooldown }, triggersToday, suppressedToday, tradingDate, sessionClosed }], comparison:{ day, shadowTriggers, suppressed, legacySignals }, recentEvents:[{ type:'trigger'|'suppressed'|'rearm', ruleId, ruleName, symbol, barEnd }] }`。
+
+### 7 日條件索引（選指標立即知道過去 7 天幾檔觸發）
+
+老闆決策（2026-10）：不要每次選指標才重新計算。過去 7 個交易日的一分鐘 K 常駐在一個獨立的長駐子程序（`src/historyIndexWorker.js`，自己的 heap 上限 `HISTORY_INDEX_HEAP_MB`，預設 640），每個條件對每檔股票每天**只算一次**，存成兩組位元（已知／成立，`src/historyIndex.js`）。
+
+- 預先計算：啟動時把指標清單每一列（每個模板的每個 preset，加上 AI 建立的成員，目前 71 個）全部算好；AI 新建立的過濾第一次被查詢時算一次，之後沿用。過去的日子不再重算；盤中（平日 08:55–13:45）每 3 分鐘只重讀今天的 m1_live 檔並重算今天；新交易日出現時最舊的一天移出。
+- 查詢只做組合：選了 A、B、C → 逐根 K 棒把已存的位元做「且」，再用與即時通知相同的狀態機（`ruleState.ruleTriggerIndexes`）數觸發，不重算任何指標。
+- `POST /api/history/index { purpose, watchlist?, filters:[spec], candidates?:[spec] }`，spec＝`{ shapeKey, values, direction }`｜`{ fingerprint }`｜`{ proposalToken }`（尚未入庫的 AI 過濾）｜`{ conditionKey }`。回 200 `{ status:'ready', steps:[{ triggeredSymbols, totalEvents, days, events? }], candidates:[{ index, triggeredSymbols, totalEvents }], filterKeys, verdict, availableDays, symbolsCount }`；第 i 步＝前 i 個過濾全部成立（漏斗），candidates＝把該列加在目前所有過濾之後的結果。資料準備中回 202 `{ status:'loading', progress }`。
+- 前端條件頁：已選過濾每一步顯示「過去 7 日／加上這個後：N 檔・M 次」，變成 0 檔時標紅並指出是這個過濾篩光的；清單每一列顯示「加入後 N 檔」。加入、移除都自動更新，不需要按回查。過濾上限 2 → 3 個。
+- 記憶體：約 600 檔 × 7 天的一分鐘 K 以 typed array 保存，加上每個條件約 0.3 MB 位元。子程序死掉時下一個請求會自動重啟並重算記住的條件。`HISTORY_INDEX=off` 關閉。測試可用 `WATCH365_HISTORY_FIXTURE`（JSON）代替 HF 資料。
+
+狀態機冷卻修正（同版）：穿越型（事件）規則原本是「連續 30 根沒有穿越才重新待命」，一檔每 10 分鐘就穿越一次的股票會整天只通知一次；改為「上次通知後 30 分鐘重新待命」，期間再穿越的擋下（同舊引擎的 30 分鐘冷卻）。狀態型規則維持「連續 3 根不成立才重新待命」。
 
 ### 固定突破量能規則
 

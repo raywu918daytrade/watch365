@@ -8,8 +8,8 @@
 //   triggered  met. Staying met does nothing — no repeat notification every bar.
 //   cooldown   was triggered, now not met. If it stays not met for `rearmBars` completed bars it goes back to idle
 //              (armed again); if it is met again before that, it returns to triggered silently ('suppressed').
-//              rearmBars: 3 for level rules (≥, ≤ …: absorbs flicker around a threshold), 30 for event rules
-//              (crosses: a one-bar event, so this is the old 30-minute cooldown expressed in bars).
+//              rearmBars: 3 for level rules (≥, ≤ …: absorbs flicker around a threshold). Event rules (crosses,
+//              a one-bar event) re-arm 30 minutes after the last notification instead (see stepRule).
 //
 // Unknown (warm-up, data gap) changes nothing. Session reset: the 1m (當沖) monitor works one trading day at a
 // time, so the first bar of a new trading day starts every (rule, stock) over; after 13:30 the day's state stays as
@@ -152,29 +152,15 @@ export class RuleStateStore {
       const met = ruleTruth(rule, ctx.values, index);
       if (typeof met !== 'boolean') continue;
       const barEnd = ctx.bars[index].barEnd;
-      if (state.state === 'idle') {
-        if (!met) continue;
-        Object.assign(state, { state:'triggered', since:barEnd, falseBars:0, lastTriggerBar:barEnd, baseline:false });
-        state.triggersToday += 1;
-        this.#event({ type:'trigger', ruleId:rule.ruleId, symbol:ctx.symbol, barEnd, tradingDate:ctx.tradingDate, detectedAt:now.toISOString() });
-      } else if (state.state === 'triggered') {
-        if (met) continue;
-        Object.assign(state, { state:'cooldown', since:barEnd, falseBars:1 });
-        if (state.falseBars >= rule.rearmBars) this.#rearm(rule, state, ctx, barEnd, now);
-      } else {
-        if (met) { Object.assign(state, { state:'triggered', since:barEnd, falseBars:0 }); state.suppressedToday += 1; this.run.suppressed += 1; this.#event({ type:'suppressed', ruleId:rule.ruleId, symbol:ctx.symbol, barEnd, tradingDate:ctx.tradingDate, detectedAt:now.toISOString() }); continue; }
-        state.falseBars += 1;
-        if (state.falseBars >= rule.rearmBars) this.#rearm(rule, state, ctx, barEnd, now);
+      for (const type of stepRule(state, met, barEnd, rule.kind, rule.rearmBars)) {
+        if (type === 'trigger') { state.triggersToday += 1; state.baseline = false; }
+        else if (type === 'suppressed') { state.suppressedToday += 1; this.run.suppressed += 1; }
+        else if (type === 'rearm') this.run.rearmed += 1;
+        this.#event({ type, ruleId:rule.ruleId, symbol:ctx.symbol, barEnd, tradingDate:ctx.tradingDate, detectedAt:now.toISOString() });
       }
     }
     state.lastBar = ctx.bars.at(-1).barEnd;
     if (JSON.stringify([state.state, state.since, state.falseBars, state.triggersToday, state.suppressedToday]) !== before) { state.updatedAt = now.toISOString(); this.dirty.add(stateKey(rule.ruleId, ctx.symbol)); }
-  }
-
-  #rearm(rule, state, ctx, barEnd, now) {
-    Object.assign(state, { state:'idle', since:barEnd, falseBars:0 });
-    this.run.rearmed += 1;
-    this.#event({ type:'rearm', ruleId:rule.ruleId, symbol:ctx.symbol, barEnd, tradingDate:ctx.tradingDate, detectedAt:now.toISOString() });
   }
 
   #event(event) {
@@ -221,3 +207,49 @@ function normalizeState(row) {
 }
 function stateKey(ruleId, symbol) { return `${ruleId}|${symbol}`; }
 function daysAgo(days) { return new Date(Date.now() + 8 * 3_600_000 - days * 86_400_000).toISOString().slice(0, 10); }
+
+// One completed, known bar through the state machine. Mutates state ({ state, since, falseBars, lastTriggerBar }) and
+// returns the events it produced, in order ('rearm' can precede a 'trigger' on the same bar).
+//   level rules: after triggering, re-arm once the rule has been NOT met for rearmBars consecutive bars (hysteresis:
+//                a value flickering around a threshold does not notify again and again).
+//   event rules: a cross is a one-bar event, so "not met" is the normal state; re-arm rearmBars minutes after the
+//                last notification, however often it re-crossed meanwhile (the old 30-minute cooldown). Re-crosses
+//                inside that window are suppressed.
+export function stepRule(state, met, barEnd, kind, rearmBars) {
+  const out = [];
+  if (kind === 'event') {
+    if (state.state !== 'idle' && minutesBetween(state.lastTriggerBar, barEnd) >= rearmBars) { Object.assign(state, { state:'idle', since:barEnd, falseBars:0 }); out.push('rearm'); }
+    if (state.state === 'idle') { if (met) { Object.assign(state, { state:'triggered', since:barEnd, falseBars:0, lastTriggerBar:barEnd }); out.push('trigger'); } return out; }
+    if (met) out.push('suppressed');
+    else if (state.state === 'triggered') Object.assign(state, { state:'cooldown', since:barEnd });
+    return out;
+  }
+  if (state.state === 'idle') { if (met) { Object.assign(state, { state:'triggered', since:barEnd, falseBars:0, lastTriggerBar:barEnd }); out.push('trigger'); } return out; }
+  if (met) {
+    if (state.state === 'cooldown') { Object.assign(state, { state:'triggered', since:barEnd, falseBars:0 }); out.push('suppressed'); }
+    return out;
+  }
+  if (state.state === 'triggered') Object.assign(state, { state:'cooldown', since:barEnd, falseBars:1 });
+  else state.falseBars += 1;
+  if (state.falseBars >= rearmBars) { Object.assign(state, { state:'idle', since:barEnd, falseBars:0 }); out.push('rearm'); }
+  return out;
+}
+
+// The same walk over one day's per-bar truth values (true / false / null), starting idle; barEnds in ms. Returns
+// the bar indexes that would notify. Used by the 7-day index so its counts match what the live state machine sends.
+export function ruleTriggerIndexes(truth, rearmBars, kind = 'level', barEnds = null) {
+  const hits = [];
+  const state = { state:'idle', since:null, falseBars:0, lastTriggerBar:null };
+  for (let index = 0; index < truth.length; index++) {
+    const met = truth[index];
+    if (typeof met !== 'boolean') continue;
+    if (stepRule(state, met, barEnds ? barEnds[index] : index * 60_000, kind, rearmBars).includes('trigger')) hits.push(index);
+  }
+  return hits;
+}
+
+function minutesBetween(from, to) {
+  if (from == null) return Infinity;
+  const a = typeof from === 'number' ? from : Date.parse(from), b = typeof to === 'number' ? to : Date.parse(to);
+  return (b - a) / 60_000;
+}

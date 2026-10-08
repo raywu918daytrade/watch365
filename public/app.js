@@ -4,7 +4,7 @@
 const KEY='watch365_ui_v2';
 const DIRECTION_LABEL={above:'上穿',below:'下穿'};
 const MA_NAME={sma:'SMA',ema:'EMA'};
-const MAX_FILTERS=2;
+const MAX_FILTERS=3;
 const SYNONYMS=[[/金叉/g,'黃金交叉'],[/死叉/g,'死亡交叉'],[/站上|突破/g,'上穿'],[/跌破/g,'下穿']];
 const PROVIDER_STATUS={ok:'正常',empty:'本輪沒有新的一分鐘 K',error:'資料讀取異常',coverage_unknown:'無法確認今日名單',empty_scope:'今日名單沒有可監控的股票','尚未執行':'尚未執行'};
 const MARKET_LABEL={TWSE:'上市',TPEx:'上櫃'};
@@ -26,10 +26,10 @@ const ERROR_TEXT={
   FORMULA_PLAN_INVALID:'AI 這次的回覆無法轉成條件，請換個說法再試一次。',INDICATOR_AGENT_FAILED:'AI 解析失敗，請稍後再試，或改為提出需求。',INDICATOR_AGENT_TIMEOUT:'AI 回應逾時，請再試一次。',
   INDICATOR_AGENT_NOT_CONFIGURED:'AI 解析尚未設定，請改為提出需求。',INDICATOR_AGENT_PROVIDER_FAILED:'AI 服務這次沒有回應成功，請再試一次。',INDICATOR_AGENT_RATE_LIMITED:'AI 服務目前請求較多，請稍等幾秒再試。',INDICATOR_AGENT_OUTPUT_INVALID:'AI 回覆的格式有誤，請再試一次或換個說法。',INDICATOR_AGENT_SCHEMA_MISSING:'AI 回覆的格式有誤，請再試一次。',INDICATOR_AGENT_CREDENTIALS_REJECTED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_ACCESS_DENIED:'AI 服務設定有誤，請聯絡管理者。',INDICATOR_AGENT_INPUT_TOO_LONG:'描述太長了，請精簡到 500 字以內。',FORMULA_PROPOSAL_STALE:'AI 條件已過期，請重新解析。',FORMULA_TOKEN_INVALID:'AI 條件已失效，請重新解析。',
   FORMULA_VET_FAILED:'驗證這個條件時發生錯誤，請再試一次。',FORMULA_VET_TIMEOUT:'驗證超過時間仍未完成，請再試一次。',
-  FORMULA_WITH_OTHER_CONDITIONS:'這兩個過濾目前無法同時監控，請換一個。',FORMULA_COMPLEXITY_EXCEEDED:'這兩個指標合起來太複雜，目前無法同時監控，請換一個。',
+  FORMULA_WITH_OTHER_CONDITIONS:'這幾個過濾目前無法同時監控，請換一個。',FORMULA_COMPLEXITY_EXCEEDED:'這幾個指標合起來太複雜，目前無法同時監控，請換一個。',
   TEMPLATE_NOT_FOUND:'清單裡找不到這個指標，請重新整理頁面後再選。',TEMPLATE_PARAM_INVALID:'這個指標的參數無效，請換一個變體。',TEMPLATE_REQUEST_INVALID:'過濾設定有誤，請移除後重新加入。',
   retry_not_allowed:'只有送出失敗的通知可以重送。',not_found:'找不到這則通知。',
-  CONDITIONS_REQUIRED:'請至少加入一個過濾。',CONDITIONS_TOO_MANY:'目前最多只能組合 2 個過濾。',
+  CONDITIONS_REQUIRED:'請至少加入一個過濾。',CONDITIONS_TOO_MANY:'目前最多只能組合 3 個過濾。',
   WATCHLIST_REQUIRED:'請至少選一檔股票。',WATCHLIST_MARKET_REQUIRED:'有股票無法確認市場別，請移除後再試。',
   HF_UNIVERSE_SOURCE_FAILED:'無法讀取今日監控名單，請稍後再試。',HF_UNIVERSE_NOT_FOUND:'今日監控名單尚未產生。',HF_METADATA_UNAVAILABLE:'無法讀取股票市場別資料，請稍後再試。',
   INDICATOR_REQUEST_TEXT_TOO_SHORT:'需求描述至少 3 個字。',INDICATOR_REQUEST_FIELDS_REQUIRED:'請填完所有欄位。',INDICATOR_TEXT_REQUIRED:'欄位長度不足（至少 2 個字）。'
@@ -274,7 +274,7 @@ function resolveLegacy(){
 function conditions(){
   if(!state.purpose)return go('home');
   if(state.purpose==='watchlist'&&!state.watchlist.length)return go('stocks');
-  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 2 個，同時成立才通知。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
+  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
   // Typing again drops a first-turn AI card for other text, so the list comes back.
@@ -286,8 +286,8 @@ function conditions(){
   });
   root.querySelector('#confirmConditions').addEventListener('click',()=>{if(!hasFilters())return;go('confirm');});
   drawAi();drawTemplates();drawHistory();
-  loadTemplates().then(()=>{if(node()!=='conditions')return;if(resolveLegacy())drawFilters();drawTemplates();});
-  if(autoHistory){autoHistory=false;runHistory();}
+  loadTemplates().then(()=>{if(node()!=='conditions')return;if(resolveLegacy())drawFilters();drawTemplates();scheduleIndex();});
+  autoHistory=false;scheduleIndex();
 }
 function startAi(value){
   const text=String(value||'').trim();if(text.length<2)return;
@@ -308,12 +308,12 @@ function filterMarkup(){
   const rows=state.filters.map((filter,index)=>{
     const legacy=Boolean(filter.spec.legacy);
     const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':filter.formulaSummary;
-    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>兩個都成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
+    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':stepLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
   }).join('');
   const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'<button type="button" class="proto-add-more" id="addMore">＋ 再加一個過濾</button>';
   return`<div class="proto-condition-list"><p class="proto-eyebrow">已選過濾 ${state.filters.length}/${MAX_FILTERS}</p>${rows}${foot}</div>`;
 }
-function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();}
+function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();scheduleIndex();}
 function bindFilterList(){
   root.querySelectorAll('#addedPanel [data-remove]').forEach((button)=>button.addEventListener('click',()=>{state.filters=state.filters.filter((item)=>item.id!==button.dataset.remove);invalidateToken();save();drawFilters();focusSearch({scroll:false});}));
   root.querySelector('#addMore')?.addEventListener('click',()=>focusSearch());
@@ -376,7 +376,7 @@ function drawTemplates(){
   let index=0;
   const sections=families.map((family)=>{
     const rows=groups.get(family),open=value?true:family===openFamily;
-    const body=rows.map((row)=>{const i=index++;const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;}).join('');
+    const body=rows.map((row)=>{const i=index++;const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;}).join('');
     return`<details class="proto-family" name="indicator-family" data-family="${escapeHtml(family)}" data-was-open="${open?'1':'0'}" ${open?'open':''}><summary><span>${escapeHtml(family)}</span><small>${value?`符合 ${rows.length} 個`:`${totals.get(family)||rows.length} 個變體`}</small></summary><div class="proto-preset-list">${body}</div></details>`;
   }).join('');
   target.hidden=false;
@@ -463,7 +463,7 @@ function drawAi(){
     catch(error){button.disabled=false;button.textContent=label;alertInline(errorText(error));}
   });
   // An AI-built formula isn't in the library yet, so the backend can't join it with other filters: confirm the replacement inline.
-  const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>已有 ${count} 個過濾（上限 2 個），加入會取代它們，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
+  const confirmReplace=(count,go)=>{const box=target.querySelector('#aiConfirmBox');if(!box)return go();box.innerHTML=`<div class="proto-notice proto-replace" role="alert"><span aria-hidden="true">!</span><span>已有 ${count} 個過濾（上限 ${MAX_FILTERS} 個），加入會取代它們，繼續？<span class="proto-inline-actions"><button type="button" class="proto-link" id="replaceCancel">取消</button><button type="button" class="proto-secondary" id="replaceGo">取代</button></span></span></div>`;box.querySelector('#replaceGo').addEventListener('click',go);box.querySelector('#replaceCancel').addEventListener('click',()=>{box.innerHTML='';});box.querySelector('#replaceGo').focus();};
   target.querySelector('#aiUseExisting')?.addEventListener('click',()=>{if(!existingPreset)return;addFilter({id:crypto.randomUUID(),label:existingPreset.label,formulaSummary:'',spec:existingPreset.spec});});
   // Library hits are already vetted and go straight in. A brand-new AI formula is first replayed over the
   // last 7 trading days (/api/formula/vet); it is only added when the verdict is ok.
@@ -508,27 +508,77 @@ async function vetAndAdd(ai,filter,replace){
   if(state.filters.length===1&&Array.isArray(result.days)){state.history=historyFrom(historySignature(),result);save();if(node()==='conditions')drawHistory();}
   showToast(`已加入。過去 7 日觸發 ${verdict.totalEvents??result.totalEvents??0} 次`);
 }
+// D2. 7-day index (/api/history/index): every list row is precomputed on the server, so picking a filter only combines
+// stored results. One request returns the funnel of the selected filters (step i = filters 1..i all met) and, for
+// every list row, how many stocks would trigger if it were added next. Counted like live notifications (state machine).
+let indexData=null,indexTimer=null,indexSeq=0;
+function indexSpec(filter){const spec=filter.spec;if(spec.shapeKey)return{shapeKey:spec.shapeKey,values:spec.values||{},direction:spec.direction??null};if(spec.fingerprint)return{fingerprint:spec.fingerprint};if(spec.ai)return{conditionKey:filter.conditionKey||undefined,proposalToken:spec.ai.token||undefined};return null;}
+function candidateSpecs(){if(!templateCache)return[];const rows=templateCache.flatMap((template)=>templateRowsFor(template,[]));return rows.filter((row)=>!hasSpec(row.spec));}
+function indexSignature(){return JSON.stringify([monitorSpec(),filterSignature(),templateCache?templateCache.length:0]);}
+function scheduleIndex({force=false}={}){
+  if(node()!=='conditions'||!state.purpose||legacyFilters().length)return;
+  if(!force&&indexData&&indexData.signature===indexSignature()&&!indexData.loading&&!indexData.error)return;
+  clearTimeout(indexTimer);indexTimer=setTimeout(runIndex,force?0:250);
+}
+async function runIndex(){
+  const signature=indexSignature(),seq=++indexSeq;
+  const filters=state.filters.map(indexSpec);if(filters.some((item)=>!item))return;
+  const candidates=candidateSpecs();
+  indexData={...(indexData&&indexData.signature===signature?indexData:{}),signature,loading:true,error:null,candidateKeys:candidates.map((row)=>specKey(row.spec))};drawIndexViews();
+  try{
+    const result=await api('/api/history/index',{...monitorSpec(),filters,candidates:candidates.map((row)=>row.spec)});
+    if(seq!==indexSeq)return;
+    if(result.status==='loading'){indexData={...indexData,loading:true,progress:result.progress};drawIndexViews();indexTimer=setTimeout(runIndex,3000);return;}
+    (result.filterKeys||[]).forEach((key,index)=>{if(state.filters[index])state.filters[index].conditionKey=key;});
+    const counts=new Map();(result.candidates||[]).forEach((item)=>{const key=indexData.candidateKeys[item.index];if(key&&!item.error)counts.set(key,item);});
+    indexData={signature,loading:false,error:null,steps:result.steps||[],counts,availableDays:result.availableDays,symbolsCount:result.symbolsCount};
+    const last=(result.steps||[]).at(-1);
+    if(last){state.history=historyFrom(historySignature(),{availableDays:result.availableDays,symbolsCount:result.symbolsCount,totalEvents:last.totalEvents,triggeredSymbols:last.triggeredSymbols,days:last.days,events:last.events||[],truncated:last.truncated,verdict:result.verdict,failedDays:0});}
+    save();drawIndexViews();
+  }catch(error){if(seq!==indexSeq)return;indexData={...indexData,loading:false,error:errorText(error)};drawIndexViews();}
+}
+function drawIndexViews(){if(node()!=='conditions')return;const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
+function indexFresh(){return indexData&&indexData.signature===indexSignature()?indexData:null;}
+function countText(item){return item.triggeredSymbols?`${item.triggeredSymbols} 檔・${item.totalEvents} 次`:'0 檔';}
+function stepLine(index){
+  const data=indexFresh();
+  if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">過去 7 日：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
+  if(data.error&&!data.steps)return`<small class="proto-count muted">過去 7 日：無法計算</small>`;
+  const step=data.steps?.[index];if(!step)return'';
+  const head=index?'加上這個後':'過去 7 日';
+  if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${index?'，是這個過濾把股票全部篩掉了':'，這個過濾可能太嚴格'}</small>`;
+  return`<small class="proto-count">${head}：${countText(step)}</small>`;
+}
+function candidateLine(spec){
+  const data=indexFresh();if(!data||!data.counts)return'';
+  const item=data.counts.get(specKey(spec));if(!item)return'';
+  const prefix=state.filters.length?'加入後':'過去 7 日';
+  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}</small>`;
+}
 // E. 7-day M1 history: replays the current filters over HF daily one-minute files on the server.
 // Shown as a one-line summary; details expand on request. Never runs on its own unless the AI card asked for it.
 const HISTORY_WINDOW=7;
 let historyDetail=false,historyAll=false;
 function historySignature(){return JSON.stringify([HISTORY_WINDOW,monitorSpec(),filterSignature()]);}
 function historyFresh(){return state.history&&state.history.signature===historySignature()?state.history:null;}
-function historySummaryText(history){return`過去 ${history.availableDays} 個交易日，${history.symbolsCount} 檔股票共觸發 ${history.totalEvents} 次${history.failedDays?`（${history.failedDays} 天資料讀取失敗）`:''}`;}
+function historySummaryText(history){return`過去 ${history.availableDays} 個交易日，${history.symbolsCount} 檔股票中${history.triggeredSymbols!=null?` ${history.triggeredSymbols} 檔觸發、`:""}共 ${history.totalEvents} 次${history.failedDays?`（${history.failedDays} 天資料讀取失敗）`:""}`;}
 function drawHistory(options={}){
   const target=root.querySelector('#historyPanel');if(!target)return;
   if(!hasFilters()){target.innerHTML='';target.hidden=true;return;}
   target.hidden=false;
   const history=historyFresh(),stale=state.history&&!history;
+  const live=indexFresh();
+  if(!history&&!options.loading&&!options.error&&live?.loading)options={loading:true,progress:live.progress||'計算中'};
+  if(!history&&!options.loading&&!options.error&&live?.error)options={error:live.error};
   const row=(text,action,extra='')=>`<div class="proto-history-line"><span>${text}</span>${action}</div>${extra}`;
-  if(options.loading)target.innerHTML=row('過去 7 個交易日：',`<span class="proto-note">回查中…</span>`,`<p id="historyProgress" class="proto-signature" aria-live="polite">${escapeHtml(options.progress||'準備中')}</p><p class="proto-signature">第一次回查要下載近兩個月的一分鐘資料，可能需要 1～3 分鐘。可以先繼續下一步，回查會在背景跑完。</p>`);
+  if(options.loading)target.innerHTML=row('過去 7 個交易日：',`<span class="proto-note">回查中…</span>`,`<p id="historyProgress" class="proto-signature" aria-live="polite">${escapeHtml(options.progress||'準備中')}</p><p class="proto-signature">伺服器剛啟動時要先準備 7 日資料（約 1～3 分鐘），之後每次選指標都是立即顯示。可以先繼續下一步。</p>`);
   else if(options.error)target.innerHTML=row(`回查失敗：${escapeHtml(options.error)}`,'<button type="button" class="proto-link" id="runHistory">再試一次</button>');
   else if(!history)target.innerHTML=row(stale?'<strong>過濾已變，重新回查</strong>':'過去 7 個交易日：尚未回查','<button type="button" class="proto-link" id="runHistory">回查</button>');
   else{
     const busiest=history.days.filter((day)=>day.count).sort((a,b)=>b.count-a.count)[0];
     const code=history.verdict?.code;
     const hint=code==='too_many'?`<span class="proto-vet-hint warn">太頻繁：平均每檔每天 ${escapeHtml(perDayText(history.verdict))} 次</span>`:code==='no_triggers'||(!code&&!history.totalEvents)?'<span class="proto-vet-hint">沒有觸發</span>':code==='no_data'?'<span class="proto-vet-hint">沒有資料</span>':'';
-    const summary=`過去 7 個交易日：共觸發 ${history.totalEvents} 次${busiest?`・最多 ${escapeHtml(busiest.date.slice(5).replace('-','/'))} ${busiest.count} 次`:''}${hint}`;
+    const summary=`過去 7 個交易日：${history.triggeredSymbols!=null?`${history.triggeredSymbols} 檔、`:''}共觸發 ${history.totalEvents} 次${busiest?`・最多 ${escapeHtml(busiest.date.slice(5).replace('-','/'))} ${busiest.count} 次`:''}${hint}`;
     let detail='';
     if(historyDetail){
       const limit=historyAll?history.events.length:30;
@@ -541,14 +591,15 @@ function drawHistory(options={}){
   target.querySelector('#showAllHistory')?.addEventListener('click',()=>{historyAll=true;drawHistory();});
   target.querySelector('#runHistory')?.addEventListener('click',runHistory);
 }
-async function runHistory(){
+async function runHistory(){scheduleIndex({force:true});}
+async function runHistoryLegacy(){
   if(!hasFilters()||historyBusy)return;
   const signature=historySignature();historyBusy=true;historyAll=false;historyDetail=false;drawHistory({loading:true});drawSticky();
   try{const result=await runHistoryJob();state.history=historyFrom(signature,result);save();historyBusy=false;if(node()==='conditions'){drawHistory();drawSticky();}}
   catch(error){historyBusy=false;if(node()==='conditions'){drawHistory({error:errorText(error)});drawSticky();}}
 }
 // What we keep of a backtest / vet result (events capped at 100; the verdict drives the summary row's hint).
-function historyFrom(signature,result){const events=Array.isArray(result.events)?result.events:[];return{signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,totalEvents:result.totalEvents,truncated:result.truncated||events.length>100,days:result.days||[],events:events.slice(0,100),verdict:result.verdict||null};}
+function historyFrom(signature,result){const events=Array.isArray(result.events)?result.events:[];return{signature,sources:result.sources,availableDays:result.availableDays,failedDays:result.failedDays,symbolsCount:result.symbolsCount,triggeredSymbols:result.triggeredSymbols??null,totalEvents:result.totalEvents,truncated:result.truncated||events.length>100,days:result.days||[],events:events.slice(0,100),verdict:result.verdict||null};}
 // Backtest runs as a server job: POST returns 202 + jobId (or 200 when cached), then poll until done/failed.
 async function runHistoryJob(){
   const first=await withFormula(['/api/history/backtest',monitorSpec()]);
@@ -620,7 +671,7 @@ function confirmPage(){
   if(!hasFilters())return go('conditions');
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>過濾</dt><dd class="proto-filter-summary">${state.filters.map((filter)=>`<span>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}${filter.formulaSummary?`<br><small>${escapeHtml(filter.formulaSummary)}</small>`:''}</span>`).join('<span class="proto-and-pill">且</span>')}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'兩個都成立才通知':'單一過濾'}</dd></div><div><dt>過去 7 日</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div></dl><details class="proto-details"><summary>監控細節</summary><p>資料：一分鐘 K・台股 09:00–13:30（Asia/Taipei）</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>同一檔 30 分鐘內只通知一次</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div><div><dt>過濾</dt><dd class="proto-filter-summary">${state.filters.map((filter)=>`<span>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}${filter.formulaSummary?`<br><small>${escapeHtml(filter.formulaSummary)}</small>`:''}</span>`).join('<span class="proto-and-pill">且</span>')}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>過去 7 日</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div></dl><details class="proto-details"><summary>監控細節</summary><p>資料：一分鐘 K・台股 09:00–13:30（Asia/Taipei）</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>條件從不成立變成立時通知一次；持續成立不重複通知</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{

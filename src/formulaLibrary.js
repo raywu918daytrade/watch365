@@ -27,7 +27,7 @@ export const FORMULA_LIBRARY_STATUSES = Object.freeze(['active', 'pending_review
 export const FORMULA_LIBRARY_SOURCES = Object.freeze(['preset', 'ai']);
 export const LIBRARY_PROVIDER = Object.freeze({ provider: 'library', model: 'alias' });
 export const TEMPLATE_PROVIDER = Object.freeze({ provider: 'library', model: 'template' });
-const MAX_COMPOSE_ITEMS = 2;
+const MAX_COMPOSE_ITEMS = 3;
 const PROMOTE_MIN_HITS = 3;
 const PROMOTE_MIN_ALIASES = 2;
 const MAX_ALIAS_RAW = 200;
@@ -235,7 +235,7 @@ export class FormulaLibrary {
   // Writes user parameters into the representative's AST and returns a planner-shaped formula result
   // (proposal carries the AST; the server strips it and signs the token, like /api/indicator-agent/parse).
   instantiate(shapeKey, { values = {}, direction = null } = {}) { return this.compose([{ shapeKey, values, direction }]); }
-  // 1–2 filters, each either a template instantiation ({ shapeKey, values, direction }) or an existing
+  // 1–3 filters, each either a template instantiation ({ shapeKey, values, direction }) or an existing
   // library formula as is ({ fingerprint }); two filters are joined with `all` (PM: "多個指標就是多個過濾").
   // items may also carry a pre-resolved { ast, name } (the server verifies a signed proposalToken into one), so a
   // formula the AI just built can be combined with a library filter before it has been applied anywhere.
