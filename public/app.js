@@ -974,9 +974,13 @@ function renderMonitorHistory(target){
   if(result.status==='loading'){target.innerHTML=`${head}<p class="proto-signature">${escapeHtml(result.progress||'準備 7 日資料')}…伺服器剛啟動時約需 1～3 分鐘。</p>`;return;}
   if(result.status==='error'){target.innerHTML=`${head}<p class="proto-signature">暫時無法回查：${escapeHtml(result.error||'')}</p>`;return;}
   const days=(result.days||[]).filter((day)=>day.count).map((day)=>`${escapeHtml(day.date.slice(5).replace('-','/'))} ${day.count} 次`).join('・');
-  const events=result.events||[],limit=monitorHistoryAll?events.length:10;
-  const rows=events.slice(0,limit).map((event)=>`<div class="proto-history-row"><span><strong>${escapeHtml(event.symbol)}</strong> ${escapeHtml(event.name||'')}</span><time datetime="${escapeHtml(event.at)}">${formatWhen(event.at)}</time><span>收盤 ${escapeHtml(formatPrice(event.price))}</span></div>`).join('');
-  target.innerHTML=`<div class="proto-history-head"><div>${head}<h2>${result.triggeredSymbols} 檔・共 ${result.totalEvents} 次</h2>${days?`<p class="proto-signature">${days}</p>`:''}</div><span>用目前條件回查</span></div>${events.length?`<div class="proto-history-table"><div class="proto-history-row header"><span>股票</span><span>時間</span><span>收盤價</span></div>${rows}</div>${events.length>limit?`<button type="button" class="proto-link" id="monitorHistoryAll">顯示全部 ${events.length} 筆${result.truncated?'（只列最近的部分）':''}</button>`:''}`:'<div class="proto-status"><p>過去 7 個交易日沒有觸發。</p></div>'}`;
+  // One row per stock (owner request 2026-10), most triggers first; opening a row lists each time.
+  const events=result.events||[],groups=new Map();
+  for(const event of events){if(!groups.has(event.symbol))groups.set(event.symbol,[]);groups.get(event.symbol).push(event);}
+  const stocks=[...groups.values()].map((list)=>list.sort((a,b)=>String(b.at).localeCompare(String(a.at)))).sort((a,b)=>b.length-a.length||String(b[0].at).localeCompare(String(a[0].at)));
+  const limit=monitorHistoryAll?stocks.length:10;
+  const rows=stocks.slice(0,limit).map((list)=>{const first=list[0];return`<details class="proto-history-group"><summary class="proto-history-row"><span><strong>${escapeHtml(first.symbol)}</strong> ${escapeHtml(first.name||'')}</span><span>${list.length} 次</span><span>最近 ${formatWhen(first.at)}・收盤 ${escapeHtml(formatPrice(first.price))}</span></summary><div class="proto-history-times">${list.map((event)=>`<span><time datetime="${escapeHtml(event.at)}">${formatWhen(event.at)}</time> 收盤 ${escapeHtml(formatPrice(event.price))}</span>`).join('')}</div></details>`;}).join('');
+  target.innerHTML=`<div class="proto-history-head"><div>${head}<h2>${result.triggeredSymbols} 檔・共 ${result.totalEvents} 次</h2>${days?`<p class="proto-signature">${days}</p>`:''}</div><span>用目前條件回查</span></div>${stocks.length?`<div class="proto-history-table"><div class="proto-history-row header"><span>股票</span><span>次數</span><span>最近一次・收盤價</span></div>${rows}</div>${stocks.length>limit?`<button type="button" class="proto-link" id="monitorHistoryAll">顯示全部 ${stocks.length} 檔${result.truncated?'（只列最近的部分）':''}</button>`:''}`:'<div class="proto-status"><p>過去 7 個交易日沒有觸發。</p></div>'}`;
   target.querySelector('#monitorHistoryAll')?.addEventListener('click',()=>{monitorHistoryAll=true;renderMonitorHistory(target);});
 }
 function notificationBadge(notification){

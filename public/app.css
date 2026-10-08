@@ -328,3 +328,5 @@
 .proto-options-head { margin:1.4rem 0 .5rem; }
 .proto-editing .proto-inline-actions { display:flex; gap:1rem; margin-top:.35rem; flex-direction:row; }
 .proto-editing .proto-inline-actions button { width:auto; }
+.proto-history-group { border-bottom:1px solid #dbe4e4; }.proto-history-group:last-child { border:0; }.proto-history-group > summary { cursor:pointer; list-style:none; border:0; }.proto-history-group > summary::-webkit-details-marker { display:none; }.proto-history-group > summary span:first-child::before { content:'▸'; display:inline-block; width:1em; color:#5a7276; transition:transform .15s; }.proto-history-group[open] > summary span:first-child::before { transform:rotate(90deg); }.proto-history-group[open] > summary { background:#f5f9f9; }
+.proto-history-times { display:flex; flex-wrap:wrap; gap:.35rem .9rem; padding:.5rem .75rem .7rem 1.75rem; font-size:.72rem; color:#3c5559; background:#f5f9f9; }.proto-history-times time { font-variant-numeric:tabular-nums; font-weight:700; color:#173036; }
