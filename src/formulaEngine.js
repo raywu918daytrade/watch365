@@ -35,6 +35,9 @@ export function verifyFormulaToken(token,secret,now=Date.now()){assertSecret(sec
 export function evaluateFormulaSeries(node,bars){const budget={nodes:0};visit(node,1,budget);if(!Array.isArray(bars)||bars.length>MAX_BARS)throw formulaError('FORMULA_DATA_BUDGET_EXCEEDED');return series(node,{bars,cache:new Map()});}
 export function evaluateFormula(ast,bars){const validated=validateFormula(ast);const result=evaluateFormulaSeries(ast,bars);const current=result.at(-1)??null;return{previous:result.at(-2)??null,current,triggered:current===true,errorCode:current==null&&bars.length>=validated.warmupBars?'formula_calculation_error':null};}
 export function formulaSummary(ast){return summarize(ast);}
+// Several already-validated boolean formulas over the same bars with one shared sub-tree cache, so conditions that
+// share pieces (RSI(14) above 30 and RSI(14) below 70, or one MA in two filters) compute those pieces once.
+export function evaluateFormulaSet(nodes,bars){if(!Array.isArray(bars)||bars.length>MAX_BARS)throw formulaError('FORMULA_DATA_BUDGET_EXCEEDED');const context={bars,cache:new Map()};return nodes.map((node)=>series(node,context));}
 
 function visit(node,depth,budget){
   if(!node||typeof node!=='object'||Array.isArray(node)||depth>MAX_DEPTH||++budget.nodes>MAX_NODES)throw formulaError('FORMULA_COMPLEXITY_EXCEEDED');

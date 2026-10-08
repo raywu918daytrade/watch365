@@ -105,6 +105,18 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 
 新增一個統計＝在 `ADMIN_QUERIES` 加一筆 `{ type, groupBy }`，再在 overview 放一個 key。
 
+### 共用條件層（狀態機第 1 層，影子模式）
+
+老闆決策（2026-10）：使用者多、指標會重複，所以監控拆成兩層——**指標是「事實」，使用者規則是「訂閱」**。本版只上第 1 層，且是影子模式：記錄狀態與翻轉，**不建立 signal、不發通知**，現有監控行為完全不變。第 2 層（規則狀態：待命／觸發／冷卻、收盤重置）與「只在進入觸發時通知」在之後的版本。
+
+- `src/conditionState.js`：策略拆成原子條件——formula_v1 根節點是 `all` 時每個 item 是一個條件，其他布林根節點是一個條件；`sma.cross`／`rsi.cross` registry 策略轉成與結構化 UI 相同的 AST，所以兩條路徑建出來的同一條件共用一個 key。舊版突破量能規則沒有公式形式，不進這一層。
+- 條件 key＝canonical AST 的 `formulaFingerprint`，同一條件不管誰建、參數順序如何都是同一個 key；每根 K 棒對每個（條件 × 股票）只算一次，同一檔股票的多個條件共用子樹快取（`evaluateFormulaSet`，例如 RSI(14) 上穿 30 與下穿 70 只算一次 RSI）。
+- 狀態（每個條件 × 股票）：`value`（最後已知的真／假）、`since`（從哪根 K 棒開始是這個值）、`lastBar`、`flipsToday`。翻轉＝已完成 K 棒上 false→true 或 true→false；暖機或資料缺口（null）不算翻轉，保留最後已知值。`kind` 區分 `event`（穿越，只亮一根）與 `level`（成立期間持續為真），給第 2 層決定通知方式。
+- HF m1_live 是整天的檔案，所以每輪會走過「上次處理之後的每一根」新 K 棒，兩次輪詢之間的單根穿越不會漏；重啟後從保存的 `lastBar` 接續。某條件當天第一次被計算時只建立基準（baseline），不為之前的 K 棒補發翻轉；換交易日重新建立基準。
+- 引用計數與反向索引：條件只有在至少一條規則引用時才計算（`syncRules`），`rulesFor(conditionKey)` 回傳引用它的規則，第 2 層用它只更新受影響的規則。目前單機只有一條規則（啟用中的策略，`strategyIdentity`）。
+- 保存：有 `DB_HOST` 時寫 `watch365_condition_state(condition_key, symbol, trading_date, value, since_bar, last_bar, flips_today, PK(condition_key, symbol))` 與 `watch365_conditions(condition_key, kind, label, ast)`，每輪只 upsert 有變的列；啟動時刪除 7 天前的列。無 DB 時寫 `data/condition-state.json`（`WATCH365_CONDITION_STATE_FILE`）。任何錯誤只 log，不影響監控。`CONDITION_LAYER=off` 整個關閉。
+- 後台：`GET /api/admin/conditions?flips=50` → `{ mode:'shadow'|'off', lastRun:{ at, symbols, conditions, baselines, newBars, flips, errors, ms }, rules, conditions:[{ key, kind, label, rules, symbols, trueNow, flipsToday }], recentFlips:[{ symbol, conditionKey, label, from, to, kind, barEnd }] }`；`/admin` 的「條件狀態（影子模式）」卡片顯示同樣內容。
+
 ### 固定突破量能規則
 
 - 市場：台股 regular session 09:00–13:30（Asia/Taipei）

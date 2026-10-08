@@ -59,7 +59,7 @@ function meta(id,text){const target=root.querySelector(`#${id}Meta`);if(target)t
 function fail(id,error){const target=body(id);if(target)target.innerHTML=`<div class="adm-empty">無法讀取：${escapeHtml(errorText(error))} <button type="button" class="adm-link" data-retry="${id}">再試一次</button></div>`;target?.querySelector('[data-retry]')?.addEventListener('click',()=>SECTION_LOADERS[id]?.(loadToken));}
 function showDashboard(){
   tools.hidden=false;
-  root.innerHTML=`<div class="adm-grid">${card({id:'overview',title:'總覽',lead:'訪客、頁面瀏覽、AI 解析與建立監控的數量，以及每日趨勢。',wide:true})}${card({id:'unknown',title:'查無指標',lead:'使用者找過、但 AI 查不到公開定義的指標名稱。研究要不要納入清單的依據。',wide:true,highlight:true})}${card({id:'top',title:'指標使用排行',lead:'期間內被加入過濾最多次的指標，前 20。'})}${card({id:'parses',title:'AI 解析',lead:'依狀態與 provider 的計數，與最近 50 筆解析。'})}${card({id:'visitors',title:'訪客',lead:'點一列展開該訪客的最近事件。',wide:true})}${card({id:'library',title:'公式庫管理',lead:'指標模板與成員。切換成員狀態會立即生效。',wide:true})}${card({id:'events',title:'事件查詢',lead:'依類型、訪客與日期範圍查詢原始事件。',wide:true})}</div>`;
+  root.innerHTML=`<div class="adm-grid">${card({id:'overview',title:'總覽',lead:'訪客、頁面瀏覽、AI 解析與建立監控的數量，以及每日趨勢。',wide:true})}${card({id:'unknown',title:'查無指標',lead:'使用者找過、但 AI 查不到公開定義的指標名稱。研究要不要納入清單的依據。',wide:true,highlight:true})}${card({id:'conditions',title:'條件狀態（影子模式）',lead:'所有使用者共用的條件：每個條件對每檔股票只算一次。目前只記錄、不發通知，用來驗證狀態翻轉是否合理。',wide:true})}${card({id:'top',title:'指標使用排行',lead:'期間內被加入過濾最多次的指標，前 20。'})}${card({id:'parses',title:'AI 解析',lead:'依狀態與 provider 的計數，與最近 50 筆解析。'})}${card({id:'visitors',title:'訪客',lead:'點一列展開該訪客的最近事件。',wide:true})}${card({id:'library',title:'公式庫管理',lead:'指標模板與成員。切換成員狀態會立即生效。',wide:true})}${card({id:'events',title:'事件查詢',lead:'依類型、訪客與日期範圍查詢原始事件。',wide:true})}</div>`;
   loadAll();
 }
 function loadAll(){const token=++loadToken;for(const loader of Object.values(SECTION_LOADERS))loader(token);}
@@ -129,6 +129,21 @@ async function loadUnknown(token){
     };
     draw();
   }catch(error){if(stale(token))return;if(authFailure(error))return;fail('unknown',error);}
+}
+// 條件狀態（共用條件層，影子模式）
+async function loadConditions(token){
+  const target=body('conditions');if(!target)return;target.innerHTML='<div class="adm-skeleton" aria-hidden="true"></div>';
+  try{
+    const data=await api('/api/admin/conditions?flips=50');if(stale(token))return;
+    const run=data.lastRun,items=data.conditions||[],flips=data.recentFlips||[];
+    meta('conditions',data.mode==='off'?'已停用':run?`上次計算 ${formatTime(run.at)}・${num(run.ms)} ms`:'尚未執行');
+    if(data.mode==='off'){target.innerHTML='<div class="adm-empty">條件層已停用（CONDITION_LAYER=off）。</div>';return;}
+    const kind=(value)=>value==='event'?'事件（穿越，只亮一根）':'狀態（成立期間持續為真）';
+    const runLine=run?`<p class="adm-muted" style="margin:0 0 .6rem">上次計算：${num(run.symbols)} 檔 × ${num(run.conditions)} 個條件・新 K 棒 ${num(run.newBars)}・翻轉 ${num(run.flips)}・基準建立 ${num(run.baselines)}${run.errors?`・錯誤 ${num(run.errors)}`:''}</p>`:'';
+    const table=items.length?`<div class="adm-table-wrap"><table class="adm-table"><thead><tr><th>條件</th><th>類型</th><th class="adm-num">引用規則</th><th class="adm-num">股票數</th><th class="adm-num">目前成立</th><th class="adm-num">今日翻轉</th></tr></thead><tbody>${items.map((row)=>`<tr><td class="wrap">${escapeHtml(row.label||'—')}<br><small class="adm-mono">${escapeHtml(String(row.key).slice(0,12))}</small></td><td><small>${kind(row.kind)}</small></td><td class="adm-num">${num(row.rules)}</td><td class="adm-num">${num(row.symbols)}</td><td class="adm-num">${num(row.trueNow)}</td><td class="adm-num">${num(row.flipsToday)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="adm-empty">目前沒有啟用中的條件（監控未啟動，或使用舊版突破量能規則）。</div>';
+    const flipTable=flips.length?`<p class="adm-sub">最近翻轉</p><div class="adm-table-wrap"><table class="adm-table"><thead><tr><th>K 棒</th><th>股票</th><th>條件</th><th>變化</th></tr></thead><tbody>${flips.map((flip)=>`<tr><td><small>${escapeHtml(formatTime(flip.barEnd))}</small></td><td>${escapeHtml(flip.symbol)}</td><td class="wrap">${escapeHtml(flip.label||'—')}</td><td>${flip.to?'不成立 → 成立':'成立 → 不成立'}</td></tr>`).join('')}</tbody></table></div>`:'<p class="adm-muted" style="margin:.6rem 0 0">還沒有翻轉紀錄。</p>';
+    target.innerHTML=runLine+table+flipTable;
+  }catch(error){if(stale(token))return;if(authFailure(error))return;fail('conditions',error);}
 }
 // 5. 訪客
 async function loadVisitors(token){
@@ -214,7 +229,7 @@ function eventTable(items,{compact=false}={}){
   return`<div class="adm-table-wrap"><table class="adm-table"><thead><tr><th>時間</th><th>類型</th>${compact?'':'<th>訪客</th>'}<th>內容</th></tr></thead><tbody>${items.map((item)=>{const payload=item.payload||{};const raw=JSON.stringify(payload,null,1);return`<tr><td><small>${escapeHtml(formatTime(item.ts))}</small></td><td><span class="adm-chip">${escapeHtml(EVENT_LABEL[item.type]||item.type||'—')}</span></td>${compact?'':`<td><span class="adm-mono">${escapeHtml(shortId(item.visitor))}</span></td>`}<td class="wrap">${escapeHtml(payloadSummary(item.type,payload))}${raw&&raw!=='{}'?`<details><summary>原始資料</summary><pre class="adm-payload">${escapeHtml(raw)}</pre></details>`:''}</td></tr>`;}).join('')}</tbody></table></div>`;
 }
 
-const SECTION_LOADERS={overview:loadOverview,parses:loadRecentParses,unknown:loadUnknown,visitors:loadVisitors,library:loadLibrary,events:(token)=>{if(!stale(token))loadEvents();}};
+const SECTION_LOADERS={overview:loadOverview,parses:loadRecentParses,unknown:loadUnknown,conditions:loadConditions,visitors:loadVisitors,library:loadLibrary,events:(token)=>{if(!stale(token))loadEvents();}};
 periodSelect.addEventListener('change',()=>{days=Number(periodSelect.value)||7;try{localStorage.setItem('watch365_admin_days',String(days));}catch{}loadAll();});
 refreshButton.addEventListener('click',loadAll);
 

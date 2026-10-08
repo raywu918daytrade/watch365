@@ -144,3 +144,13 @@ test('overview / events / visitors / unknown-indicators / indicators 的回傳�
     assert.ok(Object.keys(ADMIN_QUERIES).length >= 10);
   } finally { await close(); }
 });
+
+test('GET /api/admin/conditions reports the shared condition layer (off when not wired)', async () => {
+  const { call, close } = await boot({ ADMIN_TOKEN: TOKEN });
+  try {
+    assert.equal((await call('/api/admin/conditions')).status, 401);
+    const response = await call('/api/admin/conditions', { headers: { 'x-admin-token': TOKEN } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [] });
+  } finally { await close(); }
+});

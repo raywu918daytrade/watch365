@@ -29,7 +29,7 @@ export const ADMIN_QUERIES = Object.freeze({
   adminLoginsByDay: { type: 'admin_login', groupBy: 'day' }
 });
 
-export function createAdminApi({ events, store, formulaLibrary, unknownIndicators, env = process.env, secret, log = console, now = () => Date.now() }) {
+export function createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates = null, env = process.env, secret, log = console, now = () => Date.now() }) {
   if (!(events instanceof EventStore)) throw new Error('createAdminApi needs an EventStore');
   const adminToken = typeof env.ADMIN_TOKEN === 'string' && env.ADMIN_TOKEN.trim().length >= 8 ? env.ADMIN_TOKEN.trim() : null;
 
@@ -114,6 +114,13 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
       }
       sendJson(response, 200, { days: range.days, items: visitors.map((item) => ({ visitor: item.visitor, firstSeen: item.firstSeen, lastSeen: item.lastSeen, pageViews: item.counts.page_view || 0, parses: item.counts.parse || 0, monitors: item.counts.monitor_configure || 0, backtests: item.counts.backtest || 0, indicators: labels.get(item.visitor) || [] })) });
       return true;
+    }
+
+    // Shared condition layer (src/conditionState.js): which conditions are computed, for how many stocks, how many
+    // are true now, flips today, and the most recent flips. mode is 'shadow' until rules drive notifications.
+    if (method === 'GET' && url.pathname === '/api/admin/conditions') {
+      if (!conditionStates) { sendJson(response, 200, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [] }); return true; }
+      sendJson(response, 200, conditionStates.snapshot({ flips: clamp(url.searchParams.get('flips'), 1, 300, 50) })); return true;
     }
 
     if (method === 'GET' && url.pathname === '/api/admin/unknown-indicators') {

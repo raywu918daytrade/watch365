@@ -204,3 +204,59 @@ export async function createUnknownIndicatorBackend(config) {
     async close() { await pool.end(); }
   };
 }
+
+// Shared condition state (src/conditionState.js): one row per (condition, symbol), upserted only when it changed,
+// plus the condition definitions so the back office can show what each key means.
+const CONDITION_STATE_TABLE = 'watch365_condition_state';
+const CONDITION_TABLE = 'watch365_conditions';
+
+export async function createConditionStateBackend(config) {
+  if (!config) return null;
+  const { createPool } = await import('mysql2/promise');
+  const pool = createPool(config);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ${CONDITION_TABLE} (
+    condition_key CHAR(64) NOT NULL PRIMARY KEY,
+    kind VARCHAR(16) NOT NULL,
+    label VARCHAR(500) NULL,
+    ast LONGTEXT NOT NULL,
+    first_seen TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    last_seen TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ${CONDITION_STATE_TABLE} (
+    condition_key CHAR(64) NOT NULL,
+    symbol VARCHAR(8) NOT NULL,
+    trading_date CHAR(10) NOT NULL,
+    value TINYINT NULL,
+    since_bar VARCHAR(32) NULL,
+    last_bar VARCHAR(32) NOT NULL,
+    flips_today INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (condition_key, symbol),
+    INDEX idx_condition_state_date (trading_date)
+  )`);
+  const chunks = (items, size) => { const out = []; for (let index = 0; index < items.length; index += size) out.push(items.slice(index, index + size)); return out; };
+  return {
+    label: `${config.host}/${config.database}`,
+    async loadStates({ since }) {
+      await pool.query(`DELETE FROM ${CONDITION_STATE_TABLE} WHERE trading_date < ?`, [since]);
+      const [rows] = await pool.query(`SELECT condition_key, symbol, trading_date, value, since_bar, last_bar, flips_today FROM ${CONDITION_STATE_TABLE}`);
+      return rows.map((row) => ({ conditionKey: row.condition_key, symbol: row.symbol, tradingDate: row.trading_date, value: row.value == null ? null : Boolean(row.value), since: row.since_bar, lastBar: row.last_bar, flipsToday: Number(row.flips_today) }));
+    },
+    async upsertStates(states) {
+      for (const batch of chunks(states, 500)) {
+        await pool.query(
+          `INSERT INTO ${CONDITION_STATE_TABLE} (condition_key, symbol, trading_date, value, since_bar, last_bar, flips_today) VALUES ?
+           ON DUPLICATE KEY UPDATE trading_date = VALUES(trading_date), value = VALUES(value), since_bar = VALUES(since_bar), last_bar = VALUES(last_bar), flips_today = VALUES(flips_today)`,
+          [batch.map((state) => [state.conditionKey, state.symbol, state.tradingDate, state.value == null ? null : state.value ? 1 : 0, state.since, state.lastBar, state.flipsToday])]
+        );
+      }
+    },
+    async upsertDefinitions(definitions) {
+      await pool.query(
+        `INSERT INTO ${CONDITION_TABLE} (condition_key, kind, label, ast) VALUES ? ON DUPLICATE KEY UPDATE kind = VALUES(kind), label = VALUES(label), last_seen = CURRENT_TIMESTAMP(3)`,
+        [definitions.map((item) => [item.key, item.kind, item.label ? String(item.label).slice(0, 500) : null, JSON.stringify(item.ast)])]
+      );
+    },
+    async close() { await pool.end(); }
+  };
+}

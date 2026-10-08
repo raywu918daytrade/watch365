@@ -14,7 +14,8 @@ import { applyScopedMarketBars } from './signalEngine.js';
 import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateStrategy } from './indicatorRegistry.js';
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
-import { createDocumentBackend, createEventBackend, createFormulaLibraryBackend, createUnknownIndicatorBackend, dbConfigFromEnv } from './db.js';
+import { createConditionStateBackend, createDocumentBackend, createEventBackend, createFormulaLibraryBackend, createUnknownIndicatorBackend, dbConfigFromEnv } from './db.js';
+import { ConditionStateStore, rulesFromSettings } from './conditionState.js';
 import { HISTORY_DAYS, historyVerdict, listHfM1Dates, listHfM1Months } from './history.js';
 import { EventStore } from './events.js';
 import { classifyUserAgent, visitorCookie, visitorFromRequest } from './visitor.js';
@@ -35,6 +36,10 @@ const INDICATOR_REQUESTS_FILE = process.env.WATCH365_INDICATOR_REQUESTS_FILE || 
 const FORMULA_LIBRARY_FILE = process.env.WATCH365_FORMULA_LIBRARY_FILE || join(ROOT, 'data', 'formula-library.json');
 const EVENTS_FILE = process.env.WATCH365_EVENTS_FILE || join(ROOT, 'data', 'events.jsonl');
 const UNKNOWN_INDICATORS_FILE = process.env.WATCH365_UNKNOWN_INDICATORS_FILE || join(ROOT, 'data', 'unknown-indicators.json');
+const CONDITION_STATE_FILE = process.env.WATCH365_CONDITION_STATE_FILE || join(ROOT, 'data', 'condition-state.json');
+// Layer 1 of the monitoring state machine (src/conditionState.js), shadow mode: records shared condition state and
+// flips, never creates signals. CONDITION_LAYER=off disables it.
+const CONDITION_LAYER_ENABLED = process.env.CONDITION_LAYER !== 'off';
 // PM decision: the indicator reality check (indicatorLookup.js) runs before the AI formula stage unless disabled.
 const INDICATOR_LOOKUP_ENABLED = process.env.INDICATOR_LOOKUP !== 'off';
 const PORT = Number(process.env.PORT || 3650);
@@ -54,7 +59,8 @@ const formulaLibrary = new FormulaLibrary(FORMULA_LIBRARY_FILE, { backend: await
 // Event log (admin dashboard) and blocked-indicator list: DB tables when DB_HOST is set, otherwise data/ files.
 const events = new EventStore(EVENTS_FILE, { backend: await createEventBackend(dbConfigFromEnv()) });
 const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { backend: await createUnknownIndicatorBackend(dbConfigFromEnv()) });
-const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, secret: formulaTokenSecret });
+const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createConditionStateBackend(dbConfigFromEnv()) : null });
+const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates, secret: formulaTokenSecret });
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
@@ -121,7 +127,7 @@ function historyJobView(job) {
   return { status: job.status, jobId: job.id, progress: job.progress, elapsedMs: Date.now() - job.startedAt };
 }
 
-await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load()]);
+await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null]);
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
 console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}`);
 syncMonitorTimer();
@@ -724,8 +730,9 @@ async function runMonitor(source = 'scheduler') {
       await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
       return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
     }
-    const bars = await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist });
-    return await applyBars(filterBarsToMonitorScope(bars, scope), source, scope);
+    const bars = filterBarsToMonitorScope(await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist }), scope);
+    await runConditionLayer(settings, bars);
+    return await applyBars(bars, source, scope);
   } catch (error) {
     await store.update((state) => {
       state.runtime.lastRunAt = new Date().toISOString();
@@ -738,6 +745,19 @@ async function runMonitor(source = 'scheduler') {
     return { error: error.message, state: publicState(store.getState()) };
   } finally {
     isRunning = false;
+  }
+}
+
+// Shadow run of the shared condition layer on the same bars. Any failure is logged and never affects monitoring.
+async function runConditionLayer(settings, bars) {
+  if (!CONDITION_LAYER_ENABLED) return;
+  try {
+    conditionStates.syncRules(rulesFromSettings(settings));
+    const result = conditionStates.evaluate(bars, new Date());
+    await conditionStates.flush();
+    if (result.flips.length || result.errors.length) console.log(`condition-layer: ${result.flips.length} flips, ${result.baselines} baselines, ${result.errors.length} errors over ${result.symbols} symbols × ${result.conditions} conditions (${conditionStates.lastRun.ms} ms)`);
+  } catch (error) {
+    console.error('condition-layer: run failed', error.code || error.message);
   }
 }
 
