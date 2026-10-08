@@ -74,7 +74,7 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 3. **AI 組公式**（`src/formulaPlanner.js`）。
 4. **回查把關**：`POST /api/formula/vet { proposalToken, purpose:'watchlist'|'screen', watchlist? }` 用過去 7 個交易日重播，回 202 `{ jobId }`（之後輪詢 `/api/history/jobs/:id`）或快取命中直接 200。所有回查結果（history job done 與 backtest）都附 `verdict:{ ok, code:'ok'|'no_triggers'|'too_many'|'no_data', perSymbolPerDay, totalEvents, symbolsCount, availableDays, maxPerSymbolDay, message }`；`VET_MAX_PER_SYMBOL_DAY`（預設 10）是平均每檔每個交易日的觸發上限，0 次或超過上限即 `ok:false`，前端不套用、不入庫，後端記 `vet_blocked` 事件。token 無效回 422 `FORMULA_TOKEN_INVALID`、過期回 409 `FORMULA_PROPOSAL_STALE`。
 
-用戶建立的公式仍是套用（`/api/formula/activate`／`/api/monitor/configure`）後才進公式庫（pending_review）。
+AI 建立的公式**通過 7 日回查就立即存進公式庫**（老闆決策 2026-10，取代原本「套用後才入庫」）：前端 vet 通過後呼叫 `POST /api/formula/save { proposalToken }` → `{ fingerprint, name, summary, status:'pending_review' }`，之後這個過濾改以 `{ fingerprint }` 參照公式庫，草稿遺失或沒建立監控也不會不見，下次同樣的文字直接從公式庫命中、不再花 AI。伺服器只接受本程序內 vet 通過的公式；不是的話（例如 vet 後伺服器重啟）改用 7 日索引當場判定，同樣的 verdict 規則，不通過回 409 `FORMULA_NOT_VETTED`。存入時同步加進 7 日索引，記 `formula_saved` 事件。舊草稿裡還帶有效 token 的 AI 過濾，開啟條件頁時自動補存。
 
 ### 事件記錄與後台
 

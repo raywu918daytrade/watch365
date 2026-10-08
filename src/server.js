@@ -71,6 +71,8 @@ const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicato
 // 7-day condition index in a long-lived worker (src/historyIndexWorker.js). HISTORY_INDEX=off disables it.
 const HISTORY_INDEX_ENABLED = process.env.HISTORY_INDEX !== 'off';
 const MAX_INDEX_FILTERS = 3;
+// Fingerprints that passed the 7-day vet in this process (POST /api/formula/save requires it).
+const vettedFormulas = new Set();
 const historyIndex = new HistoryIndexClient({ getSymbols: async () => (await getUniverseWatchlist()).map((item) => item.symbol), heapMb: Number(process.env.HISTORY_INDEX_HEAP_MB || 640) });
 let monitorTimer = null;
 let isRunning = false;
@@ -269,6 +271,32 @@ async function routeApi(request, response) {
   // Vet (PM decision 1: a condition that triggers 0 times or far too often in the 7-day replay is blocked before it
   // is applied). Same job machinery as the backtest; the done result's `verdict` says ok / no_triggers / too_many /
   // no_data. The client applies only when verdict.ok.
+  // Owner decision (2026-10): an AI-built indicator is kept as soon as it is built and has passed the 7-day vet, not
+  // only when a monitor is created — otherwise losing the draft loses the indicator. body { proposalToken } →
+  // 200 { fingerprint, name, summary, status } (pending_review until promoted); 409 FORMULA_NOT_VETTED when this
+  // formula has not passed /api/formula/vet in this process. Saving twice is harmless (hitCount +1, same row).
+  if (method === 'POST' && url.pathname === '/api/formula/save') {
+    let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    try {
+      const payload = verifyFormulaToken(body?.proposalToken, formulaTokenSecret);
+      if (!vettedFormulas.has(payload.fingerprint) && !formulaLibrary.get(payload.fingerprint)) {
+        // Not vetted in this process (e.g. vetted before a restart): check it now on the 7-day index, same verdict rule.
+        const verdict = HISTORY_INDEX_ENABLED ? await indexVerdict(payload) : null;
+        if (!verdict?.ok) { sendJson(response, 409, { error:'FORMULA_NOT_VETTED', verdict:verdict ?? null }); return; }
+        vettedFormulas.add(payload.fingerprint);
+      }
+      const existing = formulaLibrary.get(payload.fingerprint);
+      const saved = existing && existing.status !== 'disabled' ? existing : (await formulaLibrary.recordActivation({ ast:payload.ast, name:payload.name, sourceText:payload.sourceText ?? null })).formula;
+      if (HISTORY_INDEX_ENABLED) historyIndex.ensure([{ key:payload.fingerprint, ast:payload.ast }]).catch(() => {});
+      events.record('formula_saved', { fingerprint:saved.fingerprint, name:saved.name, text:payload.sourceText?.slice(0, 200) ?? null, existing:Boolean(existing) }, { visitor });
+      sendJson(response, 200, { fingerprint:saved.fingerprint, name:saved.name, summary:saved.summary, status:saved.status });
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'FORMULA_SAVE_FAILED' });
+    }
+    return;
+  }
+
   if (method === 'POST' && url.pathname === '/api/formula/vet') {
     let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
@@ -279,7 +307,7 @@ async function routeApi(request, response) {
       const watchlist = purpose === 'watchlist' ? parseWatchlist(body.watchlist) : await getUniverseWatchlist();
       const key = `${strategyIdentity(strategy)}|${watchlist.map((item) => item.symbol).sort().join(',')}`;
       const cached = historyCache.get(key);
-      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { const view = { ...withVerdict(cached.result), cached:true, status:'done', vet:true }; if (!view.verdict.ok) recordVetBlocked(view.verdict, { strategy, formulaPayload, watchlist, visitor }); sendJson(response, 200, view); return; }
+      if (cached && Date.now() - cached.at < HISTORY_CACHE_MS) { const view = { ...withVerdict(cached.result), cached:true, status:'done', vet:true }; if (!view.verdict.ok) recordVetBlocked(view.verdict, { strategy, formulaPayload, watchlist, visitor }); else vettedFormulas.add(formulaPayload.fingerprint); sendJson(response, 200, view); return; }
       const job = startHistoryJob(key, strategy, watchlist);
       recordHistoryOutcome(job, 'vet', { strategy, formulaPayload, watchlist, visitor });
       sendJson(response, job.status === 'done' ? 200 : 202, { ...historyJobView(job), vet:true });
@@ -738,6 +766,7 @@ function recordHistoryOutcome(job, kind, { strategy, formulaPayload = null, watc
     const verdict = historyVerdict(result);
     events.record('backtest', { ...base, days: result.availableDays, totalEvents: result.totalEvents, perSymbolPerDay: verdict.perSymbolPerDay, verdict: verdict.code, ms: result.elapsedMs ?? Date.now() - startedAt, status: 'done' }, { visitor });
     if (kind === 'vet' && !verdict.ok) recordVetBlocked(verdict, { strategy, formulaPayload, watchlist, visitor });
+    if (kind === 'vet' && verdict.ok && formulaPayload?.fingerprint) vettedFormulas.add(formulaPayload.fingerprint);
   }).catch(() => {});
   job.promise.catch((error) => { events.record('backtest', { ...base, days: 0, totalEvents: 0, ms: Date.now() - startedAt, status: 'failed', error: error?.code || 'HISTORY_FAILED' }, { visitor }); });
 }
@@ -971,4 +1000,12 @@ function libraryConditions() {
     for (const member of template.members || []) if (member.source === 'ai') { try { out.push(resolveIndexCondition({ fingerprint:member.fingerprint })); } catch {} }
   }
   return out;
+}
+
+// Vet verdict of one formula over the whole universe from the 7-day index (null while the index is loading).
+async function indexVerdict(payload) {
+  const result = await historyIndex.query({ filters:[{ key:payload.fingerprint, ast:payload.ast }], events:false });
+  if (result.loading) return null;
+  const step = result.steps[0];
+  return historyVerdict({ totalEvents:step.totalEvents, symbolsCount:(await getUniverseWatchlist().catch(() => [])).length || step.triggeredSymbols, availableDays:result.availableDays });
 }

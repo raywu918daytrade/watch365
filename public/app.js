@@ -287,7 +287,7 @@ function conditions(){
   root.querySelector('#confirmConditions').addEventListener('click',()=>{if(!hasFilters())return;go('confirm');});
   drawAi();drawTemplates();drawHistory();
   loadTemplates().then(()=>{if(node()!=='conditions')return;if(resolveLegacy())drawFilters();drawTemplates();scheduleIndex();});
-  autoHistory=false;scheduleIndex();
+  autoHistory=false;scheduleIndex();persistDraftAiFilters();
 }
 function startAi(value){
   const text=String(value||'').trim();if(text.length<2)return;
@@ -514,6 +514,20 @@ function drawAi(){
 const VERDICT_TEXT={no_triggers:'過去 7 個交易日完全沒有觸發，這個條件可能太嚴格，監控不到東西。',too_many:'過去 7 個交易日觸發太頻繁，通知會多到沒有參考價值。',no_data:'沒有可用的歷史資料，無法驗證這個條件。'};
 function perDayText(verdict){const value=Number(verdict?.perSymbolPerDay);return Number.isFinite(value)?(value>=10?String(Math.round(value)):String(Math.round(value*10)/10)):'—';}
 function vetStats(verdict){return`<div class="proto-vet-stats"><div><strong>${escapeHtml(String(verdict.totalEvents??'—'))}</strong><span>總觸發次數</span></div><div><strong>${escapeHtml(String(verdict.symbolsCount??'—'))}</strong><span>檔數</span></div><div><strong>${escapeHtml(String(verdict.availableDays??'—'))}</strong><span>交易日</span></div><div><strong>${escapeHtml(perDayText(verdict))}</strong><span>平均每檔每天</span></div></div>`;}
+async function persistAiFilter(filter){
+  const token=filter.token||filter.spec.ai?.token;if(!token)return false;
+  try{
+    const saved=await api('/api/formula/save',{proposalToken:token});
+    filter.spec={fingerprint:saved.fingerprint};filter.formulaSummary=filter.formulaSummary||saved.summary||'';filter.saved=true;delete filter.token;delete filter.conditionKey;
+    templateCache=null;loadTemplates().then(()=>{if(node()==='conditions'){drawTemplates();scheduleIndex();}});
+    return true;
+  }catch(error){console.warn('save AI indicator failed',error.code||error.message);return false;}
+}
+// Drafts from before indicators were saved on creation: an AI filter still holding a valid token is saved now.
+async function persistDraftAiFilters(){
+  const pending=state.filters.filter((filter)=>filter.spec.ai&&filter.spec.ai.token&&!filter.saving);
+  for(const filter of pending){filter.saving=true;const ok=await persistAiFilter(filter);delete filter.saving;if(ok){invalidateToken();save();if(node()==='conditions')drawFilters();}}
+}
 async function vetAndAdd(ai,filter,replace){
   if(state.ai!==ai||ai.vetting)return;
   ai.vetting={progress:'準備中'};ai.vet=null;ai.vetError=null;save();drawAi();
@@ -531,6 +545,9 @@ async function vetAndAdd(ai,filter,replace){
   ai.vetting=null;
   const verdict=result.verdict||{ok:true,code:'ok',totalEvents:result.totalEvents,symbolsCount:result.symbolsCount,availableDays:result.availableDays};
   if(!verdict.ok){ai.vet={verdict};save();drawAi();return;}
+  // Owner decision: a vetted AI indicator is kept right away (library, pending review) so it survives without a draft
+  // or a monitor; the filter then refers to the library formula instead of the short-lived AI token.
+  await persistAiFilter(filter);
   const added=await addFilter(filter,{replace});
   if(!added)return;
   // The vet already replayed this very filter, so its result is the 7-day history (only when it is the sole filter).
