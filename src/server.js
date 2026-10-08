@@ -10,7 +10,7 @@ import { appendLog, JsonStore, publicState } from './storage.js';
 import { resolveWatchlistInput } from './watchlist.js';
 import { calculateUniverseCoverage } from './universeCoverage.js';
 import { applyMonitorScope, buildMonitorScope, filterBarsToMonitorScope, markMonitorScopeUnknown, notificationEligibility, signalMatchesCurrentStrategy } from './monitorScope.js';
-import { applyScopedMarketBars } from './signalEngine.js';
+import { applyScopedMarketBars, STATE_SIGNAL_MAX_AGE_MS } from './signalEngine.js';
 import { IndicatorRegistry, strategyIdentity, validateFormulaStrategy, validateStrategy } from './indicatorRegistry.js';
 import { indicatorAgentStatus, validateAgentProposal } from './indicatorAgent.js';
 import { loadProjectEnv } from './env.js';
@@ -39,9 +39,12 @@ const EVENTS_FILE = process.env.WATCH365_EVENTS_FILE || join(ROOT, 'data', 'even
 const UNKNOWN_INDICATORS_FILE = process.env.WATCH365_UNKNOWN_INDICATORS_FILE || join(ROOT, 'data', 'unknown-indicators.json');
 const CONDITION_STATE_FILE = process.env.WATCH365_CONDITION_STATE_FILE || join(ROOT, 'data', 'condition-state.json');
 const RULE_STATE_FILE = process.env.WATCH365_RULE_STATE_FILE || join(ROOT, 'data', 'rule-state.json');
-// Monitoring state machine, shadow mode: layer 1 shared condition state (src/conditionState.js) and layer 2 per-rule
-// state idle/triggered/cooldown (src/ruleState.js). Records only, never creates signals. CONDITION_LAYER=off disables both.
+// Monitoring state machine: layer 1 shared condition state (src/conditionState.js) and layer 2 per-rule
+// state idle/triggered/cooldown (src/ruleState.js). CONDITION_LAYER=off disables both (and forces NOTIFY_ENGINE=legacy).
 const CONDITION_LAYER_ENABLED = process.env.CONDITION_LAYER !== 'off';
+// Which engine creates indicator signals/notifications: 'state' (default) = the state machine above (one
+// notification when a rule becomes met, cooldown + re-arm); 'legacy' = the old per-bar engine (instant rollback).
+const NOTIFY_ENGINE = CONDITION_LAYER_ENABLED && process.env.NOTIFY_ENGINE !== 'legacy' ? 'state' : 'legacy';
 // PM decision: the indicator reality check (indicatorLookup.js) runs before the AI formula stage unless disabled.
 const INDICATOR_LOOKUP_ENABLED = process.env.INDICATOR_LOOKUP !== 'off';
 const PORT = Number(process.env.PORT || 3650);
@@ -63,7 +66,7 @@ const events = new EventStore(EVENTS_FILE, { backend: await createEventBackend(d
 const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { backend: await createUnknownIndicatorBackend(dbConfigFromEnv()) });
 const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createConditionStateBackend(dbConfigFromEnv()) : null });
 const ruleStates = new RuleStateStore(RULE_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createRuleStateBackend(dbConfigFromEnv()) : null });
-const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, legacySignalsToday: () => store.getState().signals.filter((signal) => signal.tradingDate === taipeiDate()).length, secret: formulaTokenSecret });
+const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0; return state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, secret: formulaTokenSecret });
 let monitorTimer = null;
 let isRunning = false;
 let universeCache = null;
@@ -132,7 +135,7 @@ function historyJobView(job) {
 
 await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
-console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}`);
+console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
 syncMonitorTimer();
 
 const server = createServer(async (request, response) => {
@@ -734,8 +737,8 @@ async function runMonitor(source = 'scheduler') {
       return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
     }
     const bars = filterBarsToMonitorScope(await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist }), scope);
-    await runConditionLayer(settings, bars);
-    return await applyBars(bars, source, scope);
+    const ruleTriggers = await runConditionLayer(settings, bars);
+    return await applyBars(bars, source, scope, NOTIFY_ENGINE === 'state' ? ruleTriggers : null);
   } catch (error) {
     await store.update((state) => {
       state.runtime.lastRunAt = new Date().toISOString();
@@ -751,9 +754,10 @@ async function runMonitor(source = 'scheduler') {
   }
 }
 
-// Shadow run of the shared condition layer on the same bars. Any failure is logged and never affects monitoring.
+// Runs the state machine on the same bars and returns this run's rule triggers (null when off or failed, in which
+// case applyBars creates no indicator signals this run rather than falling back to a different engine mid-day).
 async function runConditionLayer(settings, bars) {
-  if (!CONDITION_LAYER_ENABLED) return;
+  if (!CONDITION_LAYER_ENABLED) return null;
   try {
     const rules = rulesFromSettings(settings);
     conditionStates.syncRules(rules);
@@ -764,17 +768,20 @@ async function runConditionLayer(settings, bars) {
     const ruleRun = ruleStates.endRun(now);
     await Promise.all([conditionStates.flush(), ruleStates.flush()]);
     if (result.flips.length || result.errors.length || ruleRun.triggers.length) console.log(`condition-layer: ${result.flips.length} flips, ${result.errors.length} errors over ${result.symbols} symbols × ${result.conditions} conditions; rules: ${ruleRun.triggers.length} shadow triggers, ${ruleRun.suppressed} suppressed, ${ruleRun.walked} walked / ${ruleRun.skipped} skipped (${conditionStates.lastRun.ms} ms)`);
+    return ruleRun.triggers;
   } catch (error) {
     console.error('condition-layer: run failed', error.code || error.message);
+    return [];
   }
 }
 
-async function applyBars(bars, source, scope) {
+async function applyBars(bars, source, scope, ruleTriggers = null) {
   const now = new Date();
   let result;
 
   await store.update((state) => {
-    result = applyScopedMarketBars(state,bars,scope,source,now);
+    result = applyScopedMarketBars(state,bars,scope,source,now,{ruleTriggers});
+    if(result.late?.length)appendLog(state,'info',`${result.late.length} 筆觸發發現時已超過 ${STATE_SIGNAL_MAX_AGE_MS/60000} 分鐘，只記錄不通知`,{source,symbols:result.late.map((item)=>item.symbol).slice(0,20)});
     for (const decision of result.decisions) appendLog(state,decision.triggered?'signal':'info',`${decision.symbol||'-'} ${decision.reasonCode}`,{source,ruleVersion:decision.ruleVersion});
     for (const signal of result.signals) appendLog(state,'signal',`${signal.symbol} 建立觸發事件並排入通知`,{rule:signal.ruleName||RULE_NAME,price:signal.price,volume:signal.volume});
     if(result.skipped)appendLog(state,'info','本輪結果未提交：監控已暫停或設定已變更',{source,reason:result.reason});

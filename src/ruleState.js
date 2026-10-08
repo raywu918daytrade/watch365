@@ -21,7 +21,8 @@
 // (layer 1's changedKeys + rulesFor), when it is not idle (cooldown counts bars), or when it has no state yet.
 // An idle rule with no changed condition just moves its last-bar marker in memory (re-walking it later is harmless).
 //
-// This version runs in shadow mode: triggers are recorded and compared with the current signals, nothing is sent.
+// Its triggers are what signalEngine turns into notifications (NOTIFY_ENGINE=state, default); with
+// NOTIFY_ENGINE=legacy it runs in shadow mode and the old per-bar engine notifies.
 
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -111,7 +112,7 @@ export class RuleStateStore {
   }
 
   // legacySignalsToday: how many signals the current engine created today, so the admin page can compare.
-  snapshot({ events = 50, now = new Date(), legacySignalsToday = null } = {}) {
+  snapshot({ events = 50, now = new Date(), legacySignalsToday = null, mode = 'shadow' } = {}) {
     const today = taipeiDate(now);
     const rules = [...this.rules.values()].map((rule) => {
       const counts = { idle:0, triggered:0, cooldown:0 };
@@ -124,7 +125,7 @@ export class RuleStateStore {
       return { ruleId:rule.ruleId, name:rule.name, kind:rule.kind, rearmBars:rule.rearmBars, conditions:rule.conditionKeys.length, symbols, states:counts, triggersToday, suppressedToday, tradingDate, sessionClosed:tradingDate ? sessionClosed(tradingDate, now) : null };
     });
     return {
-      mode:'shadow',
+      mode,
       lastRun:this.lastRun,
       rules,
       comparison:{ day:today, shadowTriggers:rules.reduce((sum, rule) => sum + rule.triggersToday, 0), suppressed:rules.reduce((sum, rule) => sum + rule.suppressedToday, 0), legacySignals:legacySignalsToday },
