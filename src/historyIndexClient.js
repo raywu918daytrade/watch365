@@ -48,6 +48,8 @@ export class HistoryIndexClient {
     });
   }
   known(key) { return this.conditions.get(key) ?? null; }
+  // One candlestick example where all these filters hold ([{ key, ast }]); { example:null } when none was found.
+  example(filters) { this.#remember(filters); return this.#request({ type:'example', conditions:filters, filters }); }
 
   status() { return this.#request({ type:'status' }); }
 

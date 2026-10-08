@@ -8,17 +8,23 @@
 //   { type:'query', id, conditions, filters, candidates, symbols, events }
 //                                                 conditions [{key, ast}] are computed once if new, then combined
 //   { type:'ensure', id, conditions }             compute these now (prewarm the indicator list)
+//   { type:'example', id, filters:[{key, ast}] }    one candlestick example where all filters hold (conditionExample.js);
+//                                                 searches all daily history, then the 7-day minute index; cached
 //   { type:'status', id }
-import { BarCollector, collectHistory, HISTORY_DAYS, listHfM1Dates, readParquetInto } from './history.js';
+import { BarCollector, collectHistory, HISTORY_DAYS, listHfD1Months, listHfM1Dates, readD1Rows, readParquetInto } from './history.js';
+import { DailyStore, findExample } from './conditionExample.js';
 import { readFile } from 'node:fs/promises';
 import { HistoryIndex } from './historyIndex.js';
 
 const index = new HistoryIndex({ maxDays:HISTORY_DAYS });
 let status = 'idle', progress = null, error = null, loadedAt = null, refreshedAt = null, symbols = new Set();
 let queue = Promise.resolve();
+const daily = new DailyStore();
+let dailyStatus = 'idle', dailyLoadedDay = null;
+const examples = new Map();   // sorted filter keys → { day, example }
 const send = (message) => { if (process.send) process.send(message); };
 const run = (task) => { const next = queue.then(task); queue = next.catch(() => {}); return next; };
-const info = () => ({ status, progress, error, loadedAt, refreshedAt, ...index.stats(), heapMb:Math.round(process.memoryUsage().heapUsed / 1048576) });
+const info = () => ({ status, progress, error, loadedAt, refreshedAt, daily:{ status:dailyStatus, ...(dailyStatus === 'ready' ? daily.stats() : {}) }, ...index.stats(), heapMb:Math.round(process.memoryUsage().heapUsed / 1048576) });
 
 async function load(list) {
   status = 'loading'; error = null; symbols = new Set(list);
@@ -33,12 +39,45 @@ async function load(list) {
       for (const date of collector.dates()) { progress = `建立索引 ${date}`; index.setDay(date, collector.barsFor(date)); collector.drop(date); }
     }
     status = 'ready'; progress = null; loadedAt = new Date().toISOString();
+    loadDaily();
     console.log(`history-index: loaded ${index.stats().dates.length} days × ${symbols.size} symbols, ${index.stats().conditions} conditions in ${Date.now() - started} ms, heap ${info().heapMb} MB`);
   } catch (failure) {
     status = 'failed'; error = failure.code || failure.message; progress = null;
     console.error('history-index: load failed', error);
   }
 }
+
+// All daily history, read month by month in the background (not through the query queue, so picking filters is
+// never blocked behind it). Examples asked before it is ready use the minute index. Re-read once a day for the
+// current month.
+async function loadDaily() {
+  if (dailyStatus === 'loading') return;
+  // Tests: WATCH365_DAILY_FIXTURE = JSON { "2330": [{ date, open, high, low, close, volume }…] }.
+  if (process.env.WATCH365_DAILY_FIXTURE) {
+    const fixture = JSON.parse(await readFile(process.env.WATCH365_DAILY_FIXTURE, 'utf8'));
+    daily.add('fixture', Object.entries(fixture).flatMap(([symbol, rows]) => rows.map((row) => ({ ...row, symbol }))));
+    daily.finalize(); dailyStatus = 'ready'; dailyLoadedDay = taipeiDay(); examples.clear(); return;
+  }
+  if (process.env.WATCH365_HISTORY_FIXTURE) return;
+  dailyStatus = 'loading';
+  const started = Date.now(), today = taipeiDay();
+  try {
+    const months = await listHfD1Months();
+    const current = today.slice(0, 7);
+    for (const file of months) {
+      if (daily.months.has(file.month) && file.month !== current) continue;
+      daily.add(file.month, await readD1Rows(file.path, { maxAgeSeconds:file.month === current ? 3600 : 30 * 86400, symbols:symbols.size ? symbols : null }));
+    }
+    daily.finalize();
+    dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
+    const stats = daily.stats();
+    console.log(`history-index: daily ${stats.months} months × ${stats.symbols} symbols (${stats.bars} bars) in ${Date.now() - started} ms, heap ${info().heapMb} MB`);
+  } catch (failure) {
+    dailyStatus = daily.months.size ? 'ready' : 'failed';
+    console.error('history-index: daily load failed', failure.code || failure.message);
+  }
+}
+function taipeiDay() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }
 
 // Today's file grows during the session; a new trading day appears as a new file. Older days are fixed.
 async function refresh(list) {
@@ -54,6 +93,7 @@ async function refresh(list) {
     if (collector.days.has(file.date)) index.setDay(file.date, collector.barsFor(file.date));
   }
   refreshedAt = new Date().toISOString();
+  if (dailyLoadedDay && dailyLoadedDay !== taipeiDay()) loadDaily();
 }
 
 process.on('message', (message) => {
@@ -62,12 +102,21 @@ process.on('message', (message) => {
   if (message.type === 'refresh') { run(() => refresh(message.symbols).catch((failure) => console.error('history-index: refresh failed', failure.code || failure.message))); return; }
   if (message.type === 'status') { reply({ type:'result', result:info() }); return; }
   // A query during the initial load answers right away (the UI shows progress and asks again) instead of waiting.
-  if (message.type === 'query' && status !== 'ready') { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
+  if ((message.type === 'query' || message.type === 'example') && status !== 'ready') { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
   run(async () => {
     try {
       if (status !== 'ready') { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
       const computed = index.ensure(message.conditions || []);
       if (message.type === 'ensure') { reply({ type:'result', result:{ computed, ...info() } }); return; }
+      if (message.type === 'example') {
+        const cacheKey = (message.filters || []).map((item) => item.key).sort().join('|');
+        const day = `${taipeiDay()}|${dailyStatus}`;
+        const cached = examples.get(cacheKey);
+        if (cached && cached.day === day) { reply({ type:'result', result:{ example:cached.example, cached:true } }); return; }
+        const example = findExample({ filters:message.filters || [], daily:dailyStatus === 'ready' ? daily : null, index });
+        examples.set(cacheKey, { day, example }); if (examples.size > 500) examples.delete(examples.keys().next().value);
+        reply({ type:'result', result:{ example, cached:false, dailyReady:dailyStatus === 'ready' } }); return;
+      }
       const result = index.query({ filters:message.filters || [], candidates:message.candidates || [], symbols:Array.isArray(message.symbols) ? new Set(message.symbols) : null, events:message.events !== false });
       reply({ type:'result', result:{ ...result, computed, loadedAt, refreshedAt } });
     } catch (failure) {

@@ -244,6 +244,26 @@ async function routeApi(request, response) {
     return;
   }
 
+  // One candlestick example of what a stock looks like when ALL the given filters hold (any stock, not named).
+  // body { filters:[spec] } (same specs as /api/history/index) → 200 { status:'ready', example:{ timeframe:'d1'|'m1',
+  // candles, price:[line], panels:[{ lines, thresholds }], markers } | null } or 202 { status:'loading' }.
+  if (method === 'POST' && url.pathname === '/api/history/example') {
+    let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
+    const filters = Array.isArray(body?.filters) ? body.filters : [];
+    if (!filters.length) { sendJson(response, 422, { error:'CONDITIONS_REQUIRED' }); return; }
+    if (filters.length > MAX_INDEX_FILTERS) { sendJson(response, 422, { error:'CONDITIONS_TOO_MANY' }); return; }
+    if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
+    try {
+      const result = await historyIndex.example(filters.map((spec) => resolveIndexCondition(spec)));
+      if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || '準備資料' }); return; }
+      sendJson(response, 200, { status:'ready', example:result.example ?? null });
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_EXAMPLE_FAILED' });
+    }
+    return;
+  }
+
   if ((method === 'POST' || method === 'GET') && url.pathname === '/api/history/backtest') {
     let body;
     try { body = method === 'POST' ? await readJson(request) : url.searchParams.has('c') ? await compactHistorySpec(url.searchParams) : JSON.parse(url.searchParams.get('spec') || 'null'); }

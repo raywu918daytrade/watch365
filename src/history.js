@@ -50,6 +50,27 @@ export async function listHfM1Dates(options) {
   return (await listHfTree('db/m1_live', /^db\/m1_live\/(\d{4}-\d{2}-\d{2})\.parquet$/, options)).map((file) => ({ date: file.key, path: file.path, size: file.size }));
 }
 
+export async function listHfD1Months(options) {
+  return (await listHfTree('db/d1', /^db\/d1\/(\d{4}_\d{2})\.parquet$/, options)).map((file) => ({ month: file.key.replace('_', '-'), path: file.path, size: file.size }));
+}
+
+// Daily bars of one monthly D1 file → rows { symbol, date (YYYY-MM-DD), open, high, low, close, volume }.
+export async function readD1Rows(path, { maxAgeSeconds = 7 * 86400, symbols = null, downloadImpl = downloadHfAsset } = {}) {
+  const downloaded = await downloadImpl(path, { maxAgeSeconds });
+  const file = await asyncBufferFromFile(downloaded.cachePath);
+  const rows = await parquetReadObjects({ file, compressors, columns: COLUMNS });
+  const out = [];
+  for (const row of rows) {
+    const symbol = String(row.stock_id);
+    if (symbols && !symbols.has(symbol)) continue;
+    const ms = toMs(row.date);
+    const close = roundPrice(row.close);
+    if (!Number.isFinite(ms) || !Number.isFinite(close)) continue;
+    out.push({ symbol, date: new Date(ms + TAIPEI_OFFSET_MS).toISOString().slice(0, 10), open: finitePrice(row.open), high: finitePrice(row.high), low: finitePrice(row.low), close, volume: row.volume == null ? null : Number(row.volume) });
+  }
+  return out;
+}
+
 export async function listHfM1Months(options) {
   return (await listHfTree('db/m1', /^db\/m1\/(\d{4}_\d{2})\.parquet$/, options)).map((file) => ({ month: file.key.replace('_', '-'), path: file.path, size: file.size }));
 }

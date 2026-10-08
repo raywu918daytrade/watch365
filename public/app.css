@@ -287,3 +287,17 @@
 .proto-rank.weak strong, .proto-rank.weak small { color:#7a8a8e; }
 .proto-rank.zero small { color:#a4471f; }
 .proto-rank-zero { margin-top:.5rem; }
+/* Condition example chart: one candlestick example where all filters hold (TW colours: up red, down green). */
+.proto-example { display:grid; gap:.4rem; margin:.4rem 0 .8rem; padding:.75rem .8rem; border:1px solid #d0dddd; border-radius:.5rem; background:#fff; }
+.proto-example-chart { width:100%; height:auto; display:block; }
+.proto-example-chart .ex-up { stroke:#d23b3b; fill:#d23b3b; stroke-width:1; }
+.proto-example-chart .ex-down { stroke:#1f9a5a; fill:#1f9a5a; stroke-width:1; }
+.proto-example-chart .ex-line { fill:none; stroke-width:1.4; }
+.proto-example-chart .ex-grid { stroke:#eef3f3; stroke-width:1; }
+.proto-example-chart .ex-panel { fill:#fafcfc; stroke:#eef3f3; }
+.proto-example-chart .ex-threshold { stroke:#9aaaae; stroke-dasharray:3 3; stroke-width:1; }
+.proto-example-chart .ex-guide { stroke:#e9a23b; stroke-opacity:.45; stroke-dasharray:2 3; stroke-width:1; }
+.proto-example-chart .ex-marker { fill:#e07a00; }
+.proto-example-chart .ex-axis { fill:#7a8a8e; font-size:9px; font-variant-numeric:tabular-nums; }
+.proto-example-legend { display:flex; flex-wrap:wrap; gap:.25rem .8rem; margin:0; padding:0; list-style:none; color:#566b70; font-size:.72rem; }
+.proto-example-legend i { display:inline-block; width:.8rem; height:.18rem; margin-right:.3rem; vertical-align:middle; border-radius:1px; }

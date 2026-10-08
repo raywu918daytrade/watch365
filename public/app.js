@@ -274,7 +274,7 @@ function resolveLegacy(){
 function conditions(){
   if(!state.purpose)return go('home');
   if(state.purpose==='watchlist'&&!state.watchlist.length)return go('stocks');
-  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
+  shell({step:'conditions',title:'要盯什麼狀況？',lead:'從清單選指標加入過濾，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。',back:state.purpose==='watchlist'?'stocks':'home',body:`<div id="addedPanel">${filterMarkup()}</div><section id="examplePanel" class="proto-example" hidden></section><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步：確認</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
   // Typing again drops a first-turn AI card for other text, so the list comes back.
@@ -583,7 +583,7 @@ async function runIndex(){
     save();drawIndexViews();
   }catch(error){if(seq!==indexSeq)return;indexData={...indexData,loading:false,error:errorText(error)};drawIndexViews();}
 }
-function drawIndexViews(){if(node()!=='conditions')return;const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
+function drawIndexViews(){if(node()!=='conditions')return;scheduleExample();const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
 function indexFresh(){return indexData&&indexData.signature===indexSignature()?indexData:null;}
 function countText(item){return item.triggeredSymbols?`${item.triggeredSymbols} 檔・${item.totalEvents} 次`:'0 檔';}
 function stepLine(index){
@@ -600,6 +600,75 @@ function candidateLine(spec){
   const item=data.counts.get(specKey(spec));if(!item)return'';
   const prefix=state.filters.length?'加入後':'過去 7 日';
   return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}</small>`;
+}
+// D3. Example chart (owner decision 2026-10): one candlestick example of what a stock looks like when ALL selected
+// filters hold — any stock, not named; daily history first, one-minute bars when daily never met it. Only the bars
+// where the whole combination becomes met are marked. It explains the condition; it is not a quote screen.
+let exampleData=null,exampleTimer=null,exampleSeq=0;
+function scheduleExample(){
+  if(node()!=='conditions')return;
+  const signature=filterSignature();
+  if(!hasFilters()){exampleData=null;drawExample();return;}
+  if(exampleData&&exampleData.signature===signature)return;
+  exampleData={signature,loading:true};drawExample();
+  clearTimeout(exampleTimer);exampleTimer=setTimeout(runExample,300);
+}
+async function runExample(){
+  const signature=filterSignature(),seq=++exampleSeq;
+  const filters=state.filters.map(indexSpec);if(!filters.length||filters.some((item)=>!item))return;
+  try{
+    const result=await api('/api/history/example',{filters});
+    if(seq!==exampleSeq||signature!==filterSignature())return;
+    if(result.status==='loading'){exampleData={signature,loading:true};drawExample();exampleTimer=setTimeout(runExample,3000);return;}
+    exampleData={signature,example:result.example};
+  }catch(error){if(seq!==exampleSeq)return;exampleData={signature,error:errorText(error)};}
+  drawExample();
+}
+function drawExample(){
+  const target=root.querySelector('#examplePanel');if(!target)return;
+  if(!hasFilters()||!exampleData){target.hidden=true;target.innerHTML='';return;}
+  target.hidden=false;
+  const head=`<p class="proto-eyebrow">條件範例</p>`;
+  if(exampleData.loading){target.innerHTML=`${head}<div class="proto-skeleton" aria-hidden="true"></div><p class="proto-signature">找一段所有過濾都成立的 K 線…</p>`;return;}
+  if(exampleData.error){target.innerHTML=`${head}<p class="proto-signature">範例暫時無法顯示：${escapeHtml(exampleData.error)}</p>`;return;}
+  const example=exampleData.example;
+  if(!example){target.innerHTML=`${head}<div class="proto-status"><strong>找不到範例</strong><p>歷史資料裡沒有股票同時符合這${state.filters.length>1?'幾個':'個'}過濾。</p></div>`;return;}
+  target.innerHTML=`${head}${exampleSvg(example)}<p class="proto-signature">${example.timeframe==='d1'?'日 K ':'一分鐘 K '}範例・▲ 為所有過濾都成立、會通知的時間點。只用來說明條件長什麼樣子，不是投資建議。</p>`;
+}
+const EXAMPLE_COLORS=['#2f6fbf','#c47f12','#7a4bb3','#1c8a8a'];
+function exampleSvg(example){
+  const W=360,PAD_L=4,PAD_R=40,PRICE_H=170,SUB_H=64,GAP=10;
+  const candles=example.candles,n=candles.length;if(!n)return'';
+  const panels=example.panels||[];const H=PRICE_H+panels.length*(SUB_H+GAP)+18;
+  const step=(W-PAD_L-PAD_R)/n,body=Math.max(1,step*0.62),x=(i)=>PAD_L+step*i+step/2;
+  const priceValues=[...candles.flatMap((c)=>[c.high,c.low]),...(example.price||[]).flatMap((line)=>line.values)].filter(Number.isFinite);
+  let lo=Math.min(...priceValues),hi=Math.max(...priceValues);if(hi===lo){hi+=1;lo-=1;}const padP=(hi-lo)*0.06;lo-=padP;hi+=padP;
+  const y=(v)=>4+(PRICE_H-8)*(1-(v-lo)/(hi-lo));
+  const fmt=(v)=>Math.abs(v)>=1000?Math.round(v).toLocaleString('zh-TW'):Number(v.toPrecision(4)).toString();
+  let svg='';
+  // price grid labels
+  for(const v of [hi-padP,(hi+lo)/2,lo+padP])svg+=`<line x1="${PAD_L}" x2="${W-PAD_R}" y1="${y(v)}" y2="${y(v)}" class="ex-grid"/><text x="${W-PAD_R+3}" y="${y(v)+3}" class="ex-axis">${fmt(v)}</text>`;
+  // markers (vertical guides first, so candles stay on top)
+  const markers=example.markers||[];
+  for(const i of markers)svg+=`<line x1="${x(i)}" x2="${x(i)}" y1="2" y2="${H-18}" class="ex-guide"/>`;
+  candles.forEach((c,i)=>{if(![c.open,c.high,c.low,c.close].every(Number.isFinite))return;const up=c.close>=c.open;const cls=up?'ex-up':'ex-down';const top=y(Math.max(c.open,c.close)),bottom=y(Math.min(c.open,c.close));svg+=`<line x1="${x(i)}" x2="${x(i)}" y1="${y(c.high)}" y2="${y(c.low)}" class="${cls}"/><rect x="${x(i)-body/2}" y="${top}" width="${body}" height="${Math.max(0.8,bottom-top)}" class="${cls}"/>`;});
+  const path=(values,scale)=>{let d='',pen=false;values.forEach((v,i)=>{if(!Number.isFinite(v)){pen=false;return;}d+=`${pen?'L':'M'}${x(i).toFixed(1)},${scale(v).toFixed(1)}`;pen=true;});return d;};
+  let color=0;const legend=[];
+  for(const line of example.price||[]){const c=EXAMPLE_COLORS[color++%EXAMPLE_COLORS.length];svg+=`<path d="${path(line.values,y)}" class="ex-line" stroke="${c}"/>`;legend.push([c,line.label]);}
+  for(const i of markers){const c=candles[i];if(c&&Number.isFinite(c.low))svg+=`<path d="M${x(i)},${y(c.low)+4} l-4.5,8 h9 z" class="ex-marker"/>`;}
+  panels.forEach((panel,p)=>{
+    const top=PRICE_H+GAP+p*(SUB_H+GAP);
+    const vals=[...panel.lines.flatMap((line)=>line.values),...(panel.thresholds||[])].filter(Number.isFinite);
+    let a=Math.min(...vals),b=Math.max(...vals);if(a===b){a-=1;b+=1;}
+    const sy=(v)=>top+4+(SUB_H-8)*(1-(v-a)/(b-a));
+    svg+=`<rect x="${PAD_L}" y="${top}" width="${W-PAD_L-PAD_R}" height="${SUB_H}" class="ex-panel"/>`;
+    for(const t of panel.thresholds||[])svg+=`<line x1="${PAD_L}" x2="${W-PAD_R}" y1="${sy(t)}" y2="${sy(t)}" class="ex-threshold"/><text x="${W-PAD_R+3}" y="${sy(t)+3}" class="ex-axis">${fmt(t)}</text>`;
+    for(const line of panel.lines){const c=EXAMPLE_COLORS[color++%EXAMPLE_COLORS.length];svg+=`<path d="${path(line.values,sy)}" class="ex-line" stroke="${c}"/>`;legend.push([c,line.label]);}
+  });
+  const first=candles[0].label||'',last=candles[n-1].label||'';
+  svg+=`<text x="${PAD_L}" y="${H-4}" class="ex-axis">${escapeHtml(first)}</text><text x="${W-PAD_R}" y="${H-4}" text-anchor="end" class="ex-axis">${escapeHtml(last)}</text>`;
+  const legendHtml=legend.length?`<ul class="proto-example-legend">${legend.map(([c,label])=>`<li><i style="background:${c}"></i>${escapeHtml(label)}</li>`).join('')}</ul>`:'';
+  return`<svg class="proto-example-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="所有過濾都成立時的 K 線範例，共 ${markers.length} 個成立點">${svg}</svg>${legendHtml}`;
 }
 // E. 7-day M1 history: replays the current filters over HF daily one-minute files on the server.
 // Shown as a one-line summary; details expand on request. Never runs on its own unless the AI card asked for it.
