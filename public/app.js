@@ -306,13 +306,12 @@ function filterMarkup(){
     const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':filter.formulaSummary;
     return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':stepLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
   }).join('');
-  const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'<button type="button" class="proto-add-more" id="addMore">＋ 再加一個過濾</button>';
+  const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'';
   return`<div class="proto-condition-list"><p class="proto-eyebrow">已選過濾 ${state.filters.length}/${MAX_FILTERS}</p>${rows}${foot}</div>`;
 }
 function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();scheduleIndex();}
 function bindFilterList(){
   root.querySelectorAll('#addedPanel [data-remove]').forEach((button)=>button.addEventListener('click',()=>{state.filters=state.filters.filter((item)=>item.id!==button.dataset.remove);invalidateToken();save();drawFilters();focusSearch({scroll:false});}));
-  root.querySelector('#addMore')?.addEventListener('click',()=>focusSearch());
 }
 // Adds a filter; a preset / library filter then fetches its own formulaSummary (and validates the pair) from instantiate.
 async function addFilter(filter,{withHistory=false,replace=false}={}){
