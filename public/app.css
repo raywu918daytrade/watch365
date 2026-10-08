@@ -321,3 +321,5 @@
   .proto-cond-top { grid-template-columns:minmax(0,1fr); }
   .proto-cond-top .proto-condition-list { max-height:20rem; }
 }
+.proto-rank-text small.proto-rank-formula { color:#6b7f83; font-size:.72rem; }
+.proto-cond-top .proto-condition { padding:.5rem .7rem; }

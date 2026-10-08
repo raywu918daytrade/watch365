@@ -225,7 +225,8 @@ export class FormulaLibrary {
       shapeKey, family, category, name,
       params: template.params.map(({ key, label, type, default: value, min, max }) => ({ key, label, type, default: value, min, max })),
       direction: template.direction ? { key: template.direction.key, options: template.direction.options, default: template.direction.default } : null,
-      presets: templatePresets(representative.ast, template, info, representative.name),
+      // Each preset carries its formula in words, so the list can show what a row means before it is picked.
+      presets: templatePresets(representative.ast, template, info, representative.name).map((preset) => ({ ...preset, summary: presetSummary(representative.ast, template, preset) })),
       members: sorted.map((formula) => ({ fingerprint: formula.fingerprint, name: formula.name, summary: formula.summary, status: formula.status, source: formula.source, hitCount: formula.hitCount, aliases: this.aliasesOf(formula.fingerprint) })),
       hitCount: members.reduce((sum, formula) => sum + formula.hitCount, 0),
       source: members.some((formula) => formula.source === 'preset') ? 'preset' : 'ai',
@@ -315,3 +316,4 @@ function sanitizeAlias(row) {
   const aliasNorm = row.aliasNorm; if (!validNorm(aliasNorm)) return null;
   return { aliasNorm, aliasRaw: typeof row.aliasRaw === 'string' ? row.aliasRaw.slice(0, MAX_ALIAS_RAW) : aliasNorm, fingerprint: row.fingerprint, hits: Number.isInteger(row.hits) && row.hits >= 0 ? row.hits : 0, lastUsedAt: typeof row.lastUsedAt === 'string' ? row.lastUsedAt : null, source: FORMULA_LIBRARY_SOURCES.includes(row.source) ? row.source : 'ai' };
 }
+function presetSummary(ast, template, preset) { try { return formulaSummary(instantiateTemplate(ast, template, preset.values ?? {}, preset.direction ?? null)); } catch { return ''; } }

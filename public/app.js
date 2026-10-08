@@ -303,7 +303,7 @@ function filterMarkup(){
   if(!state.filters.length)return'';
   const rows=state.filters.map((filter,index)=>{
     const legacy=Boolean(filter.spec.legacy);
-    const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':filter.formulaSummary;
+    const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':''; // details live in the list (owner decision 2026-10)
     return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':stepLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
   }).join('');
   const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'';
@@ -342,7 +342,7 @@ function templateRowsFor(template,tokens){
   const base=normalizeQuery([template.family,template.name,...(template.members||[]).flatMap((member)=>member.aliases||[])].join(' '));
   const match=(extra)=>!tokens.length||tokens.every((token)=>(base+normalizeQuery(extra)).includes(token));
   const rows=[];
-  if(template.source!=='ai')for(const preset of template.presets||[])if(match(preset.label))rows.push({family:template.family,label:preset.label,ai:false,spec:{shapeKey:template.shapeKey,values:preset.values||{},direction:preset.direction??null}});
+  if(template.source!=='ai')for(const preset of template.presets||[])if(match(preset.label))rows.push({family:template.family,label:preset.label,summary:preset.summary||'',ai:false,spec:{shapeKey:template.shapeKey,values:preset.values||{},direction:preset.direction??null}});
   for(const member of template.members||[])if(member.source==='ai'&&match(`${member.name} ${(member.aliases||[]).join(' ')}`))rows.push({family:template.family,label:member.name,summary:member.summary||'',ai:true,spec:{fingerprint:member.fingerprint}});
   return rows;
 }
@@ -412,10 +412,10 @@ function rankBase(full){
 }
 function rankLine(item,base){
   const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=base.count?Math.min(1,n/base.count):0,pct=Math.round(share*100),eventShare=base.events?item.count.totalEvents/base.events:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
-  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong><span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${n} 檔・${item.count.totalEvents} 次・剩 ${pct}%`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
+  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong>${item.row.summary?`<small class="proto-rank-formula">${escapeHtml(item.row.summary)}</small>`:''}<span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${n} 檔・${item.count.totalEvents} 次・剩 ${pct}%`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
 }
 function presetLine(full,block){
-  return(row)=>{const i=templateRows.indexOf(row);const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.ai&&row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;};
+  return(row)=>{const i=templateRows.indexOf(row);const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;};
 }
 // Labels for the server's structured conditions (dashboard / home) and for legacy drafts.
 function conditionLabel(condition){

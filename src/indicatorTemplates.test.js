@@ -232,7 +232,7 @@ test('presets：每個 family 的粗刻度變體、label 中性具體；每個 p
     // AI 新建立的指標（無 family 規則）：唯一 preset = 原公式
     await library.recordActivation({ ast: { op:'gt', left:{ op:'abs', input:close }, right:{ op:'highest', input:close, period:30 } }, name: '自訂條件' });
     const custom = library.templates().find((t) => t.members.some((m) => m.name === '自訂條件'));
-    assert.deepEqual(custom.presets, [{ label: '自訂條件', values: {}, direction: 'above' }]);
+    assert.deepEqual(custom.presets, [{ label: '自訂條件', values: {}, direction: 'above', summary: '|收盤價| > 最高值(收盤價, 30)' }]);
     assert.equal(templatePresets(recipe('rsi_up')).length, 4);
   } finally { await rm(dir, { recursive:true, force:true }); }
 });
