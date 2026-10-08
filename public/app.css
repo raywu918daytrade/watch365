@@ -323,3 +323,5 @@
 }
 .proto-rank-text small.proto-rank-formula { color:#6b7f83; font-size:.72rem; }
 .proto-cond-top .proto-condition { padding:.5rem .7rem; }
+/* The search label draws the focus ring; the input inside must not draw a second, square one. */
+.proto-body .proto-search input:focus-visible { outline:none; }
