@@ -857,17 +857,18 @@ function drawDashboard(data,{force=false}={}){
   const notify=permission==='granted'?'<span class="proto-note ok">通知已開啟</span>':permission==='denied'?'<span class="proto-note bad">通知被瀏覽器封鎖（網址列左側鎖頭 → 通知 → 允許）</span>':permission==='unsupported'?(isIosSafari()?iosNotifyHint():'<span class="proto-note">此瀏覽器不支援通知</span>'):'<button id="enableNotify" class="proto-primary">開啟瀏覽器通知</button>';
   const status=PROVIDER_STATUS[runtime.lastProviderStatus]||runtime.lastProviderStatus||'—';
   const healthy=!runtime.lastError&&!['error','coverage_unknown'].includes(runtime.lastProviderStatus);
-  const {current,older}=monitorSignals(settings,signals);
+  const {current}=monitorSignals(settings,signals);
   const today=current.filter((signal)=>isToday(signal.triggeredAt));
   const row=(signal)=>{const notification=notifications.find((item)=>item.signalId===signal.id);return`<div class="proto-history-row ${isToday(signal.triggeredAt)?'today':''}"><span><strong>${escapeHtml(signal.symbol)}</strong> ${escapeHtml(signal.name||'')}${MARKET_LABEL[signal.market]?` <small class="proto-market">${MARKET_LABEL[signal.market]}</small>`:''}</span><time datetime="${escapeHtml(signal.triggeredAt)}">${formatWhen(signal.triggeredAt)}</time><span>${escapeHtml(signal.ruleName||'')}・${escapeHtml(formatPrice(signal.price))}${notificationBadge(notification)}</span></div>`;};
   const tableHead='<div class="proto-history-row header"><span>股票</span><span>時間</span><span>符合條件・收盤價</span></div>';
-  const olderHtml=older.length?`<details class="proto-details proto-older"><summary>之前的監控條件留下的紀錄 ${older.length} 筆</summary><div class="proto-history-table">${tableHead}${older.slice(0,30).map(row).join('')}</div></details>`:'';
+  const olderHtml='';
   const empty=session.key==='open'?'<strong>今天還沒有觸發</strong><p>盤中條件成立時會出現在這裡並通知你。</p>':`<strong>目前沒有觸發紀錄</strong><p>${escapeHtml(session.detail)}。</p>`;
   target.innerHTML=`<div class="proto-statusbar ${settings.enabled?(session.key==='open'?'live':'idle'):'paused'}" role="status"><i aria-hidden="true"></i><span><strong>${settings.enabled?(session.key==='open'?'監控中':`待命（${session.label}）`):'已暫停'}</strong>・上次檢查 <span id="lastRun">${runtime.lastRunAt?formatWhen(runtime.lastRunAt):'尚未執行'}</span>${settings.pollIntervalSeconds?`・每 ${settings.pollIntervalSeconds} 秒檢查`:''}</span></div>
     <article class="proto-monitor"><header><span><small class="proto-eyebrow">${settings.scopeMode==='universe'?'用條件找股票':'盯指定股票'}</small><strong class="proto-cond">${conditionHtml}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}${runtime.effectiveWatchlistCount!=null?`・本輪實際監控 ${runtime.effectiveWatchlistCount} 檔`:''}</p><p class="${healthy?'':'proto-error'}">資料狀態：${escapeHtml(status)}${runtime.lastError?`・${escapeHtml(errorText({code:runtime.lastError}))}`:''}</p>
     <div class="proto-notify-row">${notify}${permission==='granted'?'<span class="proto-signature">・請保持網頁開啟才收得到</span>':''}</div>
     <div class="proto-inline-actions proto-monitor-actions"><button id="toggleMonitor" class="proto-secondary">${settings.enabled?'暫停監控':'恢復監控'}</button><button id="runNow" class="proto-secondary">立即檢查一次</button><button id="newMonitor" class="proto-link">重新設定條件</button></div><div id="resetConfirm"></div></article>
-    <section class="proto-history"><div class="proto-history-head"><div><p class="proto-eyebrow">觸發紀錄</p><h2>今日觸發 ${todayCount(current,today)} 次</h2>${today.length?`<p class="proto-signature">${todayBreakdown(today)}</p>`:''}</div><span>這組監控共 ${current.length} 筆</span></div>${current.length?`<div class="proto-history-table">${tableHead}${current.slice(0,30).map(row).join('')}</div>`:`<div class="proto-status">${empty}</div>`}${olderHtml}</section>`;
+    <section class="proto-history"><div class="proto-history-head"><div><p class="proto-eyebrow">觸發紀錄</p><h2>今日觸發 ${todayCount(current,today)} 次</h2>${today.length?`<p class="proto-signature">${todayBreakdown(today)}</p>`:''}</div><span>這組監控共 ${current.length} 筆</span></div>${current.length?`<div class="proto-history-table">${tableHead}${current.slice(0,30).map(row).join('')}</div>`:`<div class="proto-status">${empty}</div>`}${olderHtml}</section><section class="proto-history" id="monitorHistory" aria-live="polite"></section>`;
+  drawMonitorHistory(settings);
   target.querySelector('#newMonitor').addEventListener('click',()=>{
     const box=target.querySelector('#resetConfirm');
     box.innerHTML='<div class="proto-notice" role="alert"><span aria-hidden="true">!</span><span>系統一次只跑一組監控，新設定建立後才會取代目前這組（在那之前照常監控）。<span class="proto-inline-actions"><button class="proto-link" id="resetCancel">取消</button><button class="proto-secondary" id="resetGo">開始重新設定</button></span></span></div>';
@@ -906,6 +907,34 @@ async function drawRequests(target){
     const {items=[]}=await api('/api/indicator-requests');
     target.innerHTML=`<div class="proto-history-head"><div><p class="proto-eyebrow">需求進度</p><h2>我提出的需求</h2></div><span>${items.length} 筆</span></div>${items.length?`<div class="proto-history-table">${items.slice(0,20).map((item)=>`<div class="proto-history-row"><span><strong>${escapeHtml(item.indicatorName)}</strong> ${escapeHtml(item.timeframe==='other'?item.customTimeframe||'其他':TIMEFRAME_LABEL[item.timeframe]||item.timeframe)}</span><time>${formatTime(item.createdAt)}</time><span><span class="proto-note">${escapeHtml(REQUEST_STATUS[item.status]||item.status)}</span>・${escapeHtml(item.triggerCondition)}</span></div>`).join('')}</div>`:'<div class="proto-status"><strong>還沒有提出過需求</strong><p>找不到想要的指標時，可以在這裡提出。</p></div>'}`;
   }catch(error){target.innerHTML=`<div class="proto-status"><strong>無法讀取需求</strong><p>${escapeHtml(errorText(error))}</p></div>`;}
+}
+// Past 7 trading days of the running monitor's condition (owner decision 2026-10), from the server's 7-day index.
+let monitorHistoryData=null,monitorHistoryAll=false;
+async function drawMonitorHistory(settings){
+  const target=root.querySelector('#monitorHistory');if(!target)return;
+  const key=JSON.stringify([settings.strategy?.definitionFingerprint,settings.strategy?.activatedAt,settings.scopeMode,(settings.watchlist||[]).length]);
+  const fresh=monitorHistoryData&&monitorHistoryData.key===key&&Date.now()-monitorHistoryData.at<5*60_000&&monitorHistoryData.result?.status==='ready';
+  if(!fresh){
+    if(!monitorHistoryData||monitorHistoryData.key!==key)target.innerHTML='<p class="proto-eyebrow">過去 7 個交易日</p><div class="proto-skeleton" aria-hidden="true"></div>';
+    try{const result=await api('/api/monitor/history');monitorHistoryData={key,at:Date.now(),result};}
+    catch(error){monitorHistoryData={key,at:Date.now(),result:{status:'error',error:errorText(error)}};}
+    if(node()!=='dashboard')return;
+    if(monitorHistoryData.result.status==='loading')setTimeout(()=>{if(node()==='dashboard')drawMonitorHistory(settings);},3000);
+  }
+  renderMonitorHistory(root.querySelector('#monitorHistory'));
+}
+function renderMonitorHistory(target){
+  if(!target||!monitorHistoryData)return;
+  const result=monitorHistoryData.result,head='<p class="proto-eyebrow">過去 7 個交易日</p>';
+  if(result.status==='unsupported'){target.innerHTML='';target.hidden=true;return;}
+  target.hidden=false;
+  if(result.status==='loading'){target.innerHTML=`${head}<p class="proto-signature">${escapeHtml(result.progress||'準備 7 日資料')}…伺服器剛啟動時約需 1～3 分鐘。</p>`;return;}
+  if(result.status==='error'){target.innerHTML=`${head}<p class="proto-signature">暫時無法回查：${escapeHtml(result.error||'')}</p>`;return;}
+  const days=(result.days||[]).filter((day)=>day.count).map((day)=>`${escapeHtml(day.date.slice(5).replace('-','/'))} ${day.count} 次`).join('・');
+  const events=result.events||[],limit=monitorHistoryAll?events.length:10;
+  const rows=events.slice(0,limit).map((event)=>`<div class="proto-history-row"><span><strong>${escapeHtml(event.symbol)}</strong> ${escapeHtml(event.name||'')}</span><time datetime="${escapeHtml(event.at)}">${formatWhen(event.at)}</time><span>收盤 ${escapeHtml(formatPrice(event.price))}</span></div>`).join('');
+  target.innerHTML=`<div class="proto-history-head"><div>${head}<h2>${result.triggeredSymbols} 檔・共 ${result.totalEvents} 次</h2>${days?`<p class="proto-signature">${days}</p>`:''}</div><span>用目前條件回查</span></div>${events.length?`<div class="proto-history-table"><div class="proto-history-row header"><span>股票</span><span>時間</span><span>收盤價</span></div>${rows}</div>${events.length>limit?`<button type="button" class="proto-link" id="monitorHistoryAll">顯示全部 ${events.length} 筆${result.truncated?'（只列最近的部分）':''}</button>`:''}`:'<div class="proto-status"><p>過去 7 個交易日沒有觸發。</p></div>'}`;
+  target.querySelector('#monitorHistoryAll')?.addEventListener('click',()=>{monitorHistoryAll=true;renderMonitorHistory(target);});
 }
 function notificationBadge(notification){
   if(!notification)return'';

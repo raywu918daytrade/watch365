@@ -141,6 +141,7 @@ function historyJobView(job) {
 }
 
 await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
+{ const before = store.getState().signals.length; await store.update((state) => { dropEarlierSignals(state); }); const dropped = before - store.getState().signals.length; if (dropped) console.log(`Dropped ${dropped} trigger records of earlier monitor conditions`); }
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
 console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
 syncMonitorTimer();
@@ -211,6 +212,27 @@ async function routeApi(request, response) {
   // { fingerprint } | { proposalToken } (an AI filter not in the library yet) | { conditionKey } (already computed).
   // → 200 { status:'ready', steps:[{ triggeredSymbols, totalEvents, days, events? }], candidates:[{ index,
   // triggeredSymbols, totalEvents } | { index, error }], filterKeys, verdict, … } or 202 { status:'loading', progress }.
+  // The running monitor's condition replayed over the 7-day index (owner decision 2026-10: the monitor page shows what
+  // this condition would have triggered over the past 7 trading days, next to today's records).
+  if (method === 'GET' && url.pathname === '/api/monitor/history') {
+    const settings = store.getState().settings;
+    const ast = settings.strategy?.formula?.ast;
+    if (!ast) { sendJson(response, 200, { status:'unsupported' }); return; }
+    if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
+    try {
+      const watchlist = settings.scopeMode === 'universe' ? null : settings.watchlist || [];
+      const result = await historyIndex.query({ filters:[{ key:formulaFingerprint(ast), ast }], candidates:[], symbols:watchlist ? watchlist.map((item) => item.symbol) : null, events:true });
+      if (result.loading) { sendJson(response, 202, { status:'loading', progress:result.progress || '準備 7 日資料' }); return; }
+      const names = new Map((watchlist || await getUniverseWatchlist().catch(() => [])).map((item) => [item.symbol, item.name]));
+      const last = result.steps.at(-1) || { triggeredSymbols:0, totalEvents:0, days:[], events:[] };
+      sendJson(response, 200, { status:'ready', availableDays:result.availableDays, triggeredSymbols:last.triggeredSymbols, totalEvents:last.totalEvents, days:last.days, truncated:Boolean(last.truncated), events:(last.events || []).map((event) => ({ ...event, name:names.get(event.symbol) || '' })) });
+    } catch (error) {
+      if (!error.statusCode) console.error(error);
+      sendJson(response, error.statusCode || 500, { error:error.code || 'HISTORY_INDEX_FAILED' });
+    }
+    return;
+  }
+
   if (method === 'POST' && url.pathname === '/api/history/index') {
     let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     const purpose = body?.purpose === 'screen' ? 'screen' : body?.purpose === 'watchlist' ? 'watchlist' : null;
@@ -382,7 +404,7 @@ async function routeApi(request, response) {
       const payload=verifyFormulaToken(body.proposalToken,formulaTokenSecret);const current=store.getState().settings.strategy;
       const strategy=validateFormulaStrategy({id:'formula.custom',version:payload.capabilityRevision,executor:'formula_v1',name:payload.name,timeframe:'1m',source:'db/m1_live/{tradingDate}.parquet',definitionFingerprint:payload.fingerprint,params:{},formula:{ast:payload.ast}},current?.definitionFingerprint===payload.fingerprint?current.activatedAt:new Date().toISOString());
       const watchlist=parseWatchlist(body.watchlist,{allowEmpty:true});
-      await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed)revokePendingDeliveryAuthorizations(state);appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
+      await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed){revokePendingDeliveryAuthorizations(state);dropEarlierSignals(state);}appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
       syncMonitorTimer();await recordFormulaActivation(payload);sendJson(response,200,publicState(store.getState()));
     }catch(error){sendJson(response,error.statusCode||400,{error:error.code||'FORMULA_ACTIVATION_FAILED'});}return;
   }
@@ -584,7 +606,7 @@ async function routeApi(request, response) {
       state.settings.conditions = conditions;
       state.settings.enabled = true;
       state.settings.monitorTask = { name:`${taskName}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
-      if (changed) revokePendingDeliveryAuthorizations(state);
+      if (changed) { revokePendingDeliveryAuthorizations(state); dropEarlierSignals(state); }
       appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:taskName, symbols:watchlist.length });
     });
     syncMonitorTimer();
@@ -987,6 +1009,16 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
+// Owner decision (2026-10): trigger records of an earlier monitor condition mean nothing once it is replaced, so they are
+// deleted (with their notifications) rather than kept: a record belongs to the current monitor when it triggered after
+// the current strategy was activated.
+function dropEarlierSignals(state) {
+  const since = state.settings.strategy?.activatedAt; if (!since) return;
+  const removed = new Set(state.signals.filter((signal) => !(signal.triggeredAt >= since)).map((signal) => signal.id));
+  if (!removed.size) return;
+  state.signals = state.signals.filter((signal) => !removed.has(signal.id));
+  state.notifications = state.notifications.filter((item) => !removed.has(item.signalId));
+}
 function revokePendingDeliveryAuthorizations(state) {
   for (const notification of state.notifications) {
     if (notification.status !== 'pending') continue;
