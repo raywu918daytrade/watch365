@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DailyStore } from './conditionExample.js';
-import { DailyIndex, dailyBarsFromMinutes, dailyCapable } from './dailyIndex.js';
+import { DailyIndex, dailyBarsFromMinutes, dailyCapable, fillDailyGap } from './dailyIndex.js';
 
 const close = { op:'source', field:'close' };
 const above = (period) => ({ op:'gt', left:close, right:{ op:'sma', input:close, period } });
@@ -68,4 +68,20 @@ test('after the close: today is built from minute bars and only newly met stocks
   index.ensure([{ key:'gt71', ast:gtConst(71) }]);
   assert.deepEqual(index.closeCheck(['gt71'], bars).newly, [{ symbol:'2303', close:72 }]);
   assert.deepEqual(index.closeCheck(['gt71'], bars, new Set(['1101'])).newly, []);
+});
+
+test('daily gap: completed minute days after the last daily date become daily bars (today excluded)', () => {
+  const series = store(), last = [...series.values()][0].dates.at(-1);
+  const next = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  const minutes = (prices, volume) => ({ t:Float64Array.from(prices, (_, i) => i), o:Float64Array.from(prices), h:Float64Array.from(prices), l:Float64Array.from(prices), c:Float64Array.from(prices), v:Float64Array.from(prices, () => volume) });
+  const day = (price) => new Map(['1101', '2330', '2303'].map((symbol) => [symbol, minutes([price, price + 1], 5)]));
+  const minuteDays = new Map([[last, day(1)], [next(last, 1), day(80)], [next(last, 2), day(90)]]);
+  const { series:filled, filled:dates } = fillDailyGap(series, minuteDays, next(last, 2));
+  assert.deepEqual(dates, [next(last, 1)]);
+  const item = filled.get('2303');
+  assert.equal(item.dates.at(-1), next(last, 1));
+  assert.equal(item.c.at(-1), 81);
+  assert.equal(item.v.at(-1), 1000);                 // 10 minute-volume × (1000 / 10) on the overlapping day
+  assert.equal(series.get('2303').dates.at(-1), last); // the source is not changed
+  assert.deepEqual(fillDailyGap(series, new Map([[last, day(1)]]), next(last, 5)).filled, []);
 });

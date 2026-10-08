@@ -15,7 +15,7 @@ import { BarCollector, collectHistory, HISTORY_DAYS, listHfD1Months, listHfM1Dat
 import { DailyStore, findExample } from './conditionExample.js';
 import { readFile } from 'node:fs/promises';
 import { HistoryIndex } from './historyIndex.js';
-import { DailyIndex, dailyBarsFromMinutes } from './dailyIndex.js';
+import { DailyIndex, dailyBarsFromMinutes, fillDailyGap } from './dailyIndex.js';
 
 const index = new HistoryIndex({ maxDays:HISTORY_DAYS });
 let status = 'idle', progress = null, error = null, loadedAt = null, refreshedAt = null, symbols = new Set();
@@ -74,13 +74,28 @@ async function loadDaily() {
     const stats = daily.stats();
     // Sanity: months of data must give many bars per stock; a handful means dates were not read correctly.
     if (stats.symbols && stats.bars / stats.symbols < Math.min(20, stats.months * 5)) throw Object.assign(new Error(`daily data looks wrong: ${stats.bars} bars for ${stats.symbols} symbols over ${stats.months} months`), { code:'HISTORY_D1_IMPLAUSIBLE' });
-    dailyIndex.setSeries(daily.series); dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear();
+    dailyStatus = 'ready'; dailyLoadedDay = today; examples.clear(); dailyGapKey = null; syncDailyIndex();
     console.log(`history-index: daily ${stats.months} months × ${stats.symbols} symbols (${stats.bars} bars) in ${Date.now() - started} ms, heap ${info().heapMb} MB`);
   } catch (failure) {
     dailyStatus = failure.code === 'HISTORY_D1_IMPLAUSIBLE' || !daily.months.size ? 'failed' : 'ready';
     console.error('history-index: daily load failed', failure.code || failure.message, failure.code === 'HISTORY_D1_IMPLAUSIBLE' ? failure.message : '');
   }
 }
+// The daily index = daily history + completed minute days the daily source does not have yet (fillDailyGap).
+// Recomputed only when that set of days changes (a new daily load, or a new minute day).
+let dailyGapKey = null;
+function syncDailyIndex() {
+  if (dailyStatus !== 'ready' || process.env.WATCH365_DAILY_FIXTURE) return;
+  // After 14:00 Taipei today's minute file is final, so today's close counts too (until then it is still moving).
+  const now = new Date(Date.now() + 8 * 3_600_000), after = now.getUTCHours() >= 14;
+  const today = after ? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10) : taipeiDay();
+  const key = `${dailyLoadedDay}|${today}|${index.dates().join(',')}`;
+  if (key === dailyGapKey) return;
+  const { series, filled } = fillDailyGap(daily.series, index.days, today);
+  dailyIndex.setSeries(series); dailyGapKey = key;
+  if (filled.length) console.log(`history-index: daily filled from minute bars: ${filled.join(', ')}`);
+}
+function dailyBaseLast() { let last = ''; for (const item of daily.series.values()) { const date = item.dates.at(-1); if (date > last) last = date; } return last; }
 function taipeiDay() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }
 
 // Today's file grows during the session; a new trading day appears as a new file. Older days are fixed.
@@ -97,6 +112,7 @@ async function refresh(list) {
     if (collector.days.has(file.date)) index.setDay(file.date, collector.barsFor(file.date));
   }
   refreshedAt = new Date().toISOString();
+  syncDailyIndex();
   if (dailyLoadedDay && dailyLoadedDay !== taipeiDay()) loadDaily();
 }
 
@@ -121,13 +137,14 @@ process.on('message', (message) => {
         }
         const minuteDay = index.days.get(message.date);
         if (!minuteDay?.size) { reply({ type:'result', result:{ noSession:true } }); return; }
-        const overlapDate = index.dates().filter((date) => date < message.date && dailyIndex.dates.includes(date)).at(-1) ?? null;
+        const baseLast = dailyBaseLast(), overlapDate = index.dates().filter((date) => date < message.date && date <= baseLast).at(-1) ?? null;
         const bars = dailyBarsFromMinutes(minuteDay, message.date, { series:daily.series, overlapDate, overlapDay:overlapDate ? index.days.get(overlapDate) : null });
         reply({ type:'result', result:{ date:message.date, ...dailyIndex.closeCheck(keys, bars, symbolSet) } }); return;
       }
       const computed = index.ensure(message.conditions || []);
       if (message.type === 'ensure') { reply({ type:'result', result:{ computed, ...info() } }); return; }
       if (message.type === 'example') {
+        if (message.timeframe === 'd1' && dailyStatus !== 'ready') { reply({ type:'result', result:{ loading:true, ...info() } }); return; }
         const cacheKey = `${message.timeframe || ''}:${(message.filters || []).map((item) => item.key).sort().join('|')}`;
         const day = `${taipeiDay()}|${dailyStatus}`;
         const cached = examples.get(cacheKey);

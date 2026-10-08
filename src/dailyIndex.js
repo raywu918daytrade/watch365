@@ -167,3 +167,25 @@ export function dailyBarsFromMinutes(minuteDay, date, { series = null, overlapDa
   }
   return out;
 }
+
+// The daily source can lag the minute files by days (2026-10: daily ended 10/02 while minute files had 10/08). Completed
+// minute days after the last daily date (before `today`) are turned into daily bars and appended, so "yesterday's
+// close" really is yesterday. Volume is scaled against the latest day both sources have. Returns a new Map (the source
+// series is not changed) and the dates that were filled.
+export function fillDailyGap(series, minuteDays, today) {
+  let last = '';
+  for (const item of series.values()) { const date = item.dates.at(-1); if (date > last) last = date; }
+  const minuteDates = [...minuteDays.keys()].sort();
+  const gap = minuteDates.filter((date) => date > last && date < today);
+  if (!last || !gap.length) return { series, filled:[] };
+  const overlapDate = minuteDates.filter((date) => date <= last).at(-1) ?? null;
+  const built = gap.map((date) => dailyBarsFromMinutes(minuteDays.get(date), date, { series, overlapDate, overlapDay:overlapDate ? minuteDays.get(overlapDate) : null }));
+  const out = new Map();
+  for (const [symbol, item] of series) {
+    const extras = built.map((bars) => bars.get(symbol)).filter((bar) => bar && bar.date > (item.dates.at(-1) || ''));
+    if (!extras.length) { out.set(symbol, item); continue; }
+    const field = (key, name) => Float64Array.from([...item[key], ...extras.map((bar) => bar[name] ?? NaN)]);
+    out.set(symbol, { dates:[...item.dates, ...extras.map((bar) => bar.date)], o:field('o', 'open'), h:field('h', 'high'), l:field('l', 'low'), c:field('c', 'close'), v:field('v', 'volume') });
+  }
+  return { series:out, filled:gap };
+}
