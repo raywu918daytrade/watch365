@@ -10,3 +10,5 @@ data/
 *.log
 *.pem
 *.key
+# stray output when a store path env var is unset
+/undefined
