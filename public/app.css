@@ -325,3 +325,6 @@
 .proto-cond-top .proto-condition { padding:.5rem .7rem; }
 /* The search label draws the focus ring; the input inside must not draw a second, square one. */
 .proto-body .proto-search input:focus-visible { outline:none; }
+.proto-options-head { margin:1.4rem 0 .5rem; }
+.proto-editing .proto-inline-actions { display:flex; gap:1rem; margin-top:.35rem; flex-direction:row; }
+.proto-editing .proto-inline-actions button { width:auto; }
