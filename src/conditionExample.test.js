@@ -59,3 +59,16 @@ test('daily dates are read from every storage format', async () => {
   assert.equal(dailyDate(Date.parse('2026-10-08T00:00:00+08:00')), '2026-10-08');
   assert.equal(dailyDate(null), null);
 });
+
+test('daily example prefers a readable chart over a newer one that only moves a tick at a time', () => {
+  const daily = new DailyStore();
+  // 9999: ~35.5, alternating one tick (0.05), crossing its SMA constantly up to the last day: flat-looking candles.
+  const flat = days(120, (index) => 35.5 + (index % 2) * 0.05).map((row) => ({ ...row, high:row.close, low:row.close, symbol:'9999' }));
+  // 1101: a real dip and recovery, its last cross ~70 days before the end.
+  const shape = (index) => (index < 40 ? 100 : index < 50 ? 100 - (index - 40) * 2 : index < 60 ? 80 + (index - 50) * 3 : 110);
+  const moving = days(120, shape).map((row) => ({ ...row, symbol:'1101' }));
+  daily.add('2024-01', flat); daily.add('2024-01', moving);
+  const example = findExample({ filters:[cond(crossSma(5))], daily });
+  const closes = example.candles.map((candle) => candle.close);
+  assert.ok(Math.max(...closes) - Math.min(...closes) > 10);      // the moving stock, not the 0.05-wide one
+});

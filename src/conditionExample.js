@@ -54,6 +54,7 @@ function searchDaily(daily, asts, kind, rearm) {
   const warmup = Math.max(...asts.map((ast) => validateFormula(ast).warmupBars));
   const step = Math.max(1, MAX_EVAL_BARS - warmup);
   const longest = Math.max(0, ...[...series.values()].map((item) => item.dates.length));
+  let overall = null;
   for (let window = 0; window * step < longest; window++) {
     let best = null;
     for (const [symbol, item] of series) {
@@ -65,12 +66,15 @@ function searchDaily(daily, asts, kind, rearm) {
       const minBar = start === 0 ? 0 : warmup;   // the overlap re-warms; earlier hits belong to the next window
       const hits = ruleTriggerIndexes(truth, rearm, kind, bars.map((_, bar) => bar * 60_000)).filter((bar) => bar >= minBar);
       if (!hits.length) continue;
-      const last = hits.at(-1), date = item.dates[start + last], turnover = item.c[start + last] * (item.v[start + last] || 0);
-      if (!best || date > best.date || (date === best.date && turnover > best.turnover)) best = { symbol, date, turnover, start, end, hits, item };
+      const pick = bestFocus(bars, hits, 'd1'); if (!pick) continue;
+      const date = item.dates[start + pick.focus];
+      if (better(pick, date, best)) best = { ...pick, symbol, date, start, end, hits, item };
     }
-    if (best) return chart({ timeframe:'d1', bars:barsOf(best.item, best.start, best.end), labels:best.item.dates.slice(best.start, best.end), hits:best.hits, asts });
+    if (best && better(best, best.date, overall)) overall = best;
+    if (overall?.good) break;   // the newest window holding a readable example wins
   }
-  return null;
+  if (!overall) return null;
+  return chart({ timeframe:'d1', bars:barsOf(overall.item, overall.start, overall.end), labels:overall.item.dates.slice(overall.start, overall.end), hits:overall.hits, focus:overall.focus, asts });
 }
 
 function searchMinute(index, filters, asts, kind, rearm) {
@@ -84,23 +88,58 @@ function searchMinute(index, filters, asts, kind, rearm) {
       const truth = Array.from({ length:n }, (_, bar) => { const byte = bar >> 3, bit = 1 << (bar & 7); let met = true; for (const set of sets) { if (!(set.known[byte] & bit)) return null; if (!(set.value[byte] & bit)) met = false; } return met; });
       const hits = ruleTriggerIndexes(truth, rearm, kind, series.t);
       if (!hits.length) continue;
-      const at = series.t[hits.at(-1)], turnover = series.c[hits.at(-1)] * (series.v[hits.at(-1)] || 0);
-      if (!best || at > best.at || (at === best.at && turnover > best.turnover)) best = { at, turnover, series, hits };
+      const bars = []; for (let bar = 0; bar < n; bar++) bars.push({ high:series.h[bar], low:series.l[bar], close:series.c[bar] });
+      const pick = bestFocus(bars, hits, 'm1'); if (!pick) continue;
+      if (better(pick, series.t[pick.focus], best)) best = { ...pick, at:series.t[pick.focus], series, hits };
     }
-    if (best) break;
+    if (best?.good) break;
   }
   if (!best) return null;
   const { series } = best, bars = [];
   for (let bar = 0; bar < series.t.length; bar++) bars.push({ barEnd:series.t[bar], open:num(series.o[bar]), high:num(series.h[bar]), low:num(series.l[bar]), close:num(series.c[bar]), volume:num(series.v[bar]) });
   const labels = bars.map((bar) => new Date(bar.barEnd + 8 * 3_600_000).toISOString().slice(0, 16).replace('T', ' '));
-  return chart({ timeframe:'m1', bars, labels, hits:best.hits, asts });
+  return chart({ timeframe:'m1', bars, labels, hits:best.hits, focus:best.focus, asts });
+}
+
+// Readability (owner feedback 2026-10: a stock moving one tick at a time shows no shape, so the example says nothing).
+// A display window is scored by how many TW price ticks its range spans and how few of its candles are flat
+// (high = low). "good" = range ≥ GOOD_TICKS ticks and ≤ 20 % flat candles; among good windows the newest wins,
+// otherwise the best-scoring one seen anywhere.
+const GOOD_TICKS = { d1:25, m1:12 }, MAX_FLAT = 0.2, FOCUS_TRIES = 6;
+export function tickSize(price) { return price < 10 ? 0.01 : price < 50 ? 0.05 : price < 100 ? 0.1 : price < 500 ? 0.5 : price < 1000 ? 1 : 5; }
+export function readability(bars, from, to, timeframe) {
+  let hi = -Infinity, lo = Infinity, flat = 0, n = 0;
+  for (let bar = from; bar < to; bar++) {
+    const { high, low } = bars[bar]; if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
+    n++; if (high > hi) hi = high; if (low < lo) lo = low;
+    if (high - low < tickSize(low) / 2) flat++;
+  }
+  if (n < 5) return { score:0, good:false };
+  const ticks = (hi - lo) / tickSize((hi + lo) / 2), flatShare = flat / n, target = GOOD_TICKS[timeframe];
+  return { score:Math.min(ticks / target, 2) * (1 - flatShare), good:ticks >= target && flatShare <= MAX_FLAT };
+}
+function windowOf(focus, length, timeframe) { return [Math.max(0, focus - BEFORE[timeframe]), Math.min(length, focus + AFTER[timeframe] + 1)]; }
+function bestFocus(bars, hits, timeframe) {
+  let best = null;
+  for (const focus of hits.slice(-FOCUS_TRIES).reverse()) {
+    const [from, to] = windowOf(focus, bars.length, timeframe);
+    const quality = readability(bars, from, to, timeframe);
+    if (!best || (quality.good && !best.good) || (quality.good === best.good && quality.score > best.score)) best = { focus, ...quality };
+  }
+  return best;
+}
+// good beats not good; among good the newer wins (score breaks ties); among not good the higher score wins.
+function better(pick, when, best) {
+  if (!best) return true;
+  if (pick.good !== best.good) return pick.good;
+  if (pick.good) { const was = best.date ?? best.at; return when > was || (when === was && pick.score > best.score); }
+  return pick.score > best.score;
 }
 
 // Display window around the latest hit, candles, the operands of every comparison as lines (price panel or a sub
 // panel by scale), constants as threshold lines, and markers on every hit in the window.
-function chart({ timeframe, bars, labels, hits, asts }) {
-  const focus = hits.at(-1);
-  const from = Math.max(0, focus - BEFORE[timeframe]), to = Math.min(bars.length, focus + AFTER[timeframe] + 1);
+function chart({ timeframe, bars, labels, hits, focus = hits.at(-1), asts }) {
+  const [from, to] = windowOf(focus, bars.length, timeframe);
   const shown = bars.slice(from, to);
   const operands = [], thresholds = [];
   const seen = new Set();
