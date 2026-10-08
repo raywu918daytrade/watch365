@@ -117,6 +117,17 @@ Server 啟動時會載入專案根目錄的 `.env`；已由外部環境設定的
 - 保存：有 `DB_HOST` 時寫 `watch365_condition_state(condition_key, symbol, trading_date, value, since_bar, last_bar, flips_today, PK(condition_key, symbol))` 與 `watch365_conditions(condition_key, kind, label, ast)`，每輪只 upsert 有變的列；啟動時刪除 7 天前的列。無 DB 時寫 `data/condition-state.json`（`WATCH365_CONDITION_STATE_FILE`）。任何錯誤只 log，不影響監控。`CONDITION_LAYER=off` 整個關閉。
 - 後台：`GET /api/admin/conditions?flips=50` → `{ mode:'shadow'|'off', lastRun:{ at, symbols, conditions, baselines, newBars, flips, errors, ms }, rules, conditions:[{ key, kind, label, rules, symbols, trueNow, flipsToday }], recentFlips:[{ symbol, conditionKey, label, from, to, kind, barEnd }] }`；`/admin` 的「條件狀態（影子模式）」卡片顯示同樣內容。
 
+### 規則狀態（狀態機第 2 層，影子模式）
+
+規則＝訂閱共用條件（全部成立才算成立），只讀第 1 層的每根 K 棒結果、不重算指標。每個（規則 × 股票）一個狀態（`src/ruleState.js`），本版仍是影子模式：記錄「新方式會在哪裡通知」，與現行通知數並列比較，**不發送**。下一版才把通知切換過去。
+
+- `idle`（待命）→ 某根 K 棒成立 → `triggered`（已觸發），**只有這一刻算一次通知（trigger）**；持續成立不再通知。
+- `triggered` → 不成立 → `cooldown`（冷卻）；連續 `rearmBars` 根不成立才回 `idle` 重新待命；冷卻中又成立 → 回 `triggered` 但不通知（suppressed）。`rearmBars`：狀態型（≥、≤…）3 根，吸收門檻附近的來回跳動；事件型（穿越，只亮一根）30 根，等同原本 30 分鐘冷卻。
+- 暖機或資料缺口（未知）不改變狀態。換交易日全部重置（當沖：每天重新開始）；13:30 之後狀態保留並標示「今日已收盤」。某（規則 × 股票）當天第一次出現時，若已成立則以 `triggered` 起始但不通知（與現行 baseline_only 一致）。
+- 只處理受影響的規則：該股票這輪有條件變化（第 1 層 `changedKeys` × `rulesFor`）、不在待命、或還沒有狀態；其餘待命規則只前移 last bar。
+- 保存：`watch365_rule_state(rule_id, symbol, trading_date, state, since_bar, last_bar, false_bars, triggers_today, suppressed_today, last_trigger_bar, baseline, PK(rule_id, symbol))`，只 upsert 有變的列，保留 7 天；無 DB 時 `data/rule-state.json`（`WATCH365_RULE_STATE_FILE`）。與第 1 層同受 `CONDITION_LAYER=off` 控制。
+- 後台：`GET /api/admin/conditions` 多了 `ruleStates:{ mode, lastRun:{ symbols, walked, skipped, baselines, triggers, suppressed, rearmed, ms }, rules:[{ ruleId, name, kind, rearmBars, symbols, states:{ idle, triggered, cooldown }, triggersToday, suppressedToday, tradingDate, sessionClosed }], comparison:{ day, shadowTriggers, suppressed, legacySignals }, recentEvents:[{ type:'trigger'|'suppressed'|'rearm', ruleId, ruleName, symbol, barEnd }] }`。
+
 ### 固定突破量能規則
 
 - 市場：台股 regular session 09:00–13:30（Asia/Taipei）

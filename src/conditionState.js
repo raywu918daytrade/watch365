@@ -113,7 +113,10 @@ export class ConditionStateStore {
   getState(conditionKey, symbol) { const state = this.states.get(stateKey(conditionKey, symbol)); return state ? { ...state } : null; }
 
   // bars: completed 1m bars of the current run (any symbols, any order). Returns the flips found on new bars.
-  evaluate(bars, now = new Date()) {
+  // onSymbol(ctx) is called once per symbol after its conditions advanced, with { symbol, tradingDate, bars,
+  // values: Map(conditionKey → per-bar series), changedKeys: Set(keys whose value changed this run, warm-up end
+  // included) } — layer 2 (ruleState.js) uses changedKeys with rulesFor() to touch only the affected rules.
+  evaluate(bars, now = new Date(), { onSymbol = null } = {}) {
     const started = Date.now();
     const conditions = [...this.conditions.values()];
     const result = { flips:[], symbols:0, conditions:conditions.length, baselines:0, newBars:0, errors:[] };
@@ -124,7 +127,12 @@ export class ConditionStateStore {
       try { values = evaluateFormulaSet(conditions.map((condition) => condition.ast), series); }
       catch (error) { result.errors.push({ symbol, code:error.code || error.message }); continue; }
       const tradingDate = series.at(-1).tradingDate;
-      conditions.forEach((condition, index) => this.#advance(condition, symbol, tradingDate, series, values[index], result, now));
+      const changedKeys = new Set();
+      conditions.forEach((condition, index) => { if (this.#advance(condition, symbol, tradingDate, series, values[index], result, now)) changedKeys.add(condition.key); });
+      if (onSymbol) {
+        try { onSymbol({ symbol, tradingDate, bars:series, values:new Map(conditions.map((condition, index) => [condition.key, values[index]])), changedKeys }); }
+        catch (error) { result.errors.push({ symbol, code:error.code || error.message, layer:'rule' }); }
+      }
     }
     if (result.flips.length) this.flips = result.flips.slice().reverse().concat(this.flips).slice(0, FLIP_HISTORY);
     this.lastRun = { at:now.toISOString(), ...summary(result, started) };
@@ -177,22 +185,24 @@ export class ConditionStateStore {
       const { value, since, flips } = scanBaseline(values, bars);
       state = { conditionKey:condition.key, symbol, tradingDate, value, since, lastBar:bars[lastIndex].barEnd, flipsToday:flips, updatedAt:now.toISOString() };
       this.states.set(id, state); this.dirty.add(id); result.baselines += 1;
-      return;
+      return true;
     }
     let start = bars.findIndex((bar) => bar.barEnd > state.lastBar);
-    if (start < 0) return;
+    if (start < 0) return false;
+    let changed = false;
     result.newBars += lastIndex - start + 1;
     for (let index = start; index <= lastIndex; index++) {
       const value = values[index];
       if (typeof value !== 'boolean') continue;             // unknown keeps the last known value
-      if (state.value === null) { state.value = value; state.since = bars[index].barEnd; continue; }
+      if (state.value === null) { state.value = value; state.since = bars[index].barEnd; changed = true; continue; }
       if (value === state.value) continue;
       const flip = { conditionKey:condition.key, symbol, from:state.value, to:value, kind:condition.kind, barEnd:bars[index].barEnd, tradingDate, detectedAt:now.toISOString() };
       state.value = value; state.since = bars[index].barEnd; state.flipsToday += 1;
-      result.flips.push(flip);
+      result.flips.push(flip); changed = true;
     }
     state.lastBar = bars[lastIndex].barEnd; state.updatedAt = now.toISOString();
     this.dirty.add(id);
+    return changed;
   }
 
   #removeRule(ruleId) {
@@ -226,7 +236,7 @@ export class ConditionStateStore {
 export function rulesFromSettings(settings) {
   if (!settings?.enabled || !settings.strategy) return [];
   const conditions = atomicConditions(settings.strategy);
-  return conditions.length ? [{ ruleId:strategyIdentity(settings.strategy), conditions }] : [];
+  return conditions.length ? [{ ruleId:strategyIdentity(settings.strategy), name:settings.strategy.name || null, conditions }] : [];
 }
 
 // Groups bars per symbol to one trading day of completed regular-session bars, in time order, de-duplicated.

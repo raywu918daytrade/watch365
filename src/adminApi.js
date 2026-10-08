@@ -29,7 +29,7 @@ export const ADMIN_QUERIES = Object.freeze({
   adminLoginsByDay: { type: 'admin_login', groupBy: 'day' }
 });
 
-export function createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates = null, env = process.env, secret, log = console, now = () => Date.now() }) {
+export function createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates = null, ruleStates = null, legacySignalsToday = () => null, env = process.env, secret, log = console, now = () => Date.now() }) {
   if (!(events instanceof EventStore)) throw new Error('createAdminApi needs an EventStore');
   const adminToken = typeof env.ADMIN_TOKEN === 'string' && env.ADMIN_TOKEN.trim().length >= 8 ? env.ADMIN_TOKEN.trim() : null;
 
@@ -119,8 +119,12 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
     // Shared condition layer (src/conditionState.js): which conditions are computed, for how many stocks, how many
     // are true now, flips today, and the most recent flips. mode is 'shadow' until rules drive notifications.
     if (method === 'GET' && url.pathname === '/api/admin/conditions') {
-      if (!conditionStates) { sendJson(response, 200, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [] }); return true; }
-      sendJson(response, 200, conditionStates.snapshot({ flips: clamp(url.searchParams.get('flips'), 1, 300, 50) })); return true;
+      // ruleStates: layer 2 (per-rule idle/triggered/cooldown) with today's shadow triggers next to the signals the
+      // current engine created, so the two can be compared before notifications switch over.
+      if (!conditionStates) { sendJson(response, 200, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [], ruleStates: null }); return true; }
+      const limit = clamp(url.searchParams.get('flips'), 1, 300, 50);
+      let legacy = null; try { legacy = legacySignalsToday(); } catch { legacy = null; }
+      sendJson(response, 200, { ...conditionStates.snapshot({ flips: limit }), ruleStates: ruleStates ? ruleStates.snapshot({ events: limit, now: new Date(now()), legacySignalsToday: legacy }) : null }); return true;
     }
 
     if (method === 'GET' && url.pathname === '/api/admin/unknown-indicators') {

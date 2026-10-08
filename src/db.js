@@ -260,3 +260,47 @@ export async function createConditionStateBackend(config) {
     async close() { await pool.end(); }
   };
 }
+
+// Per-rule, per-stock state (src/ruleState.js): idle / triggered / cooldown, upserted only when it changed.
+const RULE_STATE_TABLE = 'watch365_rule_state';
+
+export async function createRuleStateBackend(config) {
+  if (!config) return null;
+  const { createPool } = await import('mysql2/promise');
+  const pool = createPool(config);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ${RULE_STATE_TABLE} (
+    rule_id VARCHAR(255) NOT NULL,
+    symbol VARCHAR(8) NOT NULL,
+    trading_date CHAR(10) NOT NULL,
+    state VARCHAR(16) NOT NULL,
+    since_bar VARCHAR(32) NULL,
+    last_bar VARCHAR(32) NOT NULL,
+    false_bars INT NOT NULL DEFAULT 0,
+    triggers_today INT NOT NULL DEFAULT 0,
+    suppressed_today INT NOT NULL DEFAULT 0,
+    last_trigger_bar VARCHAR(32) NULL,
+    baseline TINYINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (rule_id, symbol),
+    INDEX idx_rule_state_date (trading_date)
+  )`);
+  return {
+    label: `${config.host}/${config.database}`,
+    async loadStates({ since }) {
+      await pool.query(`DELETE FROM ${RULE_STATE_TABLE} WHERE trading_date < ?`, [since]);
+      const [rows] = await pool.query(`SELECT rule_id, symbol, trading_date, state, since_bar, last_bar, false_bars, triggers_today, suppressed_today, last_trigger_bar, baseline FROM ${RULE_STATE_TABLE}`);
+      return rows.map((row) => ({ ruleId: row.rule_id, symbol: row.symbol, tradingDate: row.trading_date, state: row.state, since: row.since_bar, lastBar: row.last_bar, falseBars: Number(row.false_bars), triggersToday: Number(row.triggers_today), suppressedToday: Number(row.suppressed_today), lastTriggerBar: row.last_trigger_bar, baseline: Boolean(row.baseline) }));
+    },
+    async upsertStates(states) {
+      for (let index = 0; index < states.length; index += 500) {
+        const batch = states.slice(index, index + 500);
+        await pool.query(
+          `INSERT INTO ${RULE_STATE_TABLE} (rule_id, symbol, trading_date, state, since_bar, last_bar, false_bars, triggers_today, suppressed_today, last_trigger_bar, baseline) VALUES ?
+           ON DUPLICATE KEY UPDATE trading_date = VALUES(trading_date), state = VALUES(state), since_bar = VALUES(since_bar), last_bar = VALUES(last_bar), false_bars = VALUES(false_bars), triggers_today = VALUES(triggers_today), suppressed_today = VALUES(suppressed_today), last_trigger_bar = VALUES(last_trigger_bar), baseline = VALUES(baseline)`,
+          [batch.map((state) => [state.ruleId, state.symbol, state.tradingDate, state.state, state.since, state.lastBar, state.falseBars, state.triggersToday, state.suppressedToday, state.lastTriggerBar, state.baseline ? 1 : 0])]
+        );
+      }
+    },
+    async close() { await pool.end(); }
+  };
+}

@@ -151,6 +151,6 @@ test('GET /api/admin/conditions reports the shared condition layer (off when not
     assert.equal((await call('/api/admin/conditions')).status, 401);
     const response = await call('/api/admin/conditions', { headers: { 'x-admin-token': TOKEN } });
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [] });
+    assert.deepEqual(response.body, { mode: 'off', lastRun: null, rules: [], conditions: [], recentFlips: [], ruleStates: null });
   } finally { await close(); }
 });
