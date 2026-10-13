@@ -8,6 +8,12 @@
 import { evaluateFormulaSet, formulaChildren, validateFormula } from './formulaEngine.js';
 
 export const DAILY_DAYS = 7;
+// Forward return shown while picking daily filters (owner ask 2026-10-13): over the last STAT_DAYS trading dates, every
+// (stock, date) where the combination was met is a sample; its return is the close FORWARD_DAYS trading days later
+// against that day's close. The last FORWARD_DAYS dates have no outcome yet, so met/not met is kept for a window of
+// STAT_DAYS + FORWARD_DAYS dates, of which the last DAILY_DAYS are the monitor's view.
+export const FORWARD_DAYS = 7;
+export const STAT_DAYS = 60;
 const EVAL_BARS = 400;   // enough history for the longest preset (60-day averages, 52-day Ichimoku) plus warmup
 
 // Session-only blocks (VWAP's cumulative sums, the day's first bar) have no meaning on daily candles.
@@ -18,16 +24,30 @@ export class DailyIndex {
   constructor({ days = DAILY_DAYS } = {}) {
     this.days = days;
     this.series = null;          // Map(symbol → { dates, o, h, l, c, v }) from DailyStore.finalize()
-    this.dates = [];             // the last `days` trading dates (ascending)
-    this.conditions = new Map(); // key → { key, ast, met: Map(symbol → Uint8Array(days)) }  1 met, 0 not, 2 unknown
+    this.window = [];            // the last STAT_DAYS + FORWARD_DAYS trading dates (ascending); met/not met is kept for these
+    this.dates = [];             // the last `days` of them: the monitor's view
+    this.forwardReturns = new Map(); // symbol → Float64Array(window): close FORWARD_DAYS bars later / close − 1, NaN when unknown
+    this.conditions = new Map(); // key → { key, ast, met: Map(symbol → Uint8Array(window)) }  1 met, 0 not, 2 unknown
   }
 
   // series: Map(symbol → { dates, o, h, l, c, v }). Recomputes every known condition on the new data.
   setSeries(series) {
     this.series = series;
-    const all = new Set();
-    for (const item of series.values()) for (const date of item.dates.slice(-this.days)) all.add(date);
-    this.dates = [...all].sort().slice(-this.days);
+    const size = Math.max(this.days, STAT_DAYS + FORWARD_DAYS), all = new Set();
+    for (const item of series.values()) for (const date of item.dates.slice(-size)) all.add(date);
+    this.window = [...all].sort().slice(-size);
+    this.dates = this.window.slice(-this.days);
+    this.forwardReturns = new Map();
+    for (const [symbol, item] of series) {
+      const position = new Map(item.dates.map((date, index) => [date, index]));
+      const out = new Float64Array(this.window.length).fill(NaN);
+      this.window.forEach((date, slot) => {
+        const at = position.get(date); if (at === undefined || at + FORWARD_DAYS >= item.dates.length) return;
+        const from = item.c[at], to = item.c[at + FORWARD_DAYS];
+        if (Number.isFinite(from) && from > 0 && Number.isFinite(to)) out[slot] = to / from - 1;
+      });
+      this.forwardReturns.set(symbol, out);
+    }
     const known = [...this.conditions.values()];
     this.conditions.clear();
     this.ensure(known);
@@ -55,8 +75,8 @@ export class DailyIndex {
       let values; try { values = evaluateFormulaSet(asts, bars); } catch { continue; }
       const position = new Map(); for (let index = start; index < end; index++) position.set(item.dates[index], index - start);
       missing.forEach((condition, which) => {
-        const row = new Uint8Array(this.dates.length).fill(2);
-        this.dates.forEach((date, slot) => { const at = position.get(date); if (at === undefined) return; const value = values[which][at]; if (typeof value === 'boolean') row[slot] = value ? 1 : 0; });
+        const row = new Uint8Array(this.window.length).fill(2);
+        this.window.forEach((date, slot) => { const at = position.get(date); if (at === undefined) return; const value = values[which][at]; if (typeof value === 'boolean') row[slot] = value ? 1 : 0; });
         condition.met.set(symbol, row);
       });
     }
@@ -66,7 +86,7 @@ export class DailyIndex {
 
   // Symbols where every key is met on `date` (one of this.dates), optionally within `symbols`.
   metOn(keys, date, symbols = null) {
-    const slot = this.dates.indexOf(date), out = new Set();
+    const slot = this.dates.includes(date) ? this.window.indexOf(date) : -1, out = new Set();
     if (slot < 0 || !keys.length) return out;
     const conditions = keys.map((key) => this.#condition(key));
     for (const symbol of this.series.keys()) {
@@ -82,6 +102,26 @@ export class DailyIndex {
     return before ? this.metOn(keys, before, symbols) : new Set();
   }
 
+  // What happened after the combination was met: every (stock, window date) where all keys were met and the close
+  // FORWARD_DAYS trading days later is known. { days, samples, dates, mean, winRate } or null without a sample.
+  forward(keys, symbols = null) {
+    if (!keys.length) return null;
+    const conditions = keys.map((key) => this.#condition(key));
+    let samples = 0, sum = 0, wins = 0; const dates = new Set();
+    for (const symbol of this.series.keys()) {
+      if (symbols && !symbols.has(symbol)) continue;
+      const returns = this.forwardReturns.get(symbol), rows = conditions.map((condition) => condition.met.get(symbol));
+      if (!returns || rows.some((row) => !row)) continue;
+      for (let slot = 0; slot < this.window.length; slot++) {
+        const value = returns[slot];
+        if (Number.isNaN(value) || rows.some((row) => row[slot] !== 1)) continue;
+        samples++; sum += value; if (value > 0) wins++; dates.add(slot);
+      }
+    }
+    if (!samples) return null;
+    return { days:FORWARD_DAYS, samples, dates:dates.size, mean:sum / samples, winRate:wins / samples };
+  }
+
   // filters: keys in pick order; each step = filters[0..i] all met. Per step: stocks met on the latest date, per-day
   // counts, and "new" = stocks that became met that day (what a D1-only monitor notifies after the close).
   // candidates: keys tried as the next filter (stocks met on the latest date with it added).
@@ -93,12 +133,12 @@ export class DailyIndex {
       const keys = filters.slice(0, index + 1);
       const perDay = this.dates.map((date) => this.metOn(keys, date, symbols));
       const days = this.dates.map((date, slot) => ({ date, count:perDay[slot].size, newCount:slot ? [...perDay[slot]].filter((symbol) => !perDay[slot - 1].has(symbol)).length : null }));
-      const step = { latestCount:perDay.at(-1)?.size ?? 0, days, newEvents:days.reduce((sum, day) => sum + (day.newCount ?? 0), 0) };
+      const step = { latestCount:perDay.at(-1)?.size ?? 0, days, newEvents:days.reduce((sum, day) => sum + (day.newCount ?? 0), 0), forward:this.forward(keys, symbols) };
       if (list && index === filters.length - 1) step.symbols = [...(perDay.at(-1) || [])].sort();
       if (events && index === filters.length - 1) step.events = this.dates.flatMap((date, slot) => slot ? [...perDay[slot]].filter((symbol) => !perDay[slot - 1].has(symbol)).sort().map((symbol) => ({ date, symbol, price:this.#closeOn(symbol, date) })) : []).reverse();
       return step;
     });
-    const candidateResults = candidates.map((key) => ({ key, latestCount:latest && this.conditions.has(key) ? this.metOn([...filters, key], latest, symbols).size : 0 }));
+    const candidateResults = candidates.map((key) => { const known = latest && this.conditions.has(key), keys = [...filters, key]; return { key, latestCount:known ? this.metOn(keys, latest, symbols).size : 0, forward:known ? this.forward(keys, symbols) : null }; });
     return { dates:[...this.dates], latestDate:latest, steps, candidates:candidateResults };
   }
 
@@ -124,7 +164,7 @@ export class DailyIndex {
     return { met, newly };
   }
 
-  stats() { return { dates:[...this.dates], conditions:this.conditions.size, symbols:this.series?.size ?? 0 }; }
+  stats() { return { dates:[...this.dates], window:this.window.length, conditions:this.conditions.size, symbols:this.series?.size ?? 0 }; }
 
   #closeOn(symbol, date) { const item = this.series.get(symbol), at = item ? item.dates.lastIndexOf(date) : -1; return at < 0 ? null : num(item.c[at]); }
 
