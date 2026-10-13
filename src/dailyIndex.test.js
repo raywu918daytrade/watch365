@@ -30,6 +30,12 @@ test('daily index: stocks met on the latest close, per-day counts, new entries, 
   assert.deepEqual(index.query({ filters:['sma5'], events:true }).steps[0].events, [{ date:index.dates.at(-1), symbol:'2303', price:70 }]);
   const both = index.query({ filters:['sma5', 'gt60'] });
   assert.equal(both.steps[1].latestCount, 2);
+  // Forward 7-day outcome: only 1101 (rising) meets sma5 with a known close 7 bars later — slots 4..32 of the
+  // 40-bar window, every one of them up. 2303 meets it only on the last day, which has no later close yet.
+  assert.deepEqual({ ...both.steps[1].forward, mean:undefined }, { days:7, samples:29, dates:29, mean:undefined, winRate:1 });
+  assert.ok(both.steps[1].forward.mean > 0.03 && both.steps[1].forward.mean < 0.08);
+  assert.equal(result.candidates[0].forward.samples, 29);
+  assert.equal(index.query({ filters:['gt60'], symbols:new Set(['2303']) }).steps[0].forward, null); // 2303 hits 70 only on the last day
   // The list a minute-bar day uses is the previous daily close.
   const last = index.dates.at(-1), previous = index.dates.at(-2);
   assert.deepEqual([...index.listFor(['sma5'], last)], ['1101']);

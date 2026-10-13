@@ -428,7 +428,7 @@ function drawTemplates(){
   }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
-  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合`:`過去 7 日 <strong>${base.count} 檔・${base.events} 次</strong>`}。長條＝加入後還剩幾檔。</p>`:'';
+  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，過去')}`:`過去 7 日 <strong>${base.count} 檔・${base.events} 次</strong>`}。長條＝加入後還剩幾檔。</p>`:'';
   const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
   const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
@@ -446,11 +446,11 @@ function rankBase(full){
   if(!F().length||full)return null;
   const data=indexFresh(),step=data?.steps?.at(-1);
   if(!data||!data.counts||!step)return null;
-  return{data,count:step.triggeredSymbols||0,events:step.totalEvents||0};
+  return{data,count:step.triggeredSymbols||0,events:step.totalEvents||0,forward:step.forward||null};
 }
 function rankLine(item,base){
   const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=base.count?Math.min(1,n/base.count):0,pct=Math.round(share*100),eventShare=item.count.totalEvents==null?1:base.events?item.count.totalEvents/base.events:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
-  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong>${item.row.summary?`<small class="proto-rank-formula">${escapeHtml(item.row.summary)}</small>`:''}<span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${countText(item.count)}・剩 ${pct}%`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
+  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong>${item.row.summary?`<small class="proto-rank-formula">${escapeHtml(item.row.summary)}</small>`:''}<span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${countText(item.count)}・剩 ${pct}%${isDaily()?forwardText(item.count.forward,'・'):''}`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
 }
 function presetLine(full,block){
   return(row)=>{const i=templateRows.indexOf(row);const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;};
@@ -621,8 +621,8 @@ async function runIndex(){
     if(result.status==='ready'&&result.daily?.status==='loading')Object.assign(result,{status:'loading',progress:'準備日 K 資料'});
     if(result.status==='ready'&&daily){
       const dailyResult=result.daily;
-      const counts=new Map();(dailyResult.candidates||[]).forEach((item)=>{const key=indexData.candidateKeys[item.index];if(key&&!item.error)counts.set(key,{triggeredSymbols:item.latestCount,totalEvents:null,daily:true});});
-      indexData={signature,loading:false,error:null,daily:true,latestDate:dailyResult.latestDate,steps:(dailyResult.steps||[]).map((step)=>({triggeredSymbols:step.latestCount,totalEvents:null,daily:true,days:step.days})),counts};
+      const counts=new Map();(dailyResult.candidates||[]).forEach((item)=>{const key=indexData.candidateKeys[item.index];if(key&&!item.error)counts.set(key,{triggeredSymbols:item.latestCount,totalEvents:null,daily:true,forward:item.forward||null});});
+      indexData={signature,loading:false,error:null,daily:true,latestDate:dailyResult.latestDate,steps:(dailyResult.steps||[]).map((step)=>({triggeredSymbols:step.latestCount,totalEvents:null,daily:true,days:step.days,forward:step.forward||null})),counts};
       drawIndexViews();return;
     }
     if(result.status==='loading'){indexData={...indexData,loading:true,progress:result.progress};drawIndexViews();indexTimer=setTimeout(runIndex,3000);return;}
@@ -637,13 +637,16 @@ async function runIndex(){
 function drawIndexViews(){if(!['conditions','daily'].includes(node()))return;scheduleExample();const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
 function indexFresh(){return indexData&&indexData.signature===indexSignature()?indexData:null;}
 function countText(item){return item.daily||item.totalEvents==null?`${item.triggeredSymbols||0} 檔`:item.triggeredSymbols?`${item.triggeredSymbols} 檔・${item.totalEvents} 次`:'0 檔';}
+// Daily step: what the combination did afterwards — mean close-to-close change FORWARD days later and how often it
+// rose, over every (stock, day) in the index window where the combination held and the later close is known.
+function forwardText(f,lead=''){if(!f||!f.samples)return'';const pct=(f.mean*100).toFixed(1);return`${lead}之後 ${f.days} 個交易日平均 ${f.mean>0?'+':''}${pct}%・${Math.round(f.winRate*100)}% 上漲（${f.samples} 次）`;}
 function stepLine(index){
   const data=indexFresh();
   const daily=isDaily(),label=daily?'符合檔數':'過去 7 日';
   if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">${label}：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
   if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算</small>`;
   const step=data.steps?.[index];if(!step)return'';
-  if(daily){const head=`${index?'加上這個後，':''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合</small>`:`<small class="proto-count zero">${head} 0 檔符合${index?'，是這個過濾把股票全部篩掉了':''}</small>`;}
+  if(daily){const head=`${index?'加上這個後，':''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，過去')}</small>`:`<small class="proto-count zero">${head} 0 檔符合${index?'，是這個過濾把股票全部篩掉了':''}</small>`;}
   const head=index?'加上這個後':'過去 7 日';
   if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${index?'，是這個過濾把股票全部篩掉了':'，這個過濾可能太嚴格'}</small>`;
   return`<small class="proto-count">${head}：${countText(step)}</small>`;
@@ -652,7 +655,7 @@ function candidateLine(spec){
   const data=indexFresh();if(!data||!data.counts)return'';
   const item=data.counts.get(specKey(spec));if(!item)return'';
   const prefix=F().length?'加入後':isDaily()?`${dailyDateText(data)}收盤`:'過去 7 日';
-  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}</small>`;
+  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}${isDaily()?forwardText(item.forward,'，過去'):''}</small>`;
 }
 // D3. Example chart (owner decision 2026-10): one candlestick example of what a stock looks like when ALL selected
 // filters hold — any stock, not named; daily history first, one-minute bars when daily never met it. Only the bars
