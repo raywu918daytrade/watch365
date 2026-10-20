@@ -105,7 +105,8 @@ async function home(){
 async function drawRecover(target){
   try{lineStatus=await api('/api/line/status');}catch{return;}
   if(node()!=='home'||!lineStatus.enabled||lineStatus.linked?.length)return;
-  target.innerHTML='<div id="lineBox" class="proto-line" data-recover="1"></div>';drawLineBox();
+  // New customers just start below; this is a small line under the start options for returning ones (owner 2026-10-20).
+  target.innerHTML='';root.querySelector('.proto-options')?.insertAdjacentHTML('afterend','<div id="lineBox" class="proto-line" data-recover="1"></div>');drawLineBox();
 }
 // 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
 // into the daily step. Each is named by its list labels and skipped when the list doesn't have every one of them.
@@ -1014,7 +1015,7 @@ function drawDashboard(data,{force=false}={}){
   dashboardSignature=signature;
   // A browser with no monitor yet (new phone, private window): log in with LINE to get yours back, or set one up.
   if(!settings.monitorTask?.onboardingCompleted){
-    target.innerHTML='<div class="proto-status"><strong>還沒有監控</strong></div><div id="lineBox" class="proto-line" data-recover="1"></div><div class="proto-inline-actions"><button class="proto-secondary" data-go="home">開始設定</button></div>';
+    target.innerHTML='<div class="proto-status"><strong>還沒有監控</strong></div><button class="proto-primary proto-full" data-go="home">開始設定</button><div id="lineBox" class="proto-line" data-recover="1"></div>';
     target.querySelector('[data-go]').addEventListener('click',()=>go('home'));
     refreshLine().then(drawLineBox);bindLineBox();return;
   }
@@ -1066,6 +1067,7 @@ function lineBoxHtml(){
     const steps=lineCode.linkUrl?(mobile?'':'用手機 LINE 掃描'):'在 LINE 傳送：';
     return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>用 LINE 登入</strong>${steps?`<small>${steps}</small>`:''}</span></div><div class="proto-line-code">${mobile&&lineCode.linkUrl?'':`<div class="proto-line-qr">${lineCode.qrSvg}</div>`}<div>${lineCode.linkUrl?'':`<p class="proto-line-digits">${escapeHtml(lineCode.code)}</p>`}${lineCode.linkUrl&&mobile?`<a class="proto-primary proto-line-open" href="${escapeHtml(lineCode.linkUrl)}" target="_blank" rel="noopener">開啟 LINE</a>`:''}</div></div><p class="proto-signature" role="status">等待中…<button class="proto-link" id="lineCancel">取消</button></p>`;
   }
+  if(root.querySelector('#lineBox')?.dataset.recover)return`<button class="proto-primary proto-line-login" id="lineLink">${'<span class="proto-line-logo" aria-hidden="true">LINE</span>'}老客戶用 LINE 登入</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
   return`<button class="proto-primary proto-line-login" id="lineLink">${'<span class="proto-line-logo" aria-hidden="true">LINE</span>'}用 LINE 登入</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
 }
 function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();root.querySelector('#notifyRow')?.toggleAttribute('hidden',Boolean(lineStatus?.linked?.length));}

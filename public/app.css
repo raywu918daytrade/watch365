@@ -382,5 +382,9 @@
 @media (max-width:640px) { .proto-strategy-grid { grid-template-columns:1fr; } }
 .proto-line[data-recover]{margin-bottom:16px}
 .proto-line:has(> .proto-line-login) { border:0; padding:0; background:none; }
-.proto-line > .proto-line-login { display:inline-flex; align-items:center; justify-content:center; gap:.55rem; }
+.proto-line > .proto-line-login { display:flex; width:100%; justify-self:stretch; align-items:center; justify-content:center; gap:.55rem; }
+.proto-line .proto-line-open, .proto-full { display:flex; width:100%; justify-content:center; box-sizing:border-box; }
+.proto-line[data-recover] { margin-top:1rem; }
 .proto-line-login .proto-line-logo { background:#fff; color:#06c755; }
+.proto-line-code > div:only-child { flex:1; }
+.proto-full { margin-top:1rem; }
