@@ -19,6 +19,7 @@
     "hyparquet": "^1.25.1",
     "hyparquet-compressors": "^1.1.1",
     "mysql2": "^3.15.0",
+    "qrcode": "^1.5.4",
     "technicalindicators": "^3.1.0"
   },
   "devDependencies": {

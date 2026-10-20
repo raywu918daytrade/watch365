@@ -53,7 +53,8 @@ const DEFAULT_STATE = {
   quotes: [],
   signals: [],
   notifications: [],
-  logs: []
+  logs: [],
+  line: { users: [] }
 };
 
 export class JsonStore {
@@ -167,7 +168,8 @@ function mergeState(defaults, loaded) {
     quotes: loaded.quotes || [],
     signals: loaded.signals || [],
     notifications: loaded.notifications || [],
-    logs: loaded.logs || []
+    logs: loaded.logs || [],
+    line: { users: loaded.line?.users || [] }
   };
 
   merged.settings.market = 'TW';

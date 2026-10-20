@@ -13,6 +13,13 @@
 - 回訪優先：首頁置頂「我的監控」摘要與今日觸發數；頂部依 Asia/Taipei 顯示盤前／盤中／已收盤／休市（國定假日需後端行事曆，尚未支援）。
 - 台股慣例：上穿標紅、下穿標綠；觸發紀錄今日只顯示時間並標示上市／上櫃。
 
+## LINE 通知
+
+`src/line.js` 用 LINE Messaging API（LINE Notify 已於 2025 年停止）。設定 `LINE_CHANNEL_SECRET` 與 `LINE_CHANNEL_ACCESS_TOKEN`（long-lived）才會啟用，沒設定時「我的監控」不顯示 LINE 區塊；`PUBLIC_SITE_URL` 選填，放在訊息結尾（預設 https://watch365.just1stock.com）。LINE Developers 的 Webhook URL 設為 `https://<網域>/api/line/webhook` 並開啟 Use webhook，官方帳號的自動回應要關掉。
+
+- 綁定：「我的監控 → 綁定 LINE」向 `POST /api/line/link-code` 取得 6 位數綁定碼（10 分鐘、存在記憶體），附 QR code 與預填綁定碼的 `line.me/R/oaMessage` 連結；使用者把綁定碼傳給官方帳號，webhook（驗 `X-Line-Signature`）把 `{ userId, displayName, visitor }` 存進 state 的 `line.users`。這份名單不在 `publicState` 裡，每個瀏覽器只看得到自己綁的帳號（`GET /api/line/status`）。封鎖官方帳號（unfollow）或 `POST /api/line/unlink` 會移除。
+- 推播：每輪監控的新觸發合併成一則訊息，送給所有綁定的帳號（`push`／`multicast`，省每月免費額度），結果記在通知的 `line: 'sent'|'failed'`，觸發紀錄顯示「LINE 已通知」。`POST /api/line/test` 送測試訊息。
+
 ## HF-only 資料流
 
 - 使用 `HF_REPO_ID` 與 `HF_TOKEN`，設定值不會出現在 API、log 或 capability report。

@@ -143,6 +143,20 @@
 .proto-and { color:#566b70; font-size:.78rem; font-weight:600; }
 .proto-monitor .proto-inline-actions { margin-top:.9rem; }
 .proto-notify-row { margin:.8rem 0 0; font-size:.82rem; }
+.proto-line:not(:empty) { display:grid; gap:.6rem; margin:.8rem 0 0; border:1px solid #cfe3d6; border-radius:.5rem; padding:.8rem .9rem; background:#f4fbf6; }
+.proto-line-head { display:flex; align-items:flex-start; gap:.65rem; }
+.proto-line-head strong { display:block; font-size:.9rem; }
+.proto-line-head small { display:block; margin-top:.15rem; color:#5b7176; font-size:.78rem; line-height:1.45; }
+.proto-line-logo { flex:none; border-radius:.45rem; padding:.3rem .4rem; background:#06c755; color:#fff; font-size:.66rem; font-weight:900; letter-spacing:.02em; }
+.proto-line > .proto-primary { justify-self:start; border-color:#06c755; background:#06c755; }
+.proto-line .proto-inline-actions { margin:0; }
+.proto-line p { margin:0; }
+.proto-line p:empty { display:none; }
+.proto-line-code { display:flex; flex-wrap:wrap; align-items:center; gap:1rem; }
+.proto-line-qr { width:9.5rem; border:1px solid #d7e4dc; border-radius:.4rem; background:#fff; padding:.3rem; }
+.proto-line-qr svg { display:block; width:100%; height:auto; }
+.proto-line .proto-line-digits { margin:0 0 .5rem; color:#163238; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:1.8rem !important; font-weight:800; line-height:1.1; letter-spacing:.18em; }
+.proto-line-open { display:inline-flex; align-items:center; border-color:#06c755 !important; background:#06c755 !important; text-decoration:none; }
 .proto-market { border:1px solid #cbdada; border-radius:.2rem; padding:0 .25rem; color:#566b70; font-size:.68rem; }
 .proto-history-row.today time { color:#173036; font-weight:800; }
 .proto-history-row time { font-variant-numeric:tabular-nums; }

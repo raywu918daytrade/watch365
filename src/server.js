@@ -25,6 +25,8 @@ import { classifyUserAgent, visitorCookie, visitorFromRequest } from './visitor.
 import { UnknownIndicatorStore, lookupIndicator } from './indicatorLookup.js';
 import { createAdminApi } from './adminApi.js';
 import { fork } from 'node:child_process';
+import { LineNotifier, verifySignature } from './line.js';
+import QRCode from 'qrcode';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { formulaFingerprint, issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
@@ -68,6 +70,8 @@ const events = new EventStore(EVENTS_FILE, { backend: await createEventBackend(d
 const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { backend: await createUnknownIndicatorBackend(dbConfigFromEnv()) });
 const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createConditionStateBackend(dbConfigFromEnv()) : null });
 const ruleStates = new RuleStateStore(RULE_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createRuleStateBackend(dbConfigFromEnv()) : null });
+// LINE Messaging API notifications (src/line.js); off until LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN are set.
+const line = new LineNotifier({ store });
 const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0; return state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, secret: formulaTokenSecret });
 // 7-day condition index in a long-lived worker (src/historyIndexWorker.js). HISTORY_INDEX=off disables it.
 const HISTORY_INDEX_ENABLED = process.env.HISTORY_INDEX !== 'off';
@@ -144,7 +148,7 @@ function historyJobView(job) {
 await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
 { const before = store.getState().signals.length; await store.update((state) => { dropEarlierSignals(state); }); const dropped = before - store.getState().signals.length; if (dropped) console.log(`Dropped ${dropped} trigger records of earlier monitor conditions`); }
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
-console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
+console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; LINE: ${line.enabled ? 'on' : 'off'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
 syncMonitorTimer();
 // Start the index worker in the background and precompute every indicator-list row once.
 if (HISTORY_INDEX_ENABLED) historyIndex.start().then(() => historyIndex.ensure(libraryConditions())).then((result) => console.log(`history-index: ${result?.loading ? 'loading 7-day data' : `ready, ${result?.conditions} conditions`}`)).catch((error) => console.error('history-index: start failed', error.code || error.message));
@@ -183,6 +187,8 @@ async function routeApi(request, response) {
     sendJson(response, 200, { visitor, firstSeen: range?.firstSeen ?? null });
     return;
   }
+
+  if (url.pathname.startsWith('/api/line/')) { await routeLine(request, response, url, method, visitor); return; }
 
   if (method === 'GET' && url.pathname === '/api/version') {
     sendJson(response, 200, { version: APP_VERSION, deployedAt: BOOTED_AT.toISOString(), commit: APP_COMMIT });
@@ -905,7 +911,21 @@ async function recordFormulaActivation(payload) {
   catch (error) { console.error('formula-library: record activation failed', error.code || error.message); }
 }
 
+// Every run's new signals also go to the linked LINE accounts (one message per run). The push runs in the background
+// and is recorded on the notifications as line: 'sent' | 'failed'.
 async function runMonitor(source = 'scheduler') {
+  const result = await runMonitorOnce(source);
+  if (result?.signals?.length && line.enabled && line.users().length) {
+    const ids = new Set(result.signals.map((signal) => signal.id));
+    line.notifySignals(result.signals).then((outcome) => store.update((state) => {
+      for (const notification of state.notifications) if (ids.has(notification.signalId)) notification.line = outcome.sent ? 'sent' : 'failed';
+      appendLog(state, outcome.sent ? 'info' : 'warn', outcome.sent ? `LINE 通知已送出（${result.signals.length} 檔）` : 'LINE 通知送出失敗', { source, error: outcome.error ?? null });
+    })).catch(console.error);
+  }
+  return result;
+}
+
+async function runMonitorOnce(source = 'scheduler') {
   if (isRunning) {
     return { skipped: true, reason: 'monitor already running', state: publicState(store.getState()) };
   }
@@ -1082,6 +1102,47 @@ function contentType(filePath) {
     '.json': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml'
   }[extname(filePath)] || 'application/octet-stream';
+}
+
+async function routeLine(request, response, url, method, visitor) {
+  if (method === 'POST' && url.pathname === '/api/line/webhook') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const raw = Buffer.concat(chunks);
+    if (!line.enabled) { sendJson(response, 503, { error: 'LINE_NOT_CONFIGURED' }); return; }
+    if (!verifySignature(raw, request.headers['x-line-signature'], line.config.secret)) { sendJson(response, 401, { error: 'LINE_SIGNATURE_INVALID' }); return; }
+    let body;
+    try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch { sendJson(response, 400, { error: 'INVALID_JSON' }); return; }
+    // LINE expects a quick 200; events are handled after the response.
+    sendJson(response, 200, { ok: true });
+    line.handleWebhook(body).catch((error) => console.error('line: webhook failed', error.code || error.message));
+    return;
+  }
+  if (method === 'GET' && url.pathname === '/api/line/status') { sendJson(response, 200, await line.status(visitor)); return; }
+  if (!line.enabled) { sendJson(response, 503, { error: 'LINE_NOT_CONFIGURED' }); return; }
+  if (method === 'POST' && url.pathname === '/api/line/link-code') {
+    const issued = line.issueCode(visitor);
+    const bot = await line.bot();
+    // Opens the chat with the official account and pre-fills the code (needs the bot's basic id).
+    const linkUrl = bot?.basicId ? `https://line.me/R/oaMessage/${encodeURIComponent(bot.basicId)}/?${encodeURIComponent(issued.code)}` : null;
+    const qrSvg = await QRCode.toString(linkUrl || issued.code, { type: 'svg', margin: 1, width: 180, errorCorrectionLevel: 'M' });
+    events.record('line_link_code', {}, { visitor });
+    sendJson(response, 200, { ...issued, linkUrl, qrSvg, addFriendUrl: bot?.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(bot.basicId)}` : null, botName: bot?.displayName ?? null, basicId: bot?.basicId ?? null });
+    return;
+  }
+  if (method === 'POST' && url.pathname === '/api/line/unlink') {
+    const body = await readJson(request).catch(() => ({}));
+    const result = await line.unlink(visitor, typeof body.id === 'string' ? body.id : null);
+    events.record('line_unlink', { removed: result.removed }, { visitor });
+    sendJson(response, 200, { ...result, status: await line.status(visitor) });
+    return;
+  }
+  if (method === 'POST' && url.pathname === '/api/line/test') {
+    try { sendJson(response, 200, await line.sendTest(visitor)); }
+    catch (error) { sendJson(response, 502, { error: error.code || 'LINE_PUSH_FAILED' }); }
+    return;
+  }
+  sendJson(response, 404, { error: 'Not Found' });
 }
 
 async function readJson(request) {

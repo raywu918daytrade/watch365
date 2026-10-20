@@ -847,7 +847,7 @@ function confirmPage(){
   const minute=state.filters.length>0,dailyList=state.dailyFilters;
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日 13:00 判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>每個交易日 13:00（收盤前），以 13:00 價格當作今天收盤，新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日 13:00 判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>每個交易日 13:00（收盤前），以 13:00 價格當作今天收盤，新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：這個瀏覽器的系統通知（需保持網頁開啟），也可以在「我的監控」綁定 LINE</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
@@ -873,7 +873,7 @@ function success(){
   const supported='Notification' in window,permission=supported?Notification.permission:'unsupported';
   const action=permission==='default'?'<button class="proto-primary" id="notifyAndGo">開啟通知並查看監控</button>':'<button class="proto-primary" data-go="dashboard">查看我的監控</button>';
   const note=permission==='denied'?'<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>瀏覽器已封鎖通知。請點網址列左側的鎖頭圖示，把「通知」改為允許，才收得到觸發提醒。</span></p>':permission==='granted'?'<p class="proto-signature">通知已開啟。</p>':permission==='unsupported'?(isIosSafari()?`<p class="proto-notice" role="note"><span aria-hidden="true">i</span>${iosNotifyHint()}</p>`:'<p class="proto-signature">這個瀏覽器不支援通知，觸發紀錄會顯示在「我的監控」。</p>'):'<p class="proto-signature">最後一步：允許瀏覽器通知，條件成立時才會即時提醒你。</p>';
-  shell({title:'監控已建立',lead:'',body:`<div class="proto-success"><span class="proto-check" aria-hidden="true">✓</span><p>${createdDailyOnly?'每個交易日 13:00 判斷一次，有新符合的股票就通知你，收盤前還來得及下單。':'盤中會持續檢查最新一分鐘 K，條件成立就通知你。'}</p></div><p class="proto-notice" role="note"><span aria-hidden="true">i</span><span>目前通知透過瀏覽器送出，<strong>請保持這個網頁開啟</strong>（手機請勿關閉分頁）。觸發紀錄也會保存在「我的監控」。</span></p>${note}<div class="proto-inline-actions"><button class="proto-secondary" data-go="home">回首頁</button>${action}</div>`});
+  shell({title:'監控已建立',lead:'',body:`<div class="proto-success"><span class="proto-check" aria-hidden="true">✓</span><p>${createdDailyOnly?'每個交易日 13:00 判斷一次，有新符合的股票就通知你，收盤前還來得及下單。':'盤中會持續檢查最新一分鐘 K，條件成立就通知你。'}</p></div><p class="proto-notice" role="note"><span aria-hidden="true">i</span><span>瀏覽器通知需要<strong>保持這個網頁開啟</strong>（手機請勿關閉分頁）。不想開著網頁，可以到「我的監控」綁定 LINE。觸發紀錄也會保存在「我的監控」。</span></p>${note}<div class="proto-inline-actions"><button class="proto-secondary" data-go="home">回首頁</button>${action}</div>`});
   root.querySelector('#notifyAndGo')?.addEventListener('click',async()=>{try{await Notification.requestPermission();}catch{}go('dashboard');});
 }
 
@@ -915,10 +915,11 @@ function drawDashboard(data,{force=false}={}){
   const empty=isDailyOnly(settings)?'<strong>還沒有 13:00 通知</strong><p>每個交易日 13:00 判斷，新符合的股票會出現在這裡並通知你。</p>':session.key==='open'?'<strong>今天還沒有觸發</strong><p>盤中條件成立時會出現在這裡並通知你。</p>':`<strong>目前沒有觸發紀錄</strong><p>${escapeHtml(session.detail)}。</p>`;
   target.innerHTML=`<div class="proto-statusbar ${settings.enabled?(session.key==='open'?'live':'idle'):'paused'}" role="status"><i aria-hidden="true"></i><span><strong>${settings.enabled?(session.key==='open'?'監控中':`待命（${session.label}）`):'已暫停'}</strong>・上次檢查 <span id="lastRun">${runtime.lastRunAt?formatWhen(runtime.lastRunAt):'尚未執行'}</span>${settings.pollIntervalSeconds?`・每 ${settings.pollIntervalSeconds} 秒檢查`:''}</span></div>
     <article class="proto-monitor"><header><span><small class="proto-eyebrow">${settings.scopeMode==='universe'?'用條件找股票':'盯指定股票'}</small><strong class="proto-cond">${conditionHtml}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}${runtime.effectiveWatchlistCount!=null?`・本輪實際監控 ${runtime.effectiveWatchlistCount} 檔`:''}</p>${dailyLine}<p class="${healthy?'':'proto-error'}">資料狀態：${escapeHtml(status)}${runtime.lastError?`・${escapeHtml(errorText({code:runtime.lastError}))}`:''}</p>
-    <div class="proto-notify-row">${notify}${permission==='granted'?'<span class="proto-signature">・請保持網頁開啟才收得到</span>':''}</div>
+    <div class="proto-notify-row">${notify}${permission==='granted'?'<span class="proto-signature">・請保持網頁開啟才收得到</span>':''}</div><div id="lineBox" class="proto-line">${lineBoxHtml()}</div>
     <div class="proto-inline-actions proto-monitor-actions"><button id="toggleMonitor" class="proto-secondary">${settings.enabled?'暫停監控':'恢復監控'}</button><button id="runNow" class="proto-secondary">立即檢查一次</button><button id="newMonitor" class="proto-link">重新設定條件</button></div><div id="resetConfirm"></div></article>
     <section class="proto-history"><div class="proto-history-head"><div><p class="proto-eyebrow">觸發紀錄</p><h2>今日觸發 ${todayCount(current,today)} 次</h2>${today.length?`<p class="proto-signature">${todayBreakdown(today)}</p>`:''}</div><span>這組監控共 ${current.length} 筆</span></div>${current.length?`<div class="proto-history-table">${tableHead}${current.slice(0,30).map(row).join('')}</div>`:`<div class="proto-status">${empty}</div>`}${olderHtml}</section><section class="proto-history" id="monitorHistory" aria-live="polite"></section>`;
   drawMonitorHistory(settings);
+  bindLineBox();refreshLine();
   target.querySelector('#newMonitor').addEventListener('click',()=>{
     const box=target.querySelector('#resetConfirm');
     box.innerHTML='<div class="proto-notice" role="alert"><span aria-hidden="true">!</span><span>系統一次只跑一組監控，新設定建立後才會取代目前這組（在那之前照常監控）。<span class="proto-inline-actions"><button class="proto-link" id="resetCancel">取消</button><button class="proto-secondary" id="resetGo">開始重新設定</button></span></span></div>';
@@ -931,6 +932,41 @@ function drawDashboard(data,{force=false}={}){
   target.querySelector('#enableNotify')?.addEventListener('click',async()=>{try{await Notification.requestPermission();}catch{}drawDashboard(data,{force:true});});
   target.querySelectorAll('[data-retry]').forEach((button)=>button.addEventListener('click',async()=>{button.disabled=true;button.textContent='重送中…';try{const result=await api(`/api/notifications/${encodeURIComponent(button.dataset.retry)}/retry`,{});if(!result.retried)throw Object.assign(new Error('這則通知目前不能重送。'),{code:result.reason});seenNotifications.delete(button.dataset.retry);const fresh=await api('/api/state');drawDashboard(fresh,{force:true});await deliverNotifications(fresh.notifications||[]);drawDashboard(await api('/api/state'),{force:true});}catch(error){alertStatus(error);button.disabled=false;button.textContent='重送';}}));
 }
+// LINE notifications (server: src/line.js). The box is redrawn from lineStatus so a dashboard poll doesn't lose it;
+// while a link code is showing, the status is re-read every 5 s until the account appears.
+let lineStatus=null,lineCode=null,lineTimer=null;
+function lineBoxHtml(){
+  if(!lineStatus||!lineStatus.enabled)return'';
+  const linked=lineStatus.linked||[];
+  if(linked.length){
+    return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>LINE 通知已開啟</strong><small>${linked.map((user)=>escapeHtml(user.displayName||'LINE 帳號')).join('、')}・條件成立時傳到 LINE，不用開著網頁</small></span></div><div class="proto-inline-actions"><button class="proto-link" id="lineUnlink">解除綁定</button><button class="proto-secondary" id="lineTest">傳一則測試訊息</button></div><p class="proto-signature" id="lineMsg" role="status"></p>`;
+  }
+  if(lineCode&&Date.parse(lineCode.expiresAt)>Date.now()){
+    const mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const steps=lineCode.linkUrl?(mobile?'按下面的按鈕開啟 LINE，送出已填好的綁定碼。若還沒加好友，LINE 會先請你加入。':'用手機 LINE 掃描 QR code，送出已填好的綁定碼。若還沒加好友，LINE 會先請你加入。'):`在 LINE 加入官方帳號${lineCode.basicId?` ${escapeHtml(lineCode.basicId)}`:''} 為好友，再傳送下面的綁定碼。`;
+    return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>綁定 LINE</strong><small>${steps}</small></span></div><div class="proto-line-code">${mobile&&lineCode.linkUrl?'':`<div class="proto-line-qr">${lineCode.qrSvg}</div>`}<div><p class="proto-eyebrow">綁定碼（10 分鐘內有效）</p><p class="proto-line-digits">${escapeHtml(lineCode.code)}</p>${lineCode.linkUrl?`<a class="proto-primary proto-line-open" href="${escapeHtml(lineCode.linkUrl)}" target="_blank" rel="noopener">開啟 LINE 傳送綁定碼</a>`:''}${lineCode.addFriendUrl?`<p class="proto-signature"><a class="proto-link" href="${escapeHtml(lineCode.addFriendUrl)}" target="_blank" rel="noopener">先加${lineCode.botName?`「${escapeHtml(lineCode.botName)}」`:''}好友</a></p>`:''}</div></div><p class="proto-signature" role="status">等待 LINE 傳來綁定碼…<button class="proto-link" id="lineCancel">取消</button></p>`;
+  }
+  return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>用 LINE 收通知</strong><small>綁定後條件成立會傳到 LINE，手機關掉網頁也收得到</small></span></div><button class="proto-primary" id="lineLink">綁定 LINE</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
+}
+function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();}
+async function refreshLine(){
+  try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){lineCode=null;stopLinePoll();}if(changed)drawLineBox();}
+  catch{/* LINE box stays as it was */}
+}
+function stopLinePoll(){clearInterval(lineTimer);lineTimer=null;}
+function bindLineBox(){
+  const box=root.querySelector('#lineBox');if(!box)return;
+  const message=(text)=>{const target=box.querySelector('#lineMsg');if(target)target.textContent=text;};
+  box.querySelector('#lineLink')?.addEventListener('click',async(event)=>{
+    const button=event.currentTarget;button.disabled=true;button.textContent='產生綁定碼…';
+    try{lineCode=await api('/api/line/link-code',{});drawLineBox();stopLinePoll();lineTimer=setInterval(()=>{if(!root.querySelector('#lineBox')||!lineCode||Date.parse(lineCode.expiresAt)<=Date.now()){stopLinePoll();lineCode=null;drawLineBox();return;}refreshLine();},5000);}
+    catch(error){button.disabled=false;button.textContent='綁定 LINE';message(error.code==='LINE_NOT_CONFIGURED'?'LINE 通知尚未開放。':errorText(error));}
+  });
+  box.querySelector('#lineCancel')?.addEventListener('click',()=>{lineCode=null;stopLinePoll();drawLineBox();});
+  box.querySelector('#lineTest')?.addEventListener('click',async(event)=>{const button=event.currentTarget;button.disabled=true;try{const result=await api('/api/line/test',{});message(result.sent?'已傳送，請看 LINE。':'找不到綁定的帳號，請重新綁定。');}catch(error){message('傳送失敗，請稍後再試。');}button.disabled=false;});
+  box.querySelector('#lineUnlink')?.addEventListener('click',async(event)=>{const button=event.currentTarget;button.disabled=true;try{const result=await api('/api/line/unlink',{});lineStatus=result.status;drawLineBox();}catch(error){button.disabled=false;message('解除失敗，請稍後再試。');}});
+}
+
 function alertStatus(error){const target=root.querySelector('#dashboard');target?.insertAdjacentHTML('afterbegin',`<p class="proto-error" role="alert">${escapeHtml(errorText(error))}</p>`);}
 
 // validate → show → ack handshake: the server decides whether a pending notification may still be delivered.
@@ -992,6 +1028,9 @@ function renderMonitorHistory(target){
 }
 function notificationBadge(notification){
   if(!notification)return'';
+  const line=notification.line==='sent'?'・<span class="proto-note ok">LINE 已通知</span>':notification.line==='failed'?'・<span class="proto-note bad">LINE 送出失敗</span>':'';
+  if(line&&notification.status==='pending')return line;
+  if(line)return(notification.status==='sent'?'・<span class="proto-note ok">已通知</span>':'')+line;
   if(notification.status==='sent')return'・<span class="proto-note ok">已通知</span>';
   if(notification.status==='failed')return`・<span class="proto-note bad">通知失敗</span> <button class="proto-link" data-retry="${escapeHtml(notification.id)}">重送</button>`;
   if(notification.status==='suppressed')return'・<span class="proto-note">未通知（條件已變更）</span>';
