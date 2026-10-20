@@ -392,3 +392,4 @@
 .proto-gate { display:grid; gap:.75rem; }
 .proto-gate .proto-line[data-recover], .proto-gate .proto-full { margin:0; }
 .proto-primary.proto-line-cta { border-color:#06c755; background:#06c755; }
+.proto-gate > .proto-line-login { border-color:#06c755; background:#06c755; display:flex; align-items:center; justify-content:center; gap:.55rem; }

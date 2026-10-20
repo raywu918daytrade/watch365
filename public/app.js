@@ -101,18 +101,22 @@ async function home(){
     target.querySelector('#discardEdit')?.addEventListener('click',()=>{resetDraft();render();});
   }catch{target.innerHTML='';}
 }
-// Who is this (owner decision 2026-10-20, no account system): until this browser is logged in with LINE, home first asks
-// one thing with two equal buttons, 看我的監控 (log in with LINE; the monitor of that LINE account shows) or 直接開始 (a new
-// customer sets up and logs in with LINE when creating the monitor). A draft in progress, or 直接開始 earlier in this
-// tab, skips it. Returns true while the question is showing.
+// Every visit starts here (owner decision 2026-10-20, no account system): two equal buttons, 用 LINE 看我的監控 (a browser
+// already logged in with LINE goes straight to 我的監控; otherwise LINE login first, and that LINE account's monitor shows)
+// or 直接開始 (a new customer sets up and logs in with LINE when creating the monitor). Answered once per page load.
+// Returns true while the question is showing.
+let gatePassed=false;
 async function drawGate(target){
-  if(state.purpose)return false;
-  try{if(sessionStorage.getItem('w365-start')==='1')return false;}catch{}
+  if(gatePassed)return false;
   try{lineStatus=await api('/api/line/status');}catch{return false;}
-  if(node()!=='home'||!lineStatus.enabled||lineStatus.linked?.length)return false;
+  if(node()!=='home'||!lineStatus.enabled)return false;
   const page=target.closest('.proto-frame');if(!page)return false;page.classList.add('proto-gated');
-  target.innerHTML='<div class="proto-gate"><div id="lineBox" class="proto-line" data-recover="1"></div><button class="proto-primary proto-full" id="startNow">直接開始</button></div>';drawLineBox();
-  target.querySelector('#startNow').addEventListener('click',()=>{try{sessionStorage.setItem('w365-start','1');}catch{}stopLinePoll();lineCode=null;page.classList.remove('proto-gated');render();});
+  const pass=(next)=>{gatePassed=true;lineLinked=null;stopLinePoll();lineCode=null;page.classList.remove('proto-gated');next();};
+  const mine=lineStatus.linked?.length?'<button class="proto-primary proto-line-login proto-full" id="gateMine"><span class="proto-line-logo" aria-hidden="true">LINE</span>用 LINE 看我的監控</button>':'<div id="lineBox" class="proto-line" data-recover="1"></div>';
+  target.innerHTML=`<div class="proto-gate">${mine}<button class="proto-primary proto-full" id="startNow">直接開始</button></div>`;
+  if(!lineStatus.linked?.length){drawLineBox();lineLinked=()=>pass(()=>go('dashboard'));}
+  target.querySelector('#gateMine')?.addEventListener('click',()=>pass(()=>go('dashboard')));
+  target.querySelector('#startNow').addEventListener('click',()=>pass(render));
   return true;
 }
 // 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
