@@ -85,6 +85,8 @@ async function home(){
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
   const target=root.querySelector('#homeMonitor');
   if(await drawGate(target))return;
+  // 直接開始 means a new setup: the start options only, without the current monitor card above them.
+  if(freshStart){target.innerHTML='';return;}
   try{
     const data=await api('/api/state');if(node()!=='home')return;
     const settings=data.settings||{};
@@ -105,7 +107,7 @@ async function home(){
 // already logged in with LINE goes straight to 我的監控; otherwise LINE login first, and that LINE account's monitor shows)
 // or 直接開始 (a new customer sets up and logs in with LINE when creating the monitor). Answered once per page load.
 // Returns true while the question is showing.
-let gatePassed=false;
+let gatePassed=false,freshStart=false;
 async function drawGate(target){
   if(gatePassed)return false;
   try{lineStatus=await api('/api/line/status');}catch{return false;}
@@ -115,8 +117,8 @@ async function drawGate(target){
   const mine=lineStatus.linked?.length?'<button class="proto-primary proto-line-login proto-full" id="gateMine"><span class="proto-line-logo" aria-hidden="true">LINE</span>用 LINE 看我的監控</button>':'<div id="lineBox" class="proto-line" data-recover="1"></div>';
   target.innerHTML=`<div class="proto-gate">${mine}<button class="proto-primary proto-full" id="startNow">直接開始</button></div>`;
   if(!lineStatus.linked?.length){drawLineBox();lineLinked=()=>pass(()=>go('dashboard'));}
-  target.querySelector('#gateMine')?.addEventListener('click',()=>pass(()=>go('dashboard')));
-  target.querySelector('#startNow').addEventListener('click',()=>pass(render));
+  target.querySelector('#gateMine')?.addEventListener('click',()=>pass(()=>{freshStart=false;go('dashboard');}));
+  target.querySelector('#startNow').addEventListener('click',()=>pass(()=>{freshStart=true;render();}));
   return true;
 }
 // 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
@@ -977,7 +979,7 @@ function confirmPage(){
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
     const settings=data.settings||{};if(node()!=='confirm'||!settings.monitorTask?.onboardingCompleted)return;
-    root.querySelector('#replaceNotice').innerHTML=`<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>你一次只會有一組監控。建立後會<strong>取代</strong>${settings.enabled?'正在運作的':'目前暫停的'}「${escapeHtml(monitorConditionText(settings))}」（${escapeHtml(monitorScopeText(settings))}）。</span></p>`;
+    root.querySelector('#replaceNotice').innerHTML=`<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>會<strong>取代</strong>你原本的「${escapeHtml(monitorConditionText(settings))}」</span></p>`;
     button.dataset.replace='1';if(!button.disabled)button.textContent=label();root.querySelector('#createHint').textContent='舊的觸發紀錄會保留';
   }).catch(()=>{});
   const create=async()=>{
