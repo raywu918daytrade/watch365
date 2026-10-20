@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin.html
+
+Sitemap: https://watch365.just1stock.com/sitemap.xml
