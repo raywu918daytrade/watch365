@@ -72,7 +72,7 @@ function shell({step,title,lead,body,back}){
 function render(){const routes={home,stocks,daily:conditions,conditions,request,confirm:confirmPage,success,dashboard};(routes[node()]||home)();}
 
 async function home(){
-  const draft=state.purpose?`<div class="proto-resume" id="draftCard"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.dailyFilters.length+state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'conditions'}">繼續草案</button></div></div>`:'';
+  const draft=state.purpose?`<div class="proto-resume" id="draftCard"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.dailyFilters.length+state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續草案</button></div></div>`:'';
   shell({title:'今天想怎麼盯？',lead:'選一個方式開始，條件成立時會即時通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><p class="proto-eyebrow proto-options-head" id="optionsHead" hidden>換一組監控（建立後會取代上面這組）</p><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div>${draft}`});
   root.querySelectorAll('[data-purpose]').forEach((button)=>button.addEventListener('click',()=>{const purpose=button.dataset.purpose;if(purpose!==state.purpose){state.purpose=purpose;state.watchlist=[];}save();go(purpose==='watchlist'?'stocks':'daily');}));
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
@@ -86,7 +86,7 @@ async function home(){
     // Only one monitor runs at a time (owner report 2026-10: a separate draft card read like a second monitor), so an
     // unfinished draft is shown inside this card as the replacement being set up, and the start options say they replace it.
     root.querySelector('#draftCard')?.remove();root.querySelector('#optionsHead').hidden=false;
-    const editing=state.purpose?`<div class="proto-notice proto-notice-compact proto-editing" role="note"><span aria-hidden="true">i</span><span><strong>正在設定新的條件</strong>（${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔・`:''}${state.dailyFilters.length+state.filters.length} 個過濾），建立後會取代這組；${settings.enabled?'在那之前這組照常監控':'這組目前維持暫停'}。<span class="proto-inline-actions"><button class="proto-link" id="discardEdit">放棄修改</button><button class="proto-link" data-resume="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'conditions'}">繼續設定</button></span></span></div>`:'';
+    const editing=state.purpose?`<div class="proto-notice proto-notice-compact proto-editing" role="note"><span aria-hidden="true">i</span><span><strong>正在設定新的條件</strong>（${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔・`:''}${state.dailyFilters.length+state.filters.length} 個過濾），建立後會取代這組；${settings.enabled?'在那之前這組照常監控':'這組目前維持暫停'}。<span class="proto-inline-actions"><button class="proto-link" id="discardEdit">放棄修改</button><button class="proto-link" data-resume="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續設定</button></span></span></div>`:'';
     target.innerHTML=`<article class="proto-monitor proto-home-monitor"><header><span><small class="proto-eyebrow">我的監控</small><strong>${escapeHtml(monitorConditionText(settings))}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}</p>${editing}<div class="proto-today"><strong>${todayCount(homeSignals,today)}</strong><span>今日觸發</span>${today.length?`<small>${todayBreakdown(today,3)}・最新 ${formatClock(today[0].triggeredAt)}</small>`:''}</div><button class="proto-primary" data-go="dashboard">查看我的監控</button></article>`;
     target.querySelector('[data-go]').addEventListener('click',()=>go('dashboard'));
     target.querySelector('[data-resume]')?.addEventListener('click',(event)=>go(event.currentTarget.dataset.resume));
@@ -294,8 +294,8 @@ function conditions(){
   const daily=isDaily(),scopeBack=state.purpose==='watchlist'?'stocks':'home';
   const dailyNote=!daily&&state.dailyFilters.length?`只在日 K 篩出的股票上判斷（${state.dailyFilters.map((filter)=>escapeHtml(filter.label)).join(' 且 ')}，以前一天收盤為準）。`:'';
   const title=daily?'先用日 K 篩股票？':'盤中什麼時候通知？';
-  const lead=daily?'用日 K 指標先篩出股票，最多 3 個。只選日 K 不選盤中條件，會在每個交易日 13:00 通知一次，收盤前還來得及下單。不需要可以直接跳過。':`${dailyNote}從清單選一分鐘 K 指標，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。${state.dailyFilters.length?'不需要盤中條件可以跳過，改成 13:00 通知。':''}`;
-  shell({step:node(),title,lead,back:daily?scopeBack:'daily',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label>${daily?'':'<p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p>'}<div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span><button id="confirmConditions" class="proto-primary">下一步</button></div>`});
+  const lead=daily?'用日 K 指標篩出股票，最多 3 個，每個交易日 13:00 通知一次，收盤前還來得及下單。盤中觸發（一分鐘 K）即將推出。':`${dailyNote}從清單選一分鐘 K 指標，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。${state.dailyFilters.length?'不需要盤中條件可以跳過，改成 13:00 通知。':''}`;
+  shell({step:node(),title,lead,back:daily?scopeBack:'daily',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label>${daily?'':'<p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p>'}<div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span>${daily?'<button class="proto-secondary proto-soon-button" disabled aria-disabled="true" title="盤中觸發即將推出">盤中觸發<span class="proto-soon-tag">即將推出</span></button>':''}<button id="confirmConditions" class="proto-primary">下一步</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
   // Typing again drops a first-turn AI card for other text, so the list comes back.
@@ -305,7 +305,7 @@ function conditions(){
     if(event.key==='Enter'){event.preventDefault();if(value.length>=2&&!templateRows.length&&!daily)startAi(value);else root.querySelector('#templatePanel [data-add]:not(:disabled)')?.focus();}
     if(event.key==='Escape'&&value){search.value='';state.requestText='';save();drawTemplates();}
   });
-  root.querySelector('#confirmConditions').addEventListener('click',()=>{if(daily){if(!legacyFilters().length)go('conditions');return;}if(!hasAnyStep())return;go('confirm');});
+  root.querySelector('#confirmConditions').addEventListener('click',()=>{if(daily){if(state.dailyFilters.length&&!legacyFilters().length)go('confirm');return;}if(!hasAnyStep())return;go('confirm');});
   if(daily)state.ai=null;
   drawAi();drawTemplates();drawHistory();
   loadTemplates().then(()=>{if(!['conditions','daily'].includes(node()))return;if(resolveLegacy())drawFilters();drawTemplates();scheduleIndex();});
@@ -321,7 +321,8 @@ function startAi(value){
 }
 function drawSticky(){
   const text=root.querySelector('#stickyText'),button=root.querySelector('#confirmConditions');if(!text||!button)return;
-  if(isDaily()){text.textContent=state.dailyFilters.length?`${state.dailyFilters.length}/${MAX_FILTERS} 個日 K 過濾`:'可以跳過，只用盤中條件';button.textContent=state.dailyFilters.length?'下一步：盤中觸發':'跳過日 K';button.disabled=false;return;}
+  // 盤中觸發 (M1) is labeled 即將推出 for now (owner decision 2026-10-20), so the daily step goes straight to confirm.
+  if(isDaily()){text.textContent=state.dailyFilters.length?`${state.dailyFilters.length}/${MAX_FILTERS} 個日 K 過濾・13:00 通知`:'先選至少一個日 K 過濾';button.textContent='下一步：確認';button.disabled=!state.dailyFilters.length;return;}
   const dailyOnly=!state.filters.length&&state.dailyFilters.length>0;
   text.textContent=legacyFilters().length?'有舊版條件，請先移除':historyBusy?'回查中…可先下一步':dailyOnly?'不選盤中條件：13:00 通知':`${state.filters.length}/${MAX_FILTERS} 個過濾`;
   button.textContent=dailyOnly?'跳過，13:00 通知':'下一步：確認';
