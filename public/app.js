@@ -61,13 +61,16 @@ async function api(url,body){
 }
 
 // The request form is a side branch off 條件, not a required step, so it doesn't show in the progress bar.
-function phaseFor(step){return{stocks:1,daily:2,conditions:3,confirm:4}[step]||0;}
+// While 盤中觸發 is 即將推出 the bar shows three steps, so nobody waits for a step that never comes.
+const STEPS=M1_ENABLED?[['stocks','選範圍'],['daily','日 K 篩選'],['conditions','盤中觸發'],['confirm','確認']]:[['stocks','選範圍'],['daily','日 K 篩選'],['confirm','確認']];
+function phaseFor(step){return STEPS.findIndex(([key])=>key===step)+1;}
 let lastShellNode=null;
 function shell({step,title,lead,body,back}){
   clearInterval(pollTimer);
-  const phase=phaseFor(step),labels=['選範圍','日 K 篩選','盤中觸發','確認'];
-  const progress=phase?`<div class="proto-progress"><span>${phase}/4 ${labels[phase-1]}</span><div class="proto-progress-line"><i style="width:${phase/4*100}%"></i></div><span>${labels.join(' → ')}</span></div>`:'';
-  root.innerHTML=`<section class="proto-frame">${progress}${back?`<button class="proto-back" data-go="${back}">← 返回修改</button>`:''}<p class="proto-eyebrow">${phase?`階段 ${phase}・${labels[phase-1]}`:'幫你盯盤'}</p><h1 tabindex="-1">${title}</h1>${lead?`<p class="proto-lead">${lead}</p>`:''}${body}</section>`;
+  // One stepper instead of a bar + a step list + a 階段 eyebrow saying the same thing (UI review 2026-10-20).
+  const phase=phaseFor(step);
+  const progress=phase?`<ol class="proto-steps" aria-label="進度：第 ${phase} 步，共 ${STEPS.length} 步">${STEPS.map(([,label],index)=>`<li class="${index+1<phase?'done':index+1===phase?'current':''}" ${index+1===phase?'aria-current="step"':''}><i aria-hidden="true">${index+1<phase?'✓':index+1}</i><span>${label}</span></li>`).join('')}</ol>`:'';
+  root.innerHTML=`<section class="proto-frame">${progress}${back?`<button class="proto-back" data-go="${back}">← 返回修改</button>`:''}<h1 tabindex="-1">${title}</h1>${lead?`<p class="proto-lead">${lead}</p>`:''}${body}</section>`;
   root.querySelectorAll('[data-go]').forEach((button)=>button.addEventListener('click',()=>go(button.dataset.go)));
   // Move focus to the new page heading on navigation (not on in-page re-renders) so screen readers announce it.
   const current=node();if(lastShellNode!==null&&lastShellNode!==current)root.querySelector('h1')?.focus({preventScroll:true});lastShellNode=current;
@@ -76,7 +79,7 @@ function render(){if(!M1_ENABLED&&node()==='conditions')return go('daily');const
 
 async function home(){
   const draft=state.purpose?`<div class="proto-resume" id="draftCard"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.dailyFilters.length+state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續草案</button></div></div>`:'';
-  shell({title:'今天想怎麼盯？',lead:'選一個方式開始，條件成立時會即時通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><p class="proto-eyebrow proto-options-head" id="optionsHead" hidden>換一組監控（建立後會取代上面這組）</p><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div>${draft}`});
+  shell({title:'今天想怎麼盯？',lead:M1_ENABLED?'選一個方式開始，條件成立時會即時通知你。':'選一個方式開始，每個交易日 13:00 條件成立就通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><p class="proto-eyebrow proto-options-head" id="optionsHead" hidden>換一組監控（建立後會取代上面這組）</p><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div>${draft}`});
   root.querySelectorAll('[data-purpose]').forEach((button)=>button.addEventListener('click',()=>{const purpose=button.dataset.purpose;if(purpose!==state.purpose){state.purpose=purpose;state.watchlist=[];}save();go(purpose==='watchlist'?'stocks':'daily');}));
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
   const target=root.querySelector('#homeMonitor');
@@ -437,7 +440,7 @@ function drawTemplates(){
   if(!value&&(!tabs.includes(openFamily)||(!familyPicked&&base)))openFamily=tabs[0]||null;
   const tab=value?null:openFamily;
   let rows=value?templateRows:tab===RANK_TAB?templateRows:groups.get(tab)||[];
-  let body;
+  let body,noneLeft=false;
   if(tab===PATTERN_FAMILY)body=`<p class="proto-signature proto-soon-note">以日線型態篩出今天帶型態的股票。資料接上後開放。</p><div class="proto-preset-list">${patterns.map((name)=>`<div class="proto-preset soon"><span class="proto-preset-text"><strong>${escapeHtml(name)}</strong></span><button type="button" class="proto-add" disabled title="資料接上後開放">即將推出</button></div>`).join('')}</div>`;
   else if(base){
     const items=rows.filter((row)=>!hasSpec(row.spec)).map((row)=>({row,count:base.data.counts.get(specKey(row.spec))})).filter((item)=>item.count);
@@ -445,8 +448,8 @@ function drawTemplates(){
     const live=items.filter((item)=>item.count.triggeredSymbols>0),zero=items.filter((item)=>!item.count.triggeredSymbols);
     const line=(item)=>rankLine(item,base);
     if(tab===RANK_TAB){
-      const shown=rankAll?live:live.slice(0,RANK_TOP);
-      body=`<div class="proto-rank-list">${shown.map(line).join('')||'<div class="proto-status"><p>加入任何一個都會變成 0 檔。</p></div>'}</div>${live.length>shown.length?`<button type="button" class="proto-link proto-rank-more" data-rank-all>顯示全部 ${live.length} 個</button>`:''}${zero.length?`<p class="proto-signature proto-rank-zero-note">另有 ${zero.length} 個加入後 0 檔，未列出</p>`:''}`;
+      const shown=rankAll?live:live.slice(0,RANK_TOP);noneLeft=!live.length;
+      body=`<div class="proto-rank-list">${shown.map(line).join('')||`<div class="proto-status"><strong>再加任何一個都會變成 0 檔</strong><p>${isDaily()?'目前的組合已經夠嚴格，可以直接按「下一步：確認」；想換條件，先移除上面一個過濾。':'目前的組合已經夠嚴格，可以直接下一步；想換條件，先移除上面一個過濾。'}</p></div>`}</div>${live.length>shown.length?`<button type="button" class="proto-link proto-rank-more" data-rank-all>顯示全部 ${live.length} 個</button>`:''}${zero.length?`<p class="proto-signature proto-rank-zero-note">另有 ${zero.length} 個加入後 0 檔，未列出</p>`:''}`;
     }else{
       // Rows already picked stay in their category, marked 已加入, so they don't look like they vanished (owner report 2026-10).
       const added=rows.filter((row)=>hasSpec(row.spec)).map(presetLine(full,block)).join('');
@@ -456,7 +459,7 @@ function drawTemplates(){
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
   // The combination's own count and 7-day stat are shown once, under the selected filters (owner: too much text, 2026-10-20).
-  const head=base?'<p class="proto-signature proto-rank-base">長條＝加入後還剩幾檔</p>':'';
+  const head=base&&!noneLeft?'<p class="proto-signature proto-rank-base">長條＝加入後還剩幾檔</p>':'';
   const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
   const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
@@ -733,7 +736,7 @@ function drawExample(){
   if(exampleData.loading){target.innerHTML=`${head}<div class="proto-skeleton" aria-hidden="true"></div><p class="proto-signature">找一段所有過濾都成立的 K 線…</p>`;return;}
   if(exampleData.error){target.innerHTML=`${head}<p class="proto-signature">範例暫時無法顯示：${escapeHtml(exampleData.error)}</p>`;return;}
   const example=exampleData.example;
-  if(!example){target.innerHTML=`${head}<div class="proto-status"><strong>找不到範例</strong><p>歷史資料裡沒有股票同時符合這${F().length>1?'幾個':'個'}過濾。</p></div>`;return;}
+  if(!example){target.innerHTML=`${head}<p class="proto-signature proto-example-none">這${F().length>1?'組過濾歷史上很少同時成立':'個過濾歷史上很少成立'}，暫時沒有範例圖。</p>`;return;}
   target.innerHTML=`${head}${exampleSvg(example)}<p class="proto-signature">${example.timeframe==='d1'?'日 K ':'一分鐘 K '}範例・▲ 為所有過濾都成立${isDaily()?'的日子':'、會通知的時間點'}・非投資建議</p>`;
 }
 const EXAMPLE_COLORS=['#2f6fbf','#c47f12','#7a4bb3','#1c8a8a'];
