@@ -128,8 +128,9 @@ export class LineNotifier {
   async onText(userId, text, replyToken) {
     const code = String(text || '').replace(/\s+/g, '').match(/^(?:綁定碼?[:：]?)?(\d{6})$/)?.[1];
     if (!code) {
-      const linked = this.users().some((user) => user.userId === userId);
-      await this.reply(replyToken, linked ? '已綁定 watch365，條件成立時會在這裡通知你。要解除請到網站「我的監控」按「解除綁定」，或封鎖這個帳號。' : '請傳網站「我的監控 → 綁定 LINE」顯示的 6 位數綁定碼。');
+      // Replies are free (Reply API, not counted in the monthly quota), but a linked account gets no reply to chit-chat.
+      if (this.users().some((user) => user.userId === userId)) return;
+      await this.reply(replyToken, '請傳網站「我的監控 → 綁定 LINE」顯示的 6 位數綁定碼。');
       return;
     }
     const entry = this.codes.get(code);
