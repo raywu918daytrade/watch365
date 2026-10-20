@@ -1,11 +1,13 @@
 // Optional MySQL-compatible document backend (TiDB Cloud in production).
 // When DB_HOST is unset the app keeps using the local JSON files, so local dev needs no database.
+// STORAGE=files forces the JSON files even with DB_HOST set (production on a Railway volume since 2026-10-20, after
+// the TiDB free quota ran out; the DB_* settings are kept so the database can be switched back on).
 // Each store (monitor state, indicator requests) is one JSON document keyed by name.
 
 const TABLE = 'watch365_documents';
 
 export function dbConfigFromEnv(env = process.env) {
-  if (!env.DB_HOST) return null;
+  if (!env.DB_HOST || env.STORAGE === 'files') return null;
   return {
     host: env.DB_HOST,
     port: Number(env.DB_PORT || 4000),
