@@ -87,7 +87,7 @@ async function home(){
   try{
     const data=await api('/api/state');if(node()!=='home')return;
     const settings=data.settings||{};
-    if(!settings.monitorTask?.onboardingCompleted){target.innerHTML='';return;}
+    if(!settings.monitorTask?.onboardingCompleted){target.innerHTML='';drawRecover(target);return;}
     const {current:homeSignals}=monitorSignals(settings,data.signals||[]);
     const today=homeSignals.filter((signal)=>isToday(signal.triggeredAt));
     // Only one monitor runs at a time (owner report 2026-10: a separate draft card read like a second monitor), so an
@@ -99,6 +99,13 @@ async function home(){
     target.querySelector('[data-resume]')?.addEventListener('click',(event)=>go(event.currentTarget.dataset.resume));
     target.querySelector('#discardEdit')?.addEventListener('click',()=>{resetDraft();render();});
   }catch{target.innerHTML='';}
+}
+// No login (owner decision 2026-10-20): a new phone or browser has no monitor until LINE says who it is, so home offers
+// to link the LINE account used before, which brings that monitor back (server: src/monitors.js join).
+async function drawRecover(target){
+  try{lineStatus=await api('/api/line/status');}catch{return;}
+  if(node()!=='home'||!lineStatus.enabled||lineStatus.linked?.length)return;
+  target.innerHTML='<div id="lineBox" class="proto-line" data-recover="1"></div>';drawLineBox();
 }
 // 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
 // into the daily step. Each is named by its list labels and skipped when the list doesn't have every one of them.
@@ -955,7 +962,7 @@ function confirmPage(){
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
     const settings=data.settings||{};if(node()!=='confirm'||!settings.monitorTask?.onboardingCompleted)return;
-    root.querySelector('#replaceNotice').innerHTML=`<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>系統一次只跑一組監控。建立後會<strong>取代</strong>${settings.enabled?'正在運作的':'目前暫停的'}「${escapeHtml(monitorConditionText(settings))}」（${escapeHtml(monitorScopeText(settings))}）。</span></p>`;
+    root.querySelector('#replaceNotice').innerHTML=`<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>你一次只會有一組監控。建立後會<strong>取代</strong>${settings.enabled?'正在運作的':'目前暫停的'}「${escapeHtml(monitorConditionText(settings))}」（${escapeHtml(monitorScopeText(settings))}）。</span></p>`;
     button.dataset.replace='1';if(!button.disabled)button.textContent=label();root.querySelector('#createHint').textContent='舊的觸發紀錄會保留';
   }).catch(()=>{});
   button.addEventListener('click',async()=>{
@@ -1029,7 +1036,7 @@ function drawDashboard(data,{force=false}={}){
   bindLineBox();refreshLine();
   target.querySelector('#newMonitor').addEventListener('click',()=>{
     const box=target.querySelector('#resetConfirm');
-    box.innerHTML='<div class="proto-notice" role="alert"><span aria-hidden="true">!</span><span>系統一次只跑一組監控，新設定建立後才會取代目前這組（在那之前照常監控）。<span class="proto-inline-actions"><button class="proto-link" id="resetCancel">取消</button><button class="proto-secondary" id="resetGo">開始重新設定</button></span></span></div>';
+    box.innerHTML='<div class="proto-notice" role="alert"><span aria-hidden="true">!</span><span>你一次只會有一組監控，新設定建立後才會取代目前這組（在那之前照常監控）。<span class="proto-inline-actions"><button class="proto-link" id="resetCancel">取消</button><button class="proto-secondary" id="resetGo">開始重新設定</button></span></span></div>';
     box.querySelector('#resetGo').addEventListener('click',()=>{resetDraft();state.purpose=settings.scopeMode==='universe'?'screen':'watchlist';state.selected=(settings.watchlist||[]).map(({symbol,name})=>({symbol,name:name||''}));save();go(state.purpose==='watchlist'?'stocks':'daily');});
     box.querySelector('#resetCancel').addEventListener('click',()=>{box.innerHTML='';target.querySelector('#newMonitor').focus();});
     box.querySelector('#resetGo').focus();
@@ -1053,11 +1060,12 @@ function lineBoxHtml(){
     const steps=lineCode.linkUrl?(mobile?'按下面的按鈕開啟 LINE，送出已填好的綁定碼。若還沒加好友，LINE 會先請你加入。':'用手機 LINE 掃描 QR code，送出已填好的綁定碼。若還沒加好友，LINE 會先請你加入。'):`在 LINE 加入官方帳號${lineCode.basicId?` ${escapeHtml(lineCode.basicId)}`:''} 為好友，再傳送下面的綁定碼。`;
     return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>綁定 LINE</strong><small>${steps}</small></span></div><div class="proto-line-code">${mobile&&lineCode.linkUrl?'':`<div class="proto-line-qr">${lineCode.qrSvg}</div>`}<div><p class="proto-eyebrow">綁定碼（10 分鐘內有效）</p><p class="proto-line-digits">${escapeHtml(lineCode.code)}</p>${lineCode.linkUrl?`<a class="proto-primary proto-line-open" href="${escapeHtml(lineCode.linkUrl)}" target="_blank" rel="noopener">開啟 LINE 傳送綁定碼</a>`:''}${lineCode.addFriendUrl?`<p class="proto-signature"><a class="proto-link" href="${escapeHtml(lineCode.addFriendUrl)}" target="_blank" rel="noopener">先加${lineCode.botName?`「${escapeHtml(lineCode.botName)}」`:''}好友</a></p>`:''}</div></div><p class="proto-signature" role="status">等待 LINE 傳來綁定碼…<button class="proto-link" id="lineCancel">取消</button></p>`;
   }
-  return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>用 LINE 收通知</strong><small>綁定後條件成立會傳到 LINE，手機關掉網頁也收得到</small></span></div><button class="proto-primary" id="lineLink">綁定 LINE</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
+  if(root.querySelector('#lineBox')?.dataset.recover)return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>換了手機或瀏覽器？</strong><small>用之前綁定的 LINE 再綁一次，就會找回你設定的監控，不用註冊帳號</small></span></div><button class="proto-secondary" id="lineLink">用 LINE 找回監控</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
+  return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>用 LINE 收通知</strong><small>綁定後條件成立會傳到 LINE，手機關掉網頁也收得到；換手機時用同一個 LINE 再綁一次就能找回監控</small></span></div><button class="proto-primary" id="lineLink">綁定 LINE</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
 }
 function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();root.querySelector('#notifyRow')?.toggleAttribute('hidden',Boolean(lineStatus?.linked?.length));}
 async function refreshLine(){
-  try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){lineCode=null;stopLinePoll();}if(changed)drawLineBox();}
+  try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){lineCode=null;stopLinePoll();if(root.querySelector('#lineBox')?.dataset.recover)return render();}if(changed)drawLineBox();}
   catch{/* LINE box stays as it was */}
 }
 function stopLinePoll(){clearInterval(lineTimer);lineTimer=null;}

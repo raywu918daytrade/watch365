@@ -29,6 +29,7 @@ import { LineNotifier, verifySignature } from './line.js';
 import QRCode from 'qrcode';
 import { DataBackup } from './backup.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
+import { MonitorStores } from './monitors.js';
 import { formulaFingerprint, issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
 import { conditionsName, parseConditions, planConditionStrategy } from './monitorConditions.js';
@@ -62,7 +63,10 @@ const APP_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || nul
 
 const documentBackend = await createDocumentBackend(dbConfigFromEnv());
 console.log(documentBackend ? `Storage: database ${documentBackend.label}` : `Storage: local files under ${join(ROOT, 'data')}`);
-const store = new JsonStore(DATA_FILE, { backend: documentBackend, key: 'state' });
+// Shared state: LINE accounts and which browsers belong to the same person (state.accounts). Each person's monitor is its
+// own store under data/monitors/ (src/monitors.js).
+const sharedStore = new JsonStore(DATA_FILE, { backend: documentBackend, key: 'state' });
+const monitors = new MonitorStores({ dir: join(dirname(DATA_FILE), 'monitors'), shared: sharedStore, backend: documentBackend });
 const indicatorRequests = new IndicatorRequestStore(INDICATOR_REQUESTS_FILE, { backend: documentBackend, key: 'indicator-requests' });
 // Formula library: DB tables when DB_HOST is set, otherwise data/formula-library.json. Seeded from FORMULA_RECIPES on boot.
 const formulaLibrary = new FormulaLibrary(FORMULA_LIBRARY_FILE, { backend: await createFormulaLibraryBackend(dbConfigFromEnv()) });
@@ -72,19 +76,20 @@ const unknownIndicators = new UnknownIndicatorStore(UNKNOWN_INDICATORS_FILE, { b
 const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createConditionStateBackend(dbConfigFromEnv()) : null });
 const ruleStates = new RuleStateStore(RULE_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createRuleStateBackend(dbConfigFromEnv()) : null });
 // LINE Messaging API notifications (src/line.js); off until LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN are set.
-const line = new LineNotifier({ store });
+const line = new LineNotifier({ store: sharedStore, ownerOf: (visitor) => monitors.ownerOf(visitor), onLinked: ({ visitor, earlierVisitor }) => joinBrowsers(visitor, earlierVisitor) });
 // Daily copy of the data folder to a private HF dataset (src/backup.js); off until HF_BACKUP_REPO is set.
 const dataBackup = new DataBackup({ dir: dirname(DATA_FILE) });
 setInterval(() => { dataBackup.tick().catch(() => {}); }, 10 * 60 * 1000).unref();
-const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0; return state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, secret: formulaTokenSecret });
+const adminApi = createAdminApi({ events, store: sharedStore, monitorSummary, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => monitors.all().reduce((sum, [, store]) => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return sum + (state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0); return sum + state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, 0), secret: formulaTokenSecret });
 // 7-day condition index in a long-lived worker (src/historyIndexWorker.js). HISTORY_INDEX=off disables it.
 const HISTORY_INDEX_ENABLED = process.env.HISTORY_INDEX !== 'off';
 const MAX_INDEX_FILTERS = 3;
 // Fingerprints that passed the 7-day vet in this process (POST /api/formula/save requires it).
 const vettedFormulas = new Set();
 const historyIndex = new HistoryIndexClient({ getSymbols: async () => (await getUniverseWatchlist()).map((item) => item.symbol), heapMb: Number(process.env.HISTORY_INDEX_HEAP_MB || 640) });
-let monitorTimer = null;
 let isRunning = false;
+const MONITOR_INTERVAL_MS = 60 * 1000;
+const MONITOR_KEYS = ['settings', 'runtime', 'positions', 'sessions', 'indicatorSessions', 'decisions', 'dedupe', 'quotes', 'signals', 'notifications', 'logs'];
 let universeCache = null;
 // History lookups read up to HISTORY_DAYS daily files each, so they run one at a time and results are cached briefly.
 const historyCache = new Map();
@@ -149,11 +154,15 @@ function historyJobView(job) {
   return { status: job.status, jobId: job.id, progress: job.progress, elapsedMs: Date.now() - job.startedAt };
 }
 
-await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
-{ const before = store.getState().signals.length; await store.update((state) => { dropEarlierSignals(state); }); const dropped = before - store.getState().signals.length; if (dropped) console.log(`Dropped ${dropped} trigger records of earlier monitor conditions`); }
+await Promise.all([sharedStore.load().then(() => monitors.load()),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
+await migrateGlobalMonitor();
+for (const [, store] of monitors.all()) { const before = store.getState().signals.length; await store.update((state) => { dropEarlierSignals(state); }); const dropped = before - store.getState().signals.length; if (dropped) console.log(`Dropped ${dropped} trigger records of earlier monitor conditions`); }
+console.log(`Monitors: ${monitors.all().length} stored, ${monitors.all().filter(([, store]) => store.getState().settings.enabled).length} enabled`);
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
 console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; LINE: ${line.enabled ? 'on' : 'off'}; backup: ${dataBackup.config.enabled ? dataBackup.config.repo : 'off'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
-syncMonitorTimer();
+// One scheduler for every person's monitor: each pass runs all enabled monitors (intraday ones share one data read and
+// one condition-layer run, see runMonitors).
+setInterval(() => { if (!isRunning) runMonitors(monitors.all().filter(([, store]) => store.getState().settings.enabled), 'scheduler').catch(console.error); }, MONITOR_INTERVAL_MS);
 // Start the index worker in the background and precompute every indicator-list row once.
 if (HISTORY_INDEX_ENABLED) historyIndex.start().then(() => historyIndex.ensure(libraryConditions())).then((result) => console.log(`history-index: ${result?.loading ? 'loading 7-day data' : `ready, ${result?.conditions} conditions`}`)).catch((error) => console.error('history-index: start failed', error.code || error.message));
 
@@ -186,6 +195,9 @@ async function routeApi(request, response) {
   const method = request.method || 'GET';
 
   const visitor = request.visitor ?? null;
+  // This person's monitor (src/monitors.js): browsers joined by LINE share one.
+  const owner = monitors.ownerOf(visitor);
+  const store = url.pathname.startsWith('/api/line/') ? null : monitors.get(owner);
   if (method === 'GET' && url.pathname === '/api/me') {
     const range = await events.visitorRange(visitor);
     sendJson(response, 200, { visitor, firstSeen: range?.firstSeen ?? null });
@@ -429,7 +441,7 @@ async function routeApi(request, response) {
       const strategy=validateFormulaStrategy({id:'formula.custom',version:payload.capabilityRevision,executor:'formula_v1',name:payload.name,timeframe:'1m',source:'db/m1_live/{tradingDate}.parquet',definitionFingerprint:payload.fingerprint,params:{},formula:{ast:payload.ast}},current?.definitionFingerprint===payload.fingerprint?current.activatedAt:new Date().toISOString());
       const watchlist=parseWatchlist(body.watchlist,{allowEmpty:true});
       await store.update((state)=>{const changed=strategyIdentity(state.settings.strategy)!==strategyIdentity(strategy);state.settings.watchlist=watchlist;state.settings.strategy=strategy;state.settings.daily=null;state.settings.formulaActivationId=payload.proposalId;state.settings.enabled=true;state.settings.provider='hf_dataset';state.settings.monitorTask={name:`${strategy.name}監控`,onboardingCompleted:true,completedAt:new Date().toISOString()};if(changed){revokePendingDeliveryAuthorizations(state);dropEarlierSignals(state);}appendLog(state,'info','套用並啟用公式監控',{formulaFingerprint:strategy.definitionFingerprint,symbols:watchlist.map((item)=>item.symbol)});});
-      syncMonitorTimer();await recordFormulaActivation(payload);sendJson(response,200,publicState(store.getState()));
+      syncMonitorTimer(store);await recordFormulaActivation(payload);sendJson(response,200,publicState(store.getState()));
     }catch(error){sendJson(response,error.statusCode||400,{error:error.code||'FORMULA_ACTIVATION_FAILED'});}return;
   }
 
@@ -602,7 +614,7 @@ async function routeApi(request, response) {
         symbols: state.settings.watchlist.map((item) => item.symbol)
       });
     });
-    syncMonitorTimer();
+    syncMonitorTimer(store);
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
@@ -639,12 +651,10 @@ async function routeApi(request, response) {
       state.settings.conditions = conditions;
       state.settings.enabled = true;
       state.settings.monitorTask = { name:`${taskName}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
-      // Who created the monitor (kept out of publicState): only that browser's LINE accounts get its triggers.
-      state.monitorOwner = { visitor };
       if (changed) { revokePendingDeliveryAuthorizations(state); dropEarlierSignals(state); }
       appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:taskName, symbols:watchlist.length });
     });
-    syncMonitorTimer();
+    syncMonitorTimer(store);
     if (formulaPayload) await recordFormulaActivation(formulaPayload);
     events.record('monitor_configure', { purpose, symbols: watchlist.length, strategyName: strategy.name, fingerprint: strategy.definitionFingerprint ?? null, label: strategy.name, formula: Boolean(formulaPayload) }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
@@ -656,7 +666,7 @@ async function routeApi(request, response) {
       state.settings.enabled = true;
       appendLog(state, 'info', '啟動監控');
     });
-    syncMonitorTimer();
+    syncMonitorTimer(store);
     events.record('monitor_start', { strategyName: store.getState().settings.strategy?.name ?? null }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
     return;
@@ -669,14 +679,14 @@ async function routeApi(request, response) {
       revokePendingDeliveryAuthorizations(state);
       appendLog(state, 'info', '停止監控');
     });
-    syncMonitorTimer();
+    syncMonitorTimer(store);
     events.record('monitor_stop', { strategyName: store.getState().settings.strategy?.name ?? null }, { visitor });
     sendJson(response, 200, publicState(store.getState()));
     return;
   }
 
   if (method === 'POST' && url.pathname === '/api/monitor/run') {
-    const result = await runMonitor('manual-run');
+    const result = await runMonitor(owner, store, 'manual-run');
     events.record('monitor_run', { skipped: Boolean(result.skipped), reason: result.reason ?? null, signals: result.signals?.length ?? 0, error: result.error ?? null }, { visitor });
     sendJson(response, 200, result);
     return;
@@ -833,7 +843,7 @@ function dailyCloseStrategy(daily, current) {
   return { strategy:{ id:'daily.close', version:'1', executor:'daily_close', name:daily.name, timeframe:'1d', source:'db/d1', definitionFingerprint:fingerprint, params:{}, activatedAt:current?.definitionFingerprint === fingerprint && current?.executor === 'daily_close' ? current.activatedAt : new Date().toISOString() }, conditions:[], name:daily.name };
 }
 // Today's daily list, cached per day in runtime (the previous close does not change during the day).
-async function dailyListToday(settings) {
+async function dailyListToday(store, settings) {
   const today = taipeiDate();
   const cached = store.getState().runtime.dailyList;
   if (cached?.day === today && cached.signature === dailySignature(settings.daily)) return cached;
@@ -846,19 +856,27 @@ async function dailyListToday(settings) {
 }
 // D1-only monitors: once per trading day at 13:00 Taipei, before the close so users can still order the same day. Today's
 // daily bar is built from the minute bars so far (the 13:00 price stands in for the close; volume covers 09:00-13:00 only)
-// and the stocks that newly meet the daily filters are notified.
+// and the stocks that newly meet the daily filters are notified. pass (from runMonitors) shares one index refresh and one
+// check per (filters, stocks) between the monitors of a pass, so many people with the same filters cost one check.
 const DAILY_CLOSE_AT_MINUTES = 13 * 60;
-async function runDailyClose(source) {
+async function runDailyClose(store, source, pass = {}) {
   const now = new Date(), settings = store.getState().settings, today = taipeiDate(now);
   const taipei = new Date(now.getTime() + 8 * 3_600_000), minutes = taipei.getUTCHours() * 60 + taipei.getUTCMinutes(), weekday = taipei.getUTCDay();
   const done = store.getState().runtime.dailyClose?.day === today;
   if (done || weekday === 0 || weekday === 6 || minutes < DAILY_CLOSE_AT_MINUTES || !HISTORY_INDEX_ENABLED) {
-    await store.update((state) => { state.runtime.lastRunAt = now.toISOString(); state.runtime.lastProviderStatus = done ? 'daily_done' : 'daily_wait'; state.runtime.lastError = null; });
+    // Waiting is the state of every D1 monitor most of the day: kept in memory only, so idle passes write no files.
+    Object.assign(store.getState().runtime, { lastRunAt:now.toISOString(), lastProviderStatus:done ? 'daily_done' : 'daily_wait', lastError:null });
     return { signals:[], skipped:true, reason:done ? 'daily_done' : 'daily_wait', state:publicState(store.getState()) };
   }
-  await historyIndex.refresh({ force:true }).catch(() => {});   // queued before the check in the worker
-  const result = await historyIndex.dailyClose({ conditions:settings.daily.filters.map(({ key, ast }) => ({ key, ast })), date:today, symbols:settings.watchlist.map((item) => item.symbol) }).catch((error) => ({ error:error.code || 'HISTORY_INDEX_FAILED' }));
+  pass.refreshed ??= historyIndex.refresh({ force:true }).catch(() => {});   // queued before the check in the worker
+  await pass.refreshed;
+  const conditions = settings.daily.filters.map(({ key, ast }) => ({ key, ast })), symbols = settings.watchlist.map((item) => item.symbol);
+  const checkKey = `${today}|${conditions.map((item) => item.key).sort().join(',')}|${[...symbols].sort().join(',')}`;
+  pass.dailyChecks ??= new Map();
+  if (!pass.dailyChecks.has(checkKey)) pass.dailyChecks.set(checkKey, historyIndex.dailyClose({ conditions, date:today, symbols }).catch((error) => ({ error:error.code || 'HISTORY_INDEX_FAILED' })));
+  const result = await pass.dailyChecks.get(checkKey);
   if (result.loading || result.error) {
+    pass.dailyChecks.delete(checkKey);
     await store.update((state) => { state.runtime.lastRunAt = now.toISOString(); state.runtime.lastProviderStatus = 'daily_wait'; state.runtime.lastError = result.error ?? null; });
     return { signals:[], skipped:true, reason:'daily_pending', state:publicState(store.getState()) };
   }
@@ -917,92 +935,142 @@ async function recordFormulaActivation(payload) {
   catch (error) { console.error('formula-library: record activation failed', error.code || error.message); }
 }
 
-// Every run's new signals also go to the LINE accounts linked by the browser that created the monitor (one message per run). The push runs in the background
-// and is recorded on the notifications as line: 'sent' | 'failed'.
-async function runMonitor(source = 'scheduler') {
-  const result = await runMonitorOnce(source);
-  if (result?.signals?.length && line.enabled && line.users().length && store.getState().monitorOwner?.visitor) {
-    const ids = new Set(result.signals.map((signal) => signal.id));
-    line.notifySignals(result.signals, { visitor: store.getState().monitorOwner?.visitor ?? null }).then((outcome) => store.update((state) => {
-      for (const notification of state.notifications) if (ids.has(notification.signalId)) notification.line = outcome.sent ? 'sent' : 'failed';
-      appendLog(state, outcome.sent ? 'info' : 'warn', outcome.sent ? `LINE 通知已送出（${result.signals.length} 檔）` : 'LINE 通知送出失敗', { source, error: outcome.error ?? null });
-    })).catch(console.error);
-  }
-  return result;
+// Every run's new signals also go to the LINE accounts the monitor's owner linked (one message per run). The push runs
+// in the background and is recorded on the notifications as line: 'sent' | 'failed'.
+function notifyLine(owner, store, result, source) {
+  if (!result?.signals?.length || !line.enabled || !line.usersOf(owner).length) return;
+  const ids = new Set(result.signals.map((signal) => signal.id));
+  line.notifySignals(result.signals, { owner }).then((outcome) => store.update((state) => {
+    for (const notification of state.notifications) if (ids.has(notification.signalId)) notification.line = outcome.sent ? 'sent' : 'failed';
+    appendLog(state, outcome.sent ? 'info' : 'warn', outcome.sent ? `LINE 通知已送出（${result.signals.length} 檔）` : 'LINE 通知送出失敗', { source, error: outcome.error ?? null });
+  })).catch(console.error);
 }
 
-async function runMonitorOnce(source = 'scheduler') {
-  if (isRunning) {
-    return { skipped: true, reason: 'monitor already running', state: publicState(store.getState()) };
-  }
+// "Check now" from one person's dashboard. An intraday monitor runs together with every other enabled intraday monitor:
+// they share the condition layer, whose rule states would otherwise advance without the others seeing their triggers.
+async function runMonitor(owner, store, source) {
+  if (isRunning) return { skipped: true, reason: 'monitor already running', state: publicState(store.getState()) };
+  const intraday = store.getState().settings.strategy?.executor !== 'daily_close';
+  const entries = intraday ? [[owner, store], ...monitors.all().filter(([id, other]) => id !== owner && other.getState().settings.enabled && other.getState().settings.strategy?.executor !== 'daily_close')] : [[owner, store]];
+  const results = await runMonitors(entries, source);
+  return results.get(owner) ?? { skipped: true, reason: 'monitor already running', state: publicState(store.getState()) };
+}
 
+// One pass over the given monitors ([owner, store]). D1-only monitors are checked one by one (sharing the index refresh
+// and identical checks); intraday monitors share one universe read, one m1_live read for the union of their stocks and
+// one condition-layer run, then each applies only its own stocks' bars and triggers. Returns Map(owner → result).
+async function runMonitors(entries, source) {
+  const results = new Map();
+  if (isRunning || !entries.length) return results;
   isRunning = true;
-  let scope;
   try {
-    const settings = store.getState().settings;
-    if (settings.strategy?.executor === 'daily_close') return await runDailyClose(source);
-    if(settings.strategy.executor==='formula_v1')validateFormulaStrategy(settings.strategy,settings.strategy.activatedAt);
-    else {const activeDefinition=await indicatorRegistry.resolve(settings.strategy.id,settings.strategy.version);if(settings.strategy.definitionFingerprint&&settings.strategy.definitionFingerprint!==activeDefinition.fingerprint)throw Object.assign(new Error('INDICATOR_VERSION_MUTATED'),{code:'INDICATOR_VERSION_MUTATED'});}
-    let universe;
-    try {
-      universe = await getLatestSystemUniverse();
-    } catch (error) {
-      const errorCode=error.code||'HF_UNIVERSE_SOURCE_FAILED';
-      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='coverage_unknown';state.runtime.lastError=errorCode;markMonitorScopeUnknown(state,errorCode);state.decisions.unshift(providerFailureDecision(errorCode));appendLog(state,'error','系統監控範圍無法確認，本輪停止',{source,errorCode});});
-      return { skipped:true, reason:'coverage_unknown', error:errorCode, state:publicState(store.getState()) };
+    const pass = {}, intraday = [];
+    for (const [owner, store] of entries) {
+      if (store.getState().settings.strategy?.executor !== 'daily_close') { intraday.push([owner, store]); continue; }
+      try { results.set(owner, await runDailyClose(store, source, pass)); }
+      catch (error) { results.set(owner, await recordRunError(store, source, error)); }
     }
-    if (settings.scopeMode === 'universe') {
-      const watchlist = await getUniverseWatchlist(universe);
-      await store.update((state) => { state.settings.watchlist = watchlist; });
-      settings.watchlist = watchlist;
-    }
-    scope = buildMonitorScope(settings.watchlist, universe);
-    if (settings.daily?.filters?.length) {
-      // D1 + M1: only today's daily list (met on the previous daily close) is watched intraday.
-      const list = await dailyListToday(settings);
-      if (!list) {
-        await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_pending';state.runtime.lastError=null;appendLog(state,'info','日 K 名單準備中，本輪不判斷',{source});});
-        return { signals:[], skipped:true, reason:'daily_list_pending', state:publicState(store.getState()) };
-      }
-      const allowed = new Set(list.symbols);
-      const effectiveWatchlist = scope.effectiveWatchlist.filter((item) => allowed.has(item.symbol));
-      scope = { ...scope, effectiveWatchlist, effectiveCount:effectiveWatchlist.length };
-      if (!scope.effectiveWatchlist.length) {
-        await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_empty';state.runtime.lastError=null;});
-        return { signals:[], skipped:true, reason:'daily_list_empty', state:publicState(store.getState()) };
-      }
-    }
-    await store.update((state)=>{applyMonitorScope(state,scope);appendLog(state,'info','本輪系統監控範圍已確認',{source,revision:scope.revision,selected:scope.selectedCount,effective:scope.effectiveCount,uncovered:scope.uncoveredCount});});
-    if (!scope.effectiveCount) {
-      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
-      return { signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) };
-    }
-    const bars = filterBarsToMonitorScope(await fetchMarketBars({ ...settings, watchlist:scope.effectiveWatchlist }), scope);
-    const ruleTriggers = await runConditionLayer(settings, bars);
-    return await applyBars(bars, source, scope, NOTIFY_ENGINE === 'state' ? ruleTriggers : null);
-  } catch (error) {
-    await store.update((state) => {
-      state.runtime.lastRunAt = new Date().toISOString();
-      state.runtime.lastProviderStatus = 'error';
-      const errorCode = error.code || 'PROVIDER_ERROR';
-      state.runtime.lastError = errorCode;
-      state.decisions.unshift(providerFailureDecision(errorCode));
-      appendLog(state, 'error', '行情更新或規則判斷失敗', { source, errorCode });
-    });
-    return { error: error.message, state: publicState(store.getState()) };
+    if (intraday.length) for (const [owner, result] of await runIntraday(intraday, source)) results.set(owner, result);
   } finally {
     isRunning = false;
   }
+  for (const [owner, store] of entries) notifyLine(owner, store, results.get(owner), source);
+  return results;
 }
 
-// Runs the state machine on the same bars and returns this run's rule triggers (null when off or failed, in which
-// case applyBars creates no indicator signals this run rather than falling back to a different engine mid-day).
-async function runConditionLayer(settings, bars) {
+async function runIntraday(entries, source) {
+  const results = new Map(), ready = [];
+  let universe;
+  try {
+    universe = await getLatestSystemUniverse();
+  } catch (error) {
+    const errorCode = error.code || 'HF_UNIVERSE_SOURCE_FAILED';
+    for (const [owner, store] of entries) {
+      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='coverage_unknown';state.runtime.lastError=errorCode;markMonitorScopeUnknown(state,errorCode);state.decisions.unshift(providerFailureDecision(errorCode));appendLog(state,'error','系統監控範圍無法確認，本輪停止',{source,errorCode});});
+      results.set(owner, { skipped:true, reason:'coverage_unknown', error:errorCode, state:publicState(store.getState()) });
+    }
+    return results;
+  }
+  let universeWatchlist = null;
+  for (const [owner, store] of entries) {
+    try {
+      const prepared = await prepareIntraday(store, source, universe, () => (universeWatchlist ??= getUniverseWatchlist(universe)));
+      if (prepared.result) results.set(owner, prepared.result); else ready.push({ owner, store, scope:prepared.scope });
+    } catch (error) { results.set(owner, await recordRunError(store, source, error)); }
+  }
+  if (!ready.length) return results;
+  let bars, ruleTriggers;
+  try {
+    const union = new Map();
+    for (const { scope } of ready) for (const item of scope.effectiveWatchlist) union.set(item.symbol, item);
+    bars = await fetchMarketBars({ provider:'hf_dataset', watchlist:[...union.values()] });
+    ruleTriggers = await runConditionLayer(bars);
+  } catch (error) {
+    for (const { owner, store } of ready) results.set(owner, await recordRunError(store, source, error));
+    return results;
+  }
+  for (const { owner, store, scope } of ready) {
+    try { results.set(owner, await applyBars(store, filterBarsToMonitorScope(bars, scope), source, scope, NOTIFY_ENGINE === 'state' ? ruleTriggers : null)); }
+    catch (error) { results.set(owner, await recordRunError(store, source, error)); }
+  }
+  return results;
+}
+
+// Validates one intraday monitor and works out this run's stocks. → { scope } to run, or { result } when it stops here.
+async function prepareIntraday(store, source, universe, universeWatchlist) {
+  const settings = store.getState().settings;
+  if(settings.strategy.executor==='formula_v1')validateFormulaStrategy(settings.strategy,settings.strategy.activatedAt);
+  else {const activeDefinition=await indicatorRegistry.resolve(settings.strategy.id,settings.strategy.version);if(settings.strategy.definitionFingerprint&&settings.strategy.definitionFingerprint!==activeDefinition.fingerprint)throw Object.assign(new Error('INDICATOR_VERSION_MUTATED'),{code:'INDICATOR_VERSION_MUTATED'});}
+  if (settings.scopeMode === 'universe') {
+    const watchlist = await universeWatchlist();
+    if (watchlist.map((item) => item.symbol).join(',') !== settings.watchlist.map((item) => item.symbol).join(',')) await store.update((state) => { state.settings.watchlist = watchlist; });
+  }
+  let scope = buildMonitorScope(store.getState().settings.watchlist, universe);
+  if (settings.daily?.filters?.length) {
+    // D1 + M1: only today's daily list (met on the previous daily close) is watched intraday.
+    const list = await dailyListToday(store, store.getState().settings);
+    if (!list) {
+      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_pending';state.runtime.lastError=null;appendLog(state,'info','日 K 名單準備中，本輪不判斷',{source});});
+      return { result:{ signals:[], skipped:true, reason:'daily_list_pending', state:publicState(store.getState()) } };
+    }
+    const allowed = new Set(list.symbols);
+    const effectiveWatchlist = scope.effectiveWatchlist.filter((item) => allowed.has(item.symbol));
+    scope = { ...scope, effectiveWatchlist, effectiveCount:effectiveWatchlist.length };
+    if (!scope.effectiveWatchlist.length) {
+      await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='daily_list_empty';state.runtime.lastError=null;});
+      return { result:{ signals:[], skipped:true, reason:'daily_list_empty', state:publicState(store.getState()) } };
+    }
+  }
+  await store.update((state)=>{applyMonitorScope(state,scope);appendLog(state,'info','本輪系統監控範圍已確認',{source,revision:scope.revision,selected:scope.selectedCount,effective:scope.effectiveCount,uncovered:scope.uncoveredCount});});
+  if (!scope.effectiveCount) {
+    await store.update((state)=>{state.runtime.lastRunAt=new Date().toISOString();state.runtime.lastProviderStatus='empty_scope';state.runtime.lastError=null;appendLog(state,'info','本輪無系統名單涵蓋股票，未執行行情判定',{source});});
+    return { result:{ signals:[], skipped:true, reason:'empty_scope', state:publicState(store.getState()) } };
+  }
+  return { scope };
+}
+
+async function recordRunError(store, source, error) {
+  await store.update((state) => {
+    state.runtime.lastRunAt = new Date().toISOString();
+    state.runtime.lastProviderStatus = 'error';
+    const errorCode = error.code || 'PROVIDER_ERROR';
+    state.runtime.lastError = errorCode;
+    state.decisions.unshift(providerFailureDecision(errorCode));
+    appendLog(state, 'error', '行情更新或規則判斷失敗', { source, errorCode });
+  });
+  return { error: error.message, state: publicState(store.getState()) };
+}
+
+// Runs the state machine on the same bars for the rules of every enabled monitor (the shared layers keep one rule set)
+// and returns this run's rule triggers (null when off or failed, in which case applyBars creates no indicator signals
+// this run rather than falling back to a different engine mid-day). Same rules of two people share one ruleId.
+async function runConditionLayer(bars) {
   if (!CONDITION_LAYER_ENABLED) return null;
   try {
-    const rules = rulesFromSettings(settings);
-    conditionStates.syncRules(rules);
-    ruleStates.syncRules(rules);
+    const rules = new Map();
+    for (const [, store] of monitors.all()) for (const rule of rulesFromSettings(store.getState().settings)) rules.set(rule.ruleId, rule);
+    conditionStates.syncRules([...rules.values()]);
+    ruleStates.syncRules([...rules.values()]);
     const now = new Date();
     ruleStates.beginRun();
     const result = conditionStates.evaluate(bars, now, { onSymbol: (ctx) => ruleStates.onSymbol(ctx, conditionStates, now) });
@@ -1016,7 +1084,7 @@ async function runConditionLayer(settings, bars) {
   }
 }
 
-async function applyBars(bars, source, scope, ruleTriggers = null) {
+async function applyBars(store, bars, source, scope, ruleTriggers = null) {
   const now = new Date();
   let result;
 
@@ -1036,25 +1104,38 @@ async function applyBars(bars, source, scope, ruleTriggers = null) {
   };
 }
 
-function syncMonitorTimer() {
-  if (monitorTimer) {
-    clearInterval(monitorTimer);
-    monitorTimer = null;
-  }
-
+// The scheduler (MONITOR_INTERVAL_MS) runs every enabled monitor; this only keeps the dashboard flag in step.
+function syncMonitorTimer(store) {
   const state = store.getState();
+  if (state.runtime.isMonitoring === Boolean(state.settings.enabled)) return;
   state.runtime.isMonitoring = Boolean(state.settings.enabled);
-
-  if (!state.settings.enabled) {
-    store.save().catch(console.error);
-    return;
-  }
-
-  const intervalMs = clampNumber(state.settings.pollIntervalSeconds, 15, 3600, 60) * 1000;
-  monitorTimer = setInterval(() => {
-    runMonitor('scheduler').catch(console.error);
-  }, intervalMs);
   store.save().catch(console.error);
+}
+
+// LINE told us one account was linked from two browsers: they are one person from now on (src/monitors.js join).
+async function joinBrowsers(visitor, earlierVisitor) {
+  const result = await monitors.join(visitor, earlierVisitor);
+  events.record('line_join', { recovered: result.recovered }, { visitor });
+  return result;
+}
+
+// Before per-person monitors (2026-10-20) the site ran one monitor in the shared store, owned by the browser that
+// created it (state.monitorOwner). It becomes that browser's monitor once; without a known owner it is left as is.
+async function migrateGlobalMonitor() {
+  const legacy = sharedStore.getState();
+  if (legacy.accounts?.migrated) return;
+  const owner = legacy.monitorOwner?.visitor;
+  if (owner && legacy.settings?.monitorTask?.onboardingCompleted && !monitors.has(owner)) {
+    await monitors.get(owner).update((state) => { for (const key of MONITOR_KEYS) state[key] = structuredClone(legacy[key]); });
+    console.log(`Moved the shared monitor to its owner's store (${legacy.settings.strategy?.name ?? '—'})`);
+  }
+  await sharedStore.update((state) => { state.accounts = { ...(state.accounts || {}), migrated: true }; state.settings.enabled = false; });
+}
+
+function monitorSummary() {
+  const all = monitors.all().map(([, store]) => store.getState()).filter((state) => state.settings.monitorTask?.onboardingCompleted);
+  const lastRunAt = all.map((state) => state.runtime.lastRunAt).filter(Boolean).sort().at(-1) ?? null;
+  return { total: all.length, enabled: all.filter((state) => state.settings.enabled).length, daily: all.filter((state) => state.settings.strategy?.executor === 'daily_close').length, linked: new Set(line.users().map((user) => monitors.ownerOf(user.visitor))).size, lastRunAt };
 }
 
 async function getLatestSystemUniverse() {

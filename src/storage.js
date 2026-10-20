@@ -58,8 +58,9 @@ const DEFAULT_STATE = {
 };
 
 export class JsonStore {
-  constructor(filePath, { backend = null, key = 'state' } = {}) {
+  constructor(filePath, { backend = null, key = 'state', compact = false } = {}) {
     this.filePath = filePath;
+    this.compact = compact;
     this.backend = backend;
     this.key = key;
     this.state = structuredClone(DEFAULT_STATE);
@@ -104,7 +105,7 @@ export class JsonStore {
   async save(state = this.state) {
     if (this.backend) return this.backend.write(this.key, state);
     const temporary=`${this.filePath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-    try{await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8');await rename(temporary,this.filePath);}
+    try{await writeFile(temporary, `${JSON.stringify(state, null, this.compact ? 0 : 2)}\n`, 'utf8');await rename(temporary,this.filePath);}
     catch(error){await rm(temporary,{force:true}).catch(()=>{});throw error;}
   }
 }

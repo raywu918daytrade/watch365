@@ -64,7 +64,7 @@ test('one run of signals becomes one message to the monitor owner\'s linked acco
     { engine: 'daily_close', symbol: '2330', name: '台積電', price: 1050, ruleName: 'SMA(5) 上穿 SMA(20)' }
   ];
   assert.deepEqual(await line.notifySignals(signals), { sent: 0 });
-  assert.deepEqual(await line.notifySignals(signals, { visitor: 'a' }), { sent: 2 });
+  assert.deepEqual(await line.notifySignals(signals, { owner: 'a' }), { sent: 2 });
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /multicast$/);
   assert.deepEqual(calls[0].body.to, ['U1', 'U2']);
@@ -80,4 +80,21 @@ test('signalsMessage shows intraday times in Taipei and caps the list', () => {
   assert.match(text, /盤中條件成立 25 檔/);
   assert.match(text, /・1000 10 10:31/);
   assert.match(text, /還有 5 檔/);
+});
+
+test('linking an account linked from another browser before joins the browsers and says the monitor is back', async () => {
+  const calls = [], store = memoryStore({ line: { users: [{ id: 'old', userId: 'U1', visitor: 'phone', displayName: 'Ray' }] } });
+  const owners = {}, joined = [];
+  const line = new LineNotifier({ config, store, fetchImpl: fakeFetch(calls), ownerOf: (visitor) => owners[visitor] || visitor, onLinked: async ({ visitor, earlierVisitor }) => { joined.push([visitor, earlierVisitor]); owners[visitor] = earlierVisitor; return { recovered: true }; } });
+  await line.onText('U1', line.issueCode('laptop').code, 'r');
+  assert.deepEqual(joined, [['laptop', 'phone']]);
+  assert.match(calls.at(-1).body.messages[0].text, /已找回你之前設定的監控/);
+  // Both browsers are one person now: one account shown, one push per run, and unlink from either removes it.
+  assert.equal((await line.status('laptop')).linked.length, 1);
+  assert.deepEqual(await line.notifySignals([{ symbol: '2330', price: 1 }], { owner: 'phone' }), { sent: 1 });
+  assert.deepEqual(await line.unlink('laptop'), { removed: 2 });
+  // A first-time link calls nothing.
+  await line.onText('U9', line.issueCode('other').code, 'r');
+  assert.equal(joined.length, 1);
+  assert.match(calls.at(-1).body.messages[0].text, /^綁定成功！之後/);
 });

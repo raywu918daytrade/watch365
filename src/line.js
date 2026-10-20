@@ -4,8 +4,10 @@
 //
 // Linking: the dashboard asks for a one-time 6-digit code (10 minutes, kept in memory), the user adds the official
 // account and sends the code, and the webhook stores { userId, displayName, visitor } in state.line.users. That list
-// is never part of publicState; each browser only sees the accounts it linked itself. Every account linked from a browser gets the
-// monitor's triggers when that browser created the monitor, one push per monitor run (all stocks of the run in one message, to save the monthly quota).
+// is never part of publicState. Each person (owner, src/monitors.js: a browser plus every browser joined to it by LINE)
+// sees and gets the accounts linked from any of their browsers, one push per monitor run (all stocks of the run in one
+// message, to save the monthly quota). Linking an account that was linked from another browser before calls onLinked,
+// which joins the two browsers so the monitor follows the LINE account.
 
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 
@@ -51,8 +53,8 @@ function taipeiTime(value) {
 }
 
 export class LineNotifier {
-  constructor({ config = lineConfigFromEnv(), store, fetchImpl = globalThis.fetch, now = () => Date.now(), log = console } = {}) {
-    this.config = config; this.store = store; this.fetch = fetchImpl; this.now = now; this.log = log;
+  constructor({ config = lineConfigFromEnv(), store, ownerOf = (visitor) => visitor, onLinked = null, fetchImpl = globalThis.fetch, now = () => Date.now(), log = console } = {}) {
+    this.config = config; this.store = store; this.ownerOf = ownerOf; this.onLinked = onLinked; this.fetch = fetchImpl; this.now = now; this.log = log;
     this.codes = new Map();   // code -> { visitor, expiresAt }
     this.botInfo = null;
   }
@@ -60,6 +62,8 @@ export class LineNotifier {
   get enabled() { return this.config.enabled; }
 
   users() { return this.store.getState().line?.users || []; }
+  // Accounts linked from any browser of the person `visitor` belongs to (an owner id works too).
+  usersOf(visitor) { const owner = this.ownerOf(visitor); return this.users().filter((user) => this.ownerOf(user.visitor) === owner); }
 
   async bot() {
     if (!this.enabled) return null;
@@ -78,7 +82,8 @@ export class LineNotifier {
   async status(visitor) {
     if (!this.enabled) return { enabled: false };
     const bot = await this.bot();
-    const linked = this.users().filter((user) => user.visitor === visitor).map(({ id, displayName, linkedAt }) => ({ id, displayName, linkedAt }));
+    const seen = new Set();
+    const linked = this.usersOf(visitor).filter((user) => !seen.has(user.userId) && seen.add(user.userId)).map(({ id, displayName, linkedAt }) => ({ id, displayName, linkedAt }));
     return { enabled: true, bot: bot && { basicId: bot.basicId, displayName: bot.displayName, addFriendUrl: bot.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(bot.basicId)}` : null }, linked, totalLinked: this.users().length };
   }
 
@@ -94,9 +99,12 @@ export class LineNotifier {
 
   async unlink(visitor, id) {
     let removed = 0;
+    const owner = this.ownerOf(visitor);
+    const userId = id ? this.usersOf(visitor).find((user) => user.id === id)?.userId : null;
+    if (id && !userId) return { removed };
     await this.store.update((state) => {
       const users = state.line?.users || [];
-      const keep = users.filter((user) => !(user.visitor === visitor && (!id || user.id === id)));
+      const keep = users.filter((user) => !(this.ownerOf(user.visitor) === owner && (!userId || user.userId === userId)));
       removed = users.length - keep.length;
       state.line = { ...(state.line || {}), users: keep };
     });
@@ -104,10 +112,10 @@ export class LineNotifier {
   }
 
   async sendTest(visitor) {
-    const targets = this.users().filter((user) => user.visitor === visitor);
+    const targets = this.usersOf(visitor);
     if (!targets.length) return { sent: 0 };
     await this.pushTo(targets, 'watch365 測試通知：LINE 綁定成功，條件成立時會在這裡通知你。');
-    return { sent: targets.length };
+    return { sent: new Set(targets.map((user) => user.userId)).size };
   }
 
   // Webhook body (already signature-checked). Returns how many events were handled.
@@ -139,28 +147,34 @@ export class LineNotifier {
     let displayName = null;
     try { displayName = (await this.call('GET', `/profile/${encodeURIComponent(userId)}`)).displayName || null; } catch { /* name is optional */ }
     const linkedAt = new Date(this.now()).toISOString();
+    const earlier = [...new Set(this.users().filter((user) => user.userId === userId && user.visitor !== entry.visitor).map((user) => user.visitor))];
     await this.store.update((state) => {
       const users = (state.line?.users || []).filter((user) => !(user.userId === userId && user.visitor === entry.visitor));
       users.push({ id: createHmac('sha256', 'watch365-line').update(`${userId}|${entry.visitor}`).digest('base64url').slice(0, 12), userId, displayName, visitor: entry.visitor, linkedAt });
       state.line = { ...(state.line || {}), users };
     });
-    await this.reply(replyToken, '綁定成功！之後監控條件成立時，會在這裡通知你。');
+    let recovered = false;
+    if (earlier.length && this.onLinked) {
+      try { for (const visitor of earlier) if ((await this.onLinked({ userId, visitor: entry.visitor, earlierVisitor: visitor }))?.recovered) recovered = true; }
+      catch (error) { this.log.error('line: joining browsers failed', error.code || error.message); }
+    }
+    await this.reply(replyToken, recovered ? '綁定成功！已找回你之前設定的監控，重新整理網頁就看得到。之後條件成立時，會在這裡通知你。' : '綁定成功！之後監控條件成立時，會在這裡通知你。');
   }
 
   async removeUser(userId) {
     await this.store.update((state) => { state.line = { ...(state.line || {}), users: (state.line?.users || []).filter((user) => user.userId !== userId) }; });
   }
 
-  // Called after every monitor run with that run's new signals; only the accounts linked from the monitor owner's
-  // browser get them (another visitor's LINE never receives this monitor). Never throws.
-  async notifySignals(signals, { visitor } = {}) {
-    if (!this.enabled || !signals?.length || !visitor) return { sent: 0 };
-    const users = this.users().filter((user) => user.visitor === visitor);
+  // Called after every monitor run with that run's new signals; only the accounts linked by the monitor's owner get
+  // them (another person's LINE never receives this monitor). Never throws.
+  async notifySignals(signals, { owner } = {}) {
+    if (!this.enabled || !signals?.length || !owner) return { sent: 0 };
+    const users = this.usersOf(owner);
     if (!users.length) return { sent: 0 };
     const text = signalsMessage([...signals].reverse(), { siteUrl: this.config.siteUrl });
     try {
       await this.pushTo(users, text);
-      return { sent: users.length };
+      return { sent: new Set(users.map((user) => user.userId)).size };
     } catch (error) {
       this.log.error('line: push failed', error.code || error.message);
       return { sent: 0, error: error.code || 'LINE_PUSH_FAILED' };

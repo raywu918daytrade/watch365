@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DataBackup } from './backup.js';
@@ -20,13 +20,15 @@ test('backs up once per Taipei day after 14:30, creating the private repo when m
     await writeFile(join(dir, 'watch365.json'), '{"a":1}');
     await writeFile(join(dir, 'events.jsonl'), '{"e":1}\n');
     await writeFile(join(dir, 'notes.txt'), 'skip');
+    await mkdir(join(dir, 'monitors'));
+    await writeFile(join(dir, 'monitors', 'AAAA.json'), '{"m":1}');
     const calls = [];
     const backup = new DataBackup({ dir, config: { enabled: true, repo: 'ray/w365-backup', token: 't' }, fetchImpl: fakeHf(calls, { exists: false }), log: quiet });
     assert.equal(await backup.tick(new Date('2026-10-20T06:00:00Z')), null);   // 14:00 Taipei
-    assert.deepEqual(await backup.tick(new Date('2026-10-20T06:31:00Z')), { files: 3 });
+    assert.deepEqual(await backup.tick(new Date('2026-10-20T06:31:00Z')), { files: 5 });
     assert.deepEqual(JSON.parse(calls[1].body), { type: 'dataset', name: 'w365-backup', organization: 'ray', private: true });
     const lines = calls[2].body.split('\n').map((line) => JSON.parse(line));
-    assert.deepEqual(lines.slice(1).map((line) => line.value.path), ['backups/latest/events.jsonl', 'backups/latest/watch365.json', 'backups/2026-10-20/watch365.json']);
+    assert.deepEqual(lines.slice(1).map((line) => line.value.path), ['backups/latest/events.jsonl', 'backups/latest/watch365.json', 'backups/2026-10-20/watch365.json', 'backups/latest/monitors/AAAA.json', 'backups/2026-10-20/monitors/AAAA.json']);
     assert.equal(Buffer.from(lines[2].value.content, 'base64').toString(), '{"a":1}');
     assert.equal(await backup.tick(new Date('2026-10-20T09:00:00Z')), null);
   } finally { await rm(dir, { recursive: true, force: true }); }

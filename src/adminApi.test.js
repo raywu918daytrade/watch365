@@ -21,7 +21,7 @@ async function boot(env) {
   const unknownIndicators = await new UnknownIndicatorStore(join(dir, 'unknown.json'), { log: quiet }).load();
   const formulaLibrary = await new FormulaLibrary(join(dir, 'formula-library.json'), { log: quiet }).load();
   const store = new JsonStore(join(dir, 'watch365.json')); await store.load();
-  const api = createAdminApi({ events, store, formulaLibrary, unknownIndicators, env, secret: 'process-secret', log: quiet });
+  const api = createAdminApi({ events, store, monitorSummary: () => ({ total: 1, enabled: 0, daily: 1, linked: 0, lastRunAt: null }), formulaLibrary, unknownIndicators, env, secret: 'process-secret', log: quiet });
   const server = createServer(async (request, response) => {
     request.visitor = 'tester';
     const handled = await api.handle(request, response, new URL(request.url, 'http://localhost'));
@@ -93,7 +93,7 @@ test('overview / events / visitors / unknown-indicators / indicators 的回傳�
     assert.deepEqual(Object.keys(body.visitors).sort(), ['active', 'total']); assert.equal(body.visitors.total, 2); assert.equal(body.visitors.active.length, 1); assert.deepEqual(Object.keys(body.visitors.active[0]), ['day', 'count']); assert.equal(body.visitors.active[0].count, 2);
     assert.deepEqual(body.pageViews, [{ day: body.pageViews[0].day, count: 2 }]); assert.deepEqual(Object.keys(body.monitors.configured[0]), ['day', 'count']); assert.match(body.pageViews[0].day, /^\d{4}-\d{2}-\d{2}$/);
     assert.equal(body.parses.total, 2); assert.deepEqual(body.parses.byStatus, [{ key: 'formula', count: 1 }, { key: 'unknown_indicator', count: 1 }]); assert.deepEqual(body.parses.byProvider, [{ key: 'library', count: 1 }, { key: 'rules', count: 1 }]);
-    assert.deepEqual(body.monitors.configured.map((item) => item.count), [1]); assert.deepEqual(Object.keys(body.monitors.current).sort(), ['enabled', 'lastRunAt', 'scopeMode', 'strategyName', 'symbols']); assert.equal(body.monitors.current.enabled, false);
+    assert.deepEqual(body.monitors.configured.map((item) => item.count), [1]); assert.deepEqual(body.monitors.current, { total: 1, enabled: 0, daily: 1, linked: 0, lastRunAt: null });
     assert.deepEqual(body.topIndicators[0], { label: 'MACD(12,26,9) DIF 向上穿越 DEA', count: 2 });
     assert.equal(body.unknownIndicators.total, 1); assert.deepEqual(Object.keys(body.unknownIndicators.recent[0]).sort(), ['count', 'lastSeen', 'norm', 'text']);
     assert.deepEqual(Object.keys(body.library).sort(), ['active', 'aliases', 'disabled', 'formulas', 'pending']); assert.equal(body.library.formulas, FORMULA_RECIPES.length);

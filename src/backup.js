@@ -36,7 +36,9 @@ export class DataBackup {
 
   async run(day) {
     await this.ensureRepo();
-    const names = (await readdir(this.dir).catch(() => [])).filter((name) => /\.(json|jsonl)$/.test(name)).sort();
+    // Top-level files plus every person's monitor (monitors/<owner>.json, src/monitors.js).
+    const top = (await readdir(this.dir).catch(() => [])).filter((name) => /\.(json|jsonl)$/.test(name)).sort();
+    const names = [...top, ...(await readdir(join(this.dir, 'monitors')).catch(() => [])).filter((name) => name.endsWith('.json')).sort().map((name) => `monitors/${name}`)];
     const files = [];
     for (const name of names) {
       const content = await readFile(join(this.dir, name));

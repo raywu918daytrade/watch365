@@ -29,7 +29,7 @@ export const ADMIN_QUERIES = Object.freeze({
   adminLoginsByDay: { type: 'admin_login', groupBy: 'day' }
 });
 
-export function createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates = null, ruleStates = null, notifyEngine = 'legacy', legacySignalsToday = () => null, env = process.env, secret, log = console, now = () => Date.now() }) {
+export function createAdminApi({ events, store, monitorSummary = () => null, formulaLibrary, unknownIndicators, conditionStates = null, ruleStates = null, notifyEngine = 'legacy', legacySignalsToday = () => null, env = process.env, secret, log = console, now = () => Date.now() }) {
   if (!(events instanceof EventStore)) throw new Error('createAdminApi needs an EventStore');
   const adminToken = typeof env.ADMIN_TOKEN === 'string' && env.ADMIN_TOKEN.trim().length >= 8 ? env.ADMIN_TOKEN.trim() : null;
 
@@ -79,7 +79,6 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
         adminQuery('pageViewsByDay', range), adminQuery('activeVisitorsByDay', range), adminQuery('visitorsTotal'), adminQuery('parsesByStatus', range), adminQuery('parsesByProvider', range), adminQuery('monitorsConfiguredByDay', range), adminQuery('templateLabels', range), adminQuery('monitorStrategyNames', range), adminQuery('vetBlockedByCode', range)
       ]);
       const parsesTotal = byStatus.reduce((sum, item) => sum + item.count, 0);
-      const state = store.getState();
       const unknown = unknownIndicators.list({ limit: 10 }).map(({ norm, text, count, lastSeen }) => ({ norm, text, count, lastSeen }));
       // Day series are [{ day, count }] (contract); categorical breakdowns stay [{ key, count }].
       sendJson(response, 200, {
@@ -87,7 +86,7 @@ export function createAdminApi({ events, store, formulaLibrary, unknownIndicator
         visitors: { total: allVisitors.length, active: daySeries(active) },
         pageViews: daySeries(pageViews),
         parses: { total: parsesTotal, byStatus, byProvider },
-        monitors: { configured: daySeries(configured), current: { strategyName: state.settings.strategy?.name ?? null, enabled: Boolean(state.settings.enabled), symbols: state.settings.watchlist.length, scopeMode: state.settings.scopeMode ?? 'watchlist', lastRunAt: state.runtime.lastRunAt } },
+        monitors: { configured: daySeries(configured), current: monitorSummary() },
         topIndicators: mergeCounts([templateLabels, strategyNames]).slice(0, 20).map(({ key, count }) => ({ label: key, count })),
         vetBlocked,
         unknownIndicators: { total: unknownIndicators.count(), recent: unknown },
