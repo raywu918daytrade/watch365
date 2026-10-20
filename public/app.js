@@ -428,7 +428,7 @@ function drawTemplates(){
   }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
-  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，過去')}`:`過去 7 日 <strong>${base.count} 檔・${base.events} 次</strong>`}。長條＝加入後還剩幾檔。</p>`:'';
+  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，過去')}`:`${pastLabel(base.data.availableDays)} <strong>${base.count} 檔・${base.events} 次</strong>${forwardText(base.forward,'，')}`}。長條＝加入後還剩幾檔。</p>`:'';
   const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
   const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
@@ -450,7 +450,7 @@ function rankBase(full){
 }
 function rankLine(item,base){
   const i=templateRows.indexOf(item.row),n=item.count.triggeredSymbols,share=base.count?Math.min(1,n/base.count):0,pct=Math.round(share*100),eventShare=item.count.totalEvents==null?1:base.events?item.count.totalEvents/base.events:0,weak=n&&share>=NEAR_ALL&&eventShare>=NEAR_ALL;
-  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong>${item.row.summary?`<small class="proto-rank-formula">${escapeHtml(item.row.summary)}</small>`:''}<span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${countText(item.count)}・剩 ${pct}%${isDaily()?forwardText(item.count.forward,'・'):''}`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
+  return`<div class="proto-rank ${weak?'weak':''} ${n?'':'zero'}"><span class="proto-rank-text"><strong>${item.row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(item.row.label)}</strong>${item.row.summary?`<small class="proto-rank-formula">${escapeHtml(item.row.summary)}</small>`:''}<span class="proto-rank-bar" aria-hidden="true"><i style="width:${n?Math.max(2,pct):0}%"></i></span><small>${n?`${countText(item.count)}・剩 ${pct}%${forwardText(item.count.forward,'・')}`:'加入後 0 檔'}${weak?'・幾乎沒有篩選效果':''}</small></span><button type="button" class="proto-add" data-add="${i}" aria-label="加入 ${escapeHtml(item.row.label)}">加入</button></div>`;
 }
 function presetLine(full,block){
   return(row)=>{const i=templateRows.indexOf(row);const added=hasSpec(row.spec);const title=added?'已加入':full?block:`加入 ${row.label}`;return`<div class="proto-preset ${row.ai?'ai':''}"><span class="proto-preset-text">${row.ai?'<span class="proto-tag-ai">AI 建立</span>':''}<strong>${escapeHtml(row.label)}</strong>${row.summary?`<small>${escapeHtml(row.summary)}</small>`:''}${added?'':candidateLine(row.spec)}</span><button type="button" class="proto-add" data-add="${i}" ${added||full?'disabled':''} aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">${added?'已加入':'加入'}</button></div>`;};
@@ -593,7 +593,7 @@ async function vetAndAdd(ai,filter,replace){
   if(!added)return;
   // The vet already replayed this very filter, so its result is the 7-day history (only when it is the sole filter).
   if(state.filters.length===1&&Array.isArray(result.days)){state.history=historyFrom(historySignature(),result);save();if(node()==='conditions')drawHistory();}
-  showToast(`已加入。過去 7 日觸發 ${verdict.totalEvents??result.totalEvents??0} 次`);
+  showToast(`已加入。${pastLabel(result.availableDays)}觸發 ${verdict.totalEvents??result.totalEvents??0} 次`);
 }
 // D2. 7-day index (/api/history/index): every list row is precomputed on the server, so picking a filter only combines
 // stored results. One request returns the funnel of the selected filters (step i = filters 1..i all met) and, for
@@ -637,25 +637,28 @@ async function runIndex(){
 function drawIndexViews(){if(!['conditions','daily'].includes(node()))return;scheduleExample();const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
 function indexFresh(){return indexData&&indexData.signature===indexSignature()?indexData:null;}
 function countText(item){return item.daily||item.totalEvents==null?`${item.triggeredSymbols||0} 檔`:item.triggeredSymbols?`${item.triggeredSymbols} 檔・${item.totalEvents} 次`:'0 檔';}
-// Daily step: what the combination did afterwards — mean close-to-close change FORWARD days later and how often it
-// rose, over every (stock, day) in the index window where the combination held and the later close is known.
+// What the combination did afterwards — mean change to the close FORWARD days later and how often it rose. Daily step:
+// every (stock, day) in the index window where it held. Minute step: every trigger whose 7-day-later close is known
+// (none while the minute index keeps only 7 days).
 function forwardText(f,lead=''){if(!f||!f.samples)return'';const pct=(f.mean*100).toFixed(1);return`${lead}之後 ${f.days} 個交易日平均 ${f.mean>0?'+':''}${pct}%・${Math.round(f.winRate*100)}% 上漲（${f.samples} 次）`;}
+// Minute-index window label; the server decides how many days it keeps (7 unless HISTORY_DAYS says otherwise).
+function pastLabel(days){return`過去 ${days>7?days:7} 日`;}
 function stepLine(index){
   const data=indexFresh();
-  const daily=isDaily(),label=daily?'符合檔數':'過去 7 日';
+  const daily=isDaily(),label=daily?'符合檔數':pastLabel(data?.availableDays);
   if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">${label}：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
   if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算</small>`;
   const step=data.steps?.[index];if(!step)return'';
   if(daily){const head=`${index?'加上這個後，':''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，過去')}</small>`:`<small class="proto-count zero">${head} 0 檔符合${index?'，是這個過濾把股票全部篩掉了':''}</small>`;}
-  const head=index?'加上這個後':'過去 7 日';
+  const head=index?'加上這個後':pastLabel(data.availableDays);
   if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${index?'，是這個過濾把股票全部篩掉了':'，這個過濾可能太嚴格'}</small>`;
-  return`<small class="proto-count">${head}：${countText(step)}</small>`;
+  return`<small class="proto-count">${head}：${countText(step)}${forwardText(step.forward,'，')}</small>`;
 }
 function candidateLine(spec){
   const data=indexFresh();if(!data||!data.counts)return'';
   const item=data.counts.get(specKey(spec));if(!item)return'';
-  const prefix=F().length?'加入後':isDaily()?`${dailyDateText(data)}收盤`:'過去 7 日';
-  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}${isDaily()?forwardText(item.forward,'，過去'):''}</small>`;
+  const prefix=F().length?'加入後':isDaily()?`${dailyDateText(data)}收盤`:pastLabel(data.availableDays);
+  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}${forwardText(item.forward,isDaily()?'，過去':'，')}</small>`;
 }
 // D3. Example chart (owner decision 2026-10): one candlestick example of what a stock looks like when ALL selected
 // filters hold — any stock, not named; daily history first, one-minute bars when daily never met it. Only the bars
@@ -843,7 +846,7 @@ function confirmPage(){
   const minute=state.filters.length>0,dailyList=state.dailyFilters;
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日收盤後判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>過去 7 日</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>收盤後（約 13:50），當天新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天收盤判斷'}</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日收盤後判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>收盤後（約 13:50），當天新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天收盤判斷'}</p><p>通知：這個瀏覽器的系統通知，需保持網頁開啟</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{

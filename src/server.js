@@ -269,7 +269,7 @@ async function routeApi(request, response) {
         status:'ready', availableDays:result.availableDays, dates:result.dates, symbolsCount, refreshedAt:result.refreshedAt ?? result.loadedAt ?? null,
         filterKeys:resolvedFilters.map((item) => item.key),
         steps:result.steps,
-        candidates:resolvedCandidates.map((item, index) => item.error ? { index, error:item.error } : { index, triggeredSymbols:byKey.get(item.key)?.triggeredSymbols ?? 0, totalEvents:byKey.get(item.key)?.totalEvents ?? 0 }),
+        candidates:resolvedCandidates.map((item, index) => item.error ? { index, error:item.error } : { index, triggeredSymbols:byKey.get(item.key)?.triggeredSymbols ?? 0, totalEvents:byKey.get(item.key)?.totalEvents ?? 0, forward:byKey.get(item.key)?.forward ?? null }),
         verdict:last ? historyVerdict({ totalEvents:last.totalEvents, symbolsCount, availableDays:result.availableDays }) : null,
         daily:result.daily ? (result.daily.loading ? { status:'loading' } : { status:'ready', dates:result.daily.dates, latestDate:result.daily.latestDate, filterKeys:dailyFilters.map((item) => item.key), steps:result.daily.steps, candidates:dailyCandidates.map((item, index) => { if (item.error) return { index, error:item.error }; const found = result.daily.candidates.find((entry) => entry.key === item.key); return { index, latestCount:found?.latestCount ?? 0, forward:found?.forward ?? null }; }) }) : null
       });

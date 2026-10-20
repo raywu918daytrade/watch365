@@ -102,6 +102,17 @@ export class DailyIndex {
     return before ? this.metOn(keys, before, symbols) : new Set();
   }
 
+  // Close FORWARD_DAYS trading days after `date` relative to `price` (an intraday trigger price); NaN when that
+  // close is not known yet or the day is not in the daily history.
+  forwardFrom(symbol, date, price) {
+    const item = this.series?.get(symbol);
+    if (!item || !(price > 0)) return NaN;
+    const at = item.dates.lastIndexOf(date);
+    if (at < 0 || at + FORWARD_DAYS >= item.dates.length) return NaN;
+    const to = item.c[at + FORWARD_DAYS];
+    return Number.isFinite(to) ? to / price - 1 : NaN;
+  }
+
   // What happened after the combination was met: every (stock, window date) where all keys were met and the close
   // FORWARD_DAYS trading days later is known. { days, samples, dates, mean, winRate } or null without a sample.
   forward(keys, symbols = null) {

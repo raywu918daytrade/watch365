@@ -70,13 +70,15 @@ export class HistoryIndex {
   // candidates: condition keys to try as "the next filter" on top of all filters (the list rows).
   // symbols: Set to restrict to (a watchlist), or null for every stock in memory.
   // symbolsByDate: Map(date → Set) further restricts each day (the daily-filter list of that day), or null.
-  query({ filters = [], candidates = [], symbols = null, symbolsByDate = null, events = true } = {}) {
+  // forward: { days, value(date, symbol, price) → change `days` trading days after the trigger, NaN when unknown }
+  //   adds { days, samples, dates, mean, winRate } (or null) to every step and candidate.
+  query({ filters = [], candidates = [], symbols = null, symbolsByDate = null, events = true, forward = null } = {}) {
     for (const key of [...filters, ...candidates]) if (!this.conditions.has(key)) throw Object.assign(new Error('HISTORY_INDEX_CONDITION_MISSING'), { code:'HISTORY_INDEX_CONDITION_MISSING', key });
     const dates = this.dates();
-    const steps = filters.map((_, index) => this.#combine(filters.slice(0, index + 1), dates, symbols, events && index === filters.length - 1, symbolsByDate));
+    const steps = filters.map((_, index) => this.#combine(filters.slice(0, index + 1), dates, symbols, events && index === filters.length - 1, symbolsByDate, forward));
     const candidateResults = candidates.map((key) => {
-      const result = this.#combine([...filters, key], dates, symbols, false, symbolsByDate);
-      return { key, triggeredSymbols:result.triggeredSymbols, totalEvents:result.totalEvents };
+      const result = this.#combine([...filters, key], dates, symbols, false, symbolsByDate, forward);
+      return { key, triggeredSymbols:result.triggeredSymbols, totalEvents:result.totalEvents, ...(forward ? { forward:result.forward } : {}) };
     });
     return { dates, availableDays:dates.length, steps, candidates:candidateResults };
   }
@@ -108,12 +110,12 @@ export class HistoryIndex {
     conditions.forEach((condition, index) => condition.truth.set(date, perCondition[index]));
   }
 
-  #combine(keys, dates, symbols, withEvents, symbolsByDate = null) {
+  #combine(keys, dates, symbols, withEvents, symbolsByDate = null, forward = null) {
     const conditions = keys.map((key) => this.conditions.get(key));
     const kind = conditions.some((condition) => condition.kind === 'event') ? 'event' : 'level';
     const rearm = this.rearmBars[kind];
-    const days = [], events = [], triggered = new Set();
-    let total = 0;
+    const days = [], events = [], triggered = new Set(), forwardDates = new Set();
+    let total = 0, samples = 0, sum = 0, wins = 0;
     for (const date of dates) {
       const day = this.days.get(date);
       let count = 0;
@@ -137,12 +139,14 @@ export class HistoryIndex {
         const hits = ruleTriggerIndexes(truth, rearm, kind, series.t);
         if (!hits.length) continue;
         count += hits.length; triggered.add(symbol);
+        if (forward) for (const bar of hits) { const value = forward.value(date, symbol, series.c[bar]); if (Number.isFinite(value)) { samples++; sum += value; if (value > 0) wins++; forwardDates.add(date); } }
         if (withEvents) for (const bar of hits) events.push({ date, at:new Date(series.t[bar]).toISOString(), symbol, price:series.c[bar] });
       }
       total += count;
       days.push({ date, count });
     }
     const result = { triggeredSymbols:triggered.size, totalEvents:total, days:days.reverse() };
+    if (forward) result.forward = samples ? { days:forward.days, samples, dates:forwardDates.size, mean:sum / samples, winRate:wins / samples } : null;
     if (withEvents) {
       events.sort((a, b) => b.at.localeCompare(a.at) || a.symbol.localeCompare(b.symbol));
       result.truncated = events.length > MAX_EVENTS;

@@ -14,7 +14,9 @@ import { evaluateFormulaSeries } from './formulaEngine.js';
 import { wilderRsi } from './indicatorEngine.js';
 import { roundPrice } from './marketBar.js';
 
-export const HISTORY_DAYS = 7;
+// Trading days of minute bars kept by the condition index. 7 fits the 1 GB service; HISTORY_DAYS=30 (with more
+// memory) gives the intraday step triggers old enough to carry a 7-day forward outcome.
+export const HISTORY_DAYS = Math.max(1, Number(process.env.HISTORY_DAYS) || 7);
 const COOLDOWN_MS = 30 * 60 * 1000;
 const GAP_MS = 120_000;
 const MAX_EVENTS = 300;

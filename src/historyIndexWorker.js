@@ -15,7 +15,7 @@ import { BarCollector, collectHistory, HISTORY_DAYS, listHfD1Months, listHfM1Dat
 import { DailyStore, findExample } from './conditionExample.js';
 import { readFile } from 'node:fs/promises';
 import { HistoryIndex } from './historyIndex.js';
-import { DailyIndex, dailyBarsFromMinutes, fillDailyGap } from './dailyIndex.js';
+import { DailyIndex, FORWARD_DAYS, dailyBarsFromMinutes, fillDailyGap } from './dailyIndex.js';
 
 const index = new HistoryIndex({ maxDays:HISTORY_DAYS });
 let status = 'idle', progress = null, error = null, loadedAt = null, refreshedAt = null, symbols = new Set();
@@ -95,6 +95,8 @@ function syncDailyIndex() {
   dailyIndex.setSeries(series); dailyGapKey = key;
   if (filled.length) console.log(`history-index: daily filled from minute bars: ${filled.join(', ')}`);
 }
+// Intraday triggers measured against the daily close FORWARD_DAYS trading days later (null before daily history is in).
+function minuteForward() { return dailyStatus === 'ready' && dailyIndex.ready() ? { days:FORWARD_DAYS, value:(date, symbol, price) => dailyIndex.forwardFrom(symbol, date, price) } : null; }
 function dailyBaseLast() { let last = ''; for (const item of daily.series.values()) { const date = item.dates.at(-1); if (date > last) last = date; } return last; }
 function taipeiDay() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }
 
@@ -167,7 +169,7 @@ process.on('message', (message) => {
           if (dailyFilters.length) symbolsByDate = new Map(index.dates().map((date) => [date, dailyIndex.listFor(dailyFilters, date, symbolSet)]));
         }
       }
-      const result = dailyResult?.loading && dailyFilters.length ? { dates:index.dates(), availableDays:index.dates().length, steps:[], candidates:[] } : index.query({ filters:message.filters || [], candidates:message.candidates || [], symbols:symbolSet, symbolsByDate, events:message.events !== false });
+      const result = dailyResult?.loading && dailyFilters.length ? { dates:index.dates(), availableDays:index.dates().length, steps:[], candidates:[] } : index.query({ filters:message.filters || [], candidates:message.candidates || [], symbols:symbolSet, symbolsByDate, events:message.events !== false, forward:minuteForward() });
       reply({ type:'result', result:{ ...result, daily:dailyResult, computed, loadedAt, refreshedAt } });
     } catch (failure) {
       reply({ type:'error', code:failure.code || 'HISTORY_INDEX_FAILED', message:failure.message });

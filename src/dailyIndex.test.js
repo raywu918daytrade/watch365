@@ -36,6 +36,11 @@ test('daily index: stocks met on the latest close, per-day counts, new entries, 
   assert.ok(both.steps[1].forward.mean > 0.03 && both.steps[1].forward.mean < 0.08);
   assert.equal(result.candidates[0].forward.samples, 29);
   assert.equal(index.query({ filters:['gt60'], symbols:new Set(['2303']) }).steps[0].forward, null); // 2303 hits 70 only on the last day
+  // Intraday trigger at a price on a given day → the close 7 trading days later relative to that price.
+  const d = index.window;
+  assert.ok(Math.abs(index.forwardFrom('1101', d[0], 100) - ((100 + 7) / 100 - 1)) < 1e-12);
+  assert.ok(Number.isNaN(index.forwardFrom('1101', d.at(-1), 139)));     // no later close yet
+  assert.ok(Number.isNaN(index.forwardFrom('9999', d[0], 100)));         // unknown stock
   // The list a minute-bar day uses is the previous daily close.
   const last = index.dates.at(-1), previous = index.dates.at(-2);
   assert.deepEqual([...index.listFor(['sma5'], last)], ['1101']);
