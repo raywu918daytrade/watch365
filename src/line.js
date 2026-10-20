@@ -125,7 +125,7 @@ export class LineNotifier {
       const userId = event.source?.type === 'user' ? event.source.userId : null;
       if (!userId) continue;
       try {
-        if (event.type === 'follow') { handled += 1; await this.reply(event.replyToken, '歡迎使用 watch365！請到網站按「用 LINE 登入」。'); }
+        if (event.type === 'follow') { handled += 1; await this.reply(event.replyToken, '歡迎使用 watch365！請到網站按「用 LINE 收通知」。'); }
         else if (event.type === 'unfollow') { handled += 1; await this.removeUser(userId); }
         else if (event.type === 'message' && event.message?.type === 'text') { handled += 1; await this.onText(userId, event.message.text, event.replyToken); }
       } catch (error) { this.log.error('line: webhook event failed', error.code || error.message); }
@@ -138,11 +138,11 @@ export class LineNotifier {
     if (!code) {
       // Replies are free (Reply API, not counted in the monthly quota), but a linked account gets no reply to chit-chat.
       if (this.users().some((user) => user.userId === userId)) return;
-      await this.reply(replyToken, '請到網站按「用 LINE 登入」。');
+      await this.reply(replyToken, '請到網站按「用 LINE 收通知」。');
       return;
     }
     const entry = this.codes.get(code);
-    if (!entry || entry.expiresAt <= this.now()) { this.codes.delete(code); await this.reply(replyToken, '登入碼已過期，請到網站再按一次「用 LINE 登入」。'); return; }
+    if (!entry || entry.expiresAt <= this.now()) { this.codes.delete(code); await this.reply(replyToken, '這組碼已過期，請到網站再按一次。'); return; }
     this.codes.delete(code);
     let displayName = null;
     try { displayName = (await this.call('GET', `/profile/${encodeURIComponent(userId)}`)).displayName || null; } catch { /* name is optional */ }
@@ -158,7 +158,7 @@ export class LineNotifier {
       try { for (const visitor of earlier) if ((await this.onLinked({ userId, visitor: entry.visitor, earlierVisitor: visitor }))?.recovered) recovered = true; }
       catch (error) { this.log.error('line: joining browsers failed', error.code || error.message); }
     }
-    await this.reply(replyToken, recovered ? '登入成功，已找回你的監控。條件成立時會在這裡通知你。' : '登入成功！條件成立時會在這裡通知你。');
+    await this.reply(replyToken, recovered ? '已找回你的盯盤設定，條件成立時會在這裡通知你。' : 'LINE 通知已開啟，條件成立時會在這裡通知你。');
   }
 
   async removeUser(userId) {
