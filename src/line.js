@@ -114,7 +114,7 @@ export class LineNotifier {
   async sendTest(visitor) {
     const targets = this.usersOf(visitor);
     if (!targets.length) return { sent: 0 };
-    await this.pushTo(targets, 'watch365 測試通知：LINE 綁定成功，條件成立時會在這裡通知你。');
+    await this.pushTo(targets, 'watch365 測試訊息：條件成立時會在這裡通知你。');
     return { sent: new Set(targets.map((user) => user.userId)).size };
   }
 
@@ -125,7 +125,7 @@ export class LineNotifier {
       const userId = event.source?.type === 'user' ? event.source.userId : null;
       if (!userId) continue;
       try {
-        if (event.type === 'follow') { handled += 1; await this.reply(event.replyToken, '歡迎使用 watch365！請到網站「我的監控」按「綁定 LINE」，再把畫面上的 6 位數綁定碼傳到這裡。'); }
+        if (event.type === 'follow') { handled += 1; await this.reply(event.replyToken, '歡迎使用 watch365！請到網站按「用 LINE 登入」。'); }
         else if (event.type === 'unfollow') { handled += 1; await this.removeUser(userId); }
         else if (event.type === 'message' && event.message?.type === 'text') { handled += 1; await this.onText(userId, event.message.text, event.replyToken); }
       } catch (error) { this.log.error('line: webhook event failed', error.code || error.message); }
@@ -138,11 +138,11 @@ export class LineNotifier {
     if (!code) {
       // Replies are free (Reply API, not counted in the monthly quota), but a linked account gets no reply to chit-chat.
       if (this.users().some((user) => user.userId === userId)) return;
-      await this.reply(replyToken, '請傳網站「我的監控 → 綁定 LINE」顯示的 6 位數綁定碼。');
+      await this.reply(replyToken, '請到網站按「用 LINE 登入」。');
       return;
     }
     const entry = this.codes.get(code);
-    if (!entry || entry.expiresAt <= this.now()) { this.codes.delete(code); await this.reply(replyToken, '綁定碼錯誤或已過期（10 分鐘內有效），請到網站重新產生。'); return; }
+    if (!entry || entry.expiresAt <= this.now()) { this.codes.delete(code); await this.reply(replyToken, '登入碼已過期，請到網站再按一次「用 LINE 登入」。'); return; }
     this.codes.delete(code);
     let displayName = null;
     try { displayName = (await this.call('GET', `/profile/${encodeURIComponent(userId)}`)).displayName || null; } catch { /* name is optional */ }
@@ -158,7 +158,7 @@ export class LineNotifier {
       try { for (const visitor of earlier) if ((await this.onLinked({ userId, visitor: entry.visitor, earlierVisitor: visitor }))?.recovered) recovered = true; }
       catch (error) { this.log.error('line: joining browsers failed', error.code || error.message); }
     }
-    await this.reply(replyToken, recovered ? '綁定成功！已找回你之前設定的監控，重新整理網頁就看得到。之後條件成立時，會在這裡通知你。' : '綁定成功！之後監控條件成立時，會在這裡通知你。');
+    await this.reply(replyToken, recovered ? '登入成功，已找回你的監控。條件成立時會在這裡通知你。' : '登入成功！條件成立時會在這裡通知你。');
   }
 
   async removeUser(userId) {

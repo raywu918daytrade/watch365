@@ -381,3 +381,6 @@
 .proto-met-chips span { padding:.18rem .45rem; border:1px solid #d4e0e0; border-radius:999px; background:#fff; color:#173036; font-size:.74rem; white-space:nowrap; }
 @media (max-width:640px) { .proto-strategy-grid { grid-template-columns:1fr; } }
 .proto-line[data-recover]{margin-bottom:16px}
+.proto-line:has(> .proto-line-login) { border:0; padding:0; background:none; }
+.proto-line > .proto-line-login { display:inline-flex; align-items:center; justify-content:center; gap:.55rem; }
+.proto-line-login .proto-line-logo { background:#fff; color:#06c755; }

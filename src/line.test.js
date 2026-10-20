@@ -29,7 +29,7 @@ test('a code sent from LINE links that account to the browser that asked for it'
   const { code } = line.issueCode('visitorA');
   await line.handleWebhook({ events: [{ type: 'message', replyToken: 'r1', source: { type: 'user', userId: 'U1' }, message: { type: 'text', text: ` ${code} ` } }] });
   assert.deepEqual(store.getState().line.users.map(({ userId, visitor, displayName }) => ({ userId, visitor, displayName })), [{ userId: 'U1', visitor: 'visitorA', displayName: 'Ray' }]);
-  assert.match(calls.at(-1).body.messages[0].text, /綁定成功/);
+  assert.match(calls.at(-1).body.messages[0].text, /登入成功/);
   assert.equal((await line.status('visitorA')).linked.length, 1);
   assert.equal((await line.status('visitorB')).linked.length, 0);
   // the code is single-use
@@ -88,7 +88,7 @@ test('linking an account linked from another browser before joins the browsers a
   const line = new LineNotifier({ config, store, fetchImpl: fakeFetch(calls), ownerOf: (visitor) => owners[visitor] || visitor, onLinked: async ({ visitor, earlierVisitor }) => { joined.push([visitor, earlierVisitor]); owners[visitor] = earlierVisitor; return { recovered: true }; } });
   await line.onText('U1', line.issueCode('laptop').code, 'r');
   assert.deepEqual(joined, [['laptop', 'phone']]);
-  assert.match(calls.at(-1).body.messages[0].text, /已找回你之前設定的監控/);
+  assert.match(calls.at(-1).body.messages[0].text, /已找回你的監控/);
   // Both browsers are one person now: one account shown, one push per run, and unlink from either removes it.
   assert.equal((await line.status('laptop')).linked.length, 1);
   assert.deepEqual(await line.notifySignals([{ symbol: '2330', price: 1 }], { owner: 'phone' }), { sent: 1 });
@@ -96,5 +96,5 @@ test('linking an account linked from another browser before joins the browsers a
   // A first-time link calls nothing.
   await line.onText('U9', line.issueCode('other').code, 'r');
   assert.equal(joined.length, 1);
-  assert.match(calls.at(-1).body.messages[0].text, /^綁定成功！之後/);
+  assert.match(calls.at(-1).body.messages[0].text, /^登入成功！條件/);
 });
