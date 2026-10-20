@@ -65,7 +65,7 @@ function applyRuleTriggers(state, triggers, eligibleBars, strategy, now, decisio
   return { signals:createdSignals, decisions, skipped:false, reason:null, late };
 }
 
-// D1-only monitors (executor daily_close): one signal per stock that newly meets the daily filters on today's close.
+// D1-only monitors (executor daily_close): one signal per stock that newly meets the daily filters on today's 13:00 price.
 // result = { date, met, newly:[{ symbol, close }] } from the history index worker.
 export function applyDailyClose(state, result, strategy, now = new Date()) {
   const ruleId = strategyIdentity(strategy);
@@ -77,16 +77,16 @@ export function applyDailyClose(state, result, strategy, now = new Date()) {
     if (state.dedupe?.[dedupeKey]) continue;
     state.dedupe ??= {}; state.dedupe[dedupeKey] = now.toISOString();
     const watch = state.settings.watchlist.find((entry) => entry.symbol === item.symbol);
-    const signal = { id:makeId('sig', now), engine:'daily_close', ruleVersion:`${strategy.id}@${strategy.version}`, strategyIdentity:ruleId, executor:strategy.executor, symbol:item.symbol, tradingDate:result.date, barEnd:`${result.date}T05:30:00.000Z`, dedupeKey, triggered:true, reasonCode:'triggered', ruleName:strategy.name || RULE_NAME, strategy:structuredClone(strategy), triggeredAt:now.toISOString(), name:watch?.name || item.symbol, market:watch?.market, price:item.close };
+    const signal = { id:makeId('sig', now), engine:'daily_close', ruleVersion:`${strategy.id}@${strategy.version}`, strategyIdentity:ruleId, executor:strategy.executor, symbol:item.symbol, tradingDate:result.date, barEnd:`${result.date}T05:00:00.000Z`, dedupeKey, triggered:true, reasonCode:'triggered', ruleName:strategy.name || RULE_NAME, strategy:structuredClone(strategy), triggeredAt:now.toISOString(), name:watch?.name || item.symbol, market:watch?.market, price:item.close };
     createdSignals.push(signal);
     state.signals.unshift(signal);
-    state.notifications.unshift({ id:makeId('noti', now), signalId:signal.id, channel:state.settings.notification.channel, target:state.settings.notification.target, status:'pending', createdAt:now.toISOString(), title:`${signal.symbol} 收盤符合日 K 條件`, message:stateMachineMessage(signal), retryCount:0 });
+    state.notifications.unshift({ id:makeId('noti', now), signalId:signal.id, channel:state.settings.notification.channel, target:state.settings.notification.target, status:'pending', createdAt:now.toISOString(), title:`${signal.symbol} 13:00 符合日 K 條件`, message:stateMachineMessage(signal), retryCount:0 });
   }
   return { signals:createdSignals, skipped:false, reason:null };
 }
 
 export function stateMachineMessage(signal) {
-  return `${signal.symbol} ${signal.name !== signal.symbol ? `${signal.name} ` : ''}條件成立：${signal.ruleName} | 收盤 ${Number(signal.price).toLocaleString('zh-TW', { maximumFractionDigits:2 })}`;
+  return `${signal.symbol} ${signal.name !== signal.symbol ? `${signal.name} ` : ''}條件成立：${signal.ruleName} | ${signal.engine === 'daily_close' ? '13:00 價' : '收盤'} ${Number(signal.price).toLocaleString('zh-TW', { maximumFractionDigits:2 })}`;
 }
 
 function taipeiDay(now) { return new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10); }

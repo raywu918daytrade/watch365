@@ -832,9 +832,10 @@ async function dailyListToday(settings) {
   await store.update((state) => { state.runtime.dailyList = list; appendLog(state, 'info', `日 K 名單 ${list.count} 檔（${list.listDate} 收盤）`); });
   return list;
 }
-// D1-only monitors: once per trading day after the close (13:50 Taipei, when the last minute bars are in), today's daily
-// bar is built from today's minute bars and the stocks that newly meet the daily filters are notified.
-const DAILY_CLOSE_AT_MINUTES = 13 * 60 + 50;
+// D1-only monitors: once per trading day at 13:00 Taipei, before the close so users can still order the same day. Today's
+// daily bar is built from the minute bars so far (the 13:00 price stands in for the close; volume covers 09:00-13:00 only)
+// and the stocks that newly meet the daily filters are notified.
+const DAILY_CLOSE_AT_MINUTES = 13 * 60;
 async function runDailyClose(source) {
   const now = new Date(), settings = store.getState().settings, today = taipeiDate(now);
   const taipei = new Date(now.getTime() + 8 * 3_600_000), minutes = taipei.getUTCHours() * 60 + taipei.getUTCMinutes(), weekday = taipei.getUTCDay();
@@ -856,7 +857,7 @@ async function runDailyClose(source) {
     applied = applyDailyClose(state, result, state.settings.strategy, now);
     state.runtime.lastProviderStatus = 'ok';
     state.runtime.dailyClose = { day:today, count:applied.signals.length, met:result.met.length };
-    appendLog(state, 'info', `收盤日 K 判斷：新符合 ${applied.signals.length} 檔（共符合 ${result.met.length} 檔）`, { source });
+    appendLog(state, 'info', `13:00 日 K 判斷：新符合 ${applied.signals.length} 檔（共符合 ${result.met.length} 檔）`, { source });
   });
   return { signals:applied.signals, skipped:false, reason:null, state:publicState(store.getState()) };
 }
