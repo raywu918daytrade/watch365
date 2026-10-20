@@ -5,6 +5,9 @@ const KEY='watch365_ui_v2';
 const DIRECTION_LABEL={above:'上穿',below:'下穿'};
 const MA_NAME={sma:'SMA',ema:'EMA'};
 const MAX_FILTERS=3;
+// 盤中觸發 (one-minute step) is 即將推出 (owner decision 2026-10-20): #conditions sends to #daily and saved minute
+// filters are dropped, so a draft from before cannot slip into the monitor.
+const M1_ENABLED=false;
 const SYNONYMS=[[/金叉/g,'黃金交叉'],[/死叉/g,'死亡交叉'],[/站上|突破/g,'上穿'],[/跌破/g,'下穿']];
 const PROVIDER_STATUS={ok:'正常',empty:'本輪沒有新的一分鐘 K',error:'資料讀取異常',coverage_unknown:'無法確認今日名單',empty_scope:'今日名單沒有可監控的股票',daily_wait:'等 13:00 判斷',daily_done:'今天 13:00 已判斷',daily_no_session:'今天沒有交易資料',daily_list_pending:'日 K 名單準備中',daily_list_empty:'今天日 K 名單沒有股票','尚未執行':'尚未執行'};
 const MARKET_LABEL={TWSE:'上市',TPEx:'上櫃'};
@@ -69,7 +72,7 @@ function shell({step,title,lead,body,back}){
   // Move focus to the new page heading on navigation (not on in-page re-renders) so screen readers announce it.
   const current=node();if(lastShellNode!==null&&lastShellNode!==current)root.querySelector('h1')?.focus({preventScroll:true});lastShellNode=current;
 }
-function render(){const routes={home,stocks,daily:conditions,conditions,request,confirm:confirmPage,success,dashboard};(routes[node()]||home)();}
+function render(){if(!M1_ENABLED&&node()==='conditions')return go('daily');const routes={home,stocks,daily:conditions,conditions,request,confirm:confirmPage,success,dashboard};(routes[node()]||home)();}
 
 async function home(){
   const draft=state.purpose?`<div class="proto-resume" id="draftCard"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.dailyFilters.length+state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續草案</button></div></div>`:'';
@@ -262,7 +265,7 @@ function migrateDraft(saved){
   if(!Array.isArray(saved.dailyFilters))saved.dailyFilters=[];
   if(saved.formula&&saved.formula.text){saved.filters=[{id:crypto.randomUUID(),label:saved.formula.name||saved.formula.text,formulaSummary:saved.formula.summary||'',spec:{ai:{text:saved.formula.text,context:saved.formula.context||[]}}}];if(saved.formula.token){saved.formulaToken=saved.formula.token;saved.formulaTokenSignature=JSON.stringify(saved.filters.map((filter)=>specKey(filter.spec)));}}
   else if(!saved.filters.length&&Array.isArray(saved.conditions)&&saved.conditions.length)saved.filters=saved.conditions.slice(0,MAX_FILTERS).map((condition)=>({id:condition.id||crypto.randomUUID(),label:conditionLabel(condition),formulaSummary:'',spec:{legacy:{indicator:condition.indicator,direction:condition.direction,period:condition.period,threshold:condition.threshold}}}));
-  saved.filters=saved.filters.filter((filter)=>filter&&filter.spec&&typeof filter.label==='string').slice(0,MAX_FILTERS);
+  saved.filters=M1_ENABLED?saved.filters.filter((filter)=>filter&&filter.spec&&typeof filter.label==='string').slice(0,MAX_FILTERS):[];
   saved.dailyFilters=saved.dailyFilters.filter((filter)=>filter&&(filter.spec?.shapeKey||filter.spec?.fingerprint)&&typeof filter.label==='string').slice(0,MAX_FILTERS);
   for(const key of['conditions','formula','activeIndicator','drafts','panel'])delete saved[key];
   return saved;
@@ -280,6 +283,29 @@ function presetFor(condition){
     }
   }
   return null;
+}
+// A saved filter whose indicator is no longer in the list (the library was rebuilt when storage moved off TiDB on
+// 2026-10-20, so AI-built formulas and their fingerprints are gone) is re-pointed at the row with the same name, or
+// dropped with a notice. Without this the whole index request and the monitor create fail with TEMPLATE_NOT_FOUND.
+function reconcileFilters(){
+  if(!templateCache||!templateCache.length)return false;
+  const rows=templateCache.flatMap((template)=>templateRowsFor(template,[]));
+  const shapes=new Set(templateCache.map((template)=>template.shapeKey));
+  const fingerprints=new Set(templateCache.flatMap((template)=>(template.members||[]).map((member)=>member.fingerprint)));
+  const known=(spec)=>spec.shapeKey?shapes.has(spec.shapeKey):spec.fingerprint?fingerprints.has(spec.fingerprint):true;
+  const dropped=[];let changed=false;
+  const fix=(list)=>list.filter((filter)=>{
+    if(known(filter.spec))return true;
+    const row=rows.find((item)=>normalizeQuery(item.label)===normalizeQuery(filter.label));
+    changed=true;
+    if(row){filter.label=row.label;filter.spec=row.spec;return true;}
+    dropped.push(filter.label);return false;
+  });
+  state.dailyFilters=fix(state.dailyFilters);state.filters=fix(state.filters);
+  if(!changed)return false;
+  invalidateToken();save();
+  if(dropped.length)showToast(`「${dropped.join('、')}」已不在指標清單，已移除，請重新選`);
+  return true;
 }
 function resolveLegacy(){
   let changed=false;
@@ -308,7 +334,7 @@ function conditions(){
   root.querySelector('#confirmConditions').addEventListener('click',()=>{if(daily){if(state.dailyFilters.length&&!legacyFilters().length)go('confirm');return;}if(!hasAnyStep())return;go('confirm');});
   if(daily)state.ai=null;
   drawAi();drawTemplates();drawHistory();
-  loadTemplates().then(()=>{if(!['conditions','daily'].includes(node()))return;if(resolveLegacy())drawFilters();drawTemplates();scheduleIndex();});
+  loadTemplates().then(()=>{if(!['conditions','daily'].includes(node()))return;const healed=reconcileFilters();if(resolveLegacy()||healed)drawFilters();drawTemplates();scheduleIndex();});
   autoHistory=false;scheduleIndex();if(!daily)persistDraftAiFilters();
 }
 function startAi(value){
@@ -334,10 +360,10 @@ function filterMarkup(){
   const rows=list.map((filter,index)=>{
     const legacy=Boolean(filter.spec.legacy);
     const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':''; // details live in the list (owner decision 2026-10)
-    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':stepLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
+    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':cutLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
   }).join('');
   const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'';
-  return`<div class="proto-condition-list"><p class="proto-eyebrow">${isDaily()?'已選日 K 過濾':'已選過濾'} ${list.length}/${MAX_FILTERS}</p>${rows}${foot}</div>`;
+  return`<div class="proto-condition-list"><p class="proto-eyebrow">${isDaily()?'已選日 K 過濾':'已選過濾'} ${list.length}/${MAX_FILTERS}</p>${rows}${legacyFilters(list).length?'':`<div class="proto-combo-line">${stepLine(list.length-1)}</div>`}${foot}</div>`;
 }
 function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();scheduleIndex();}
 function bindFilterList(){
@@ -429,7 +455,7 @@ function drawTemplates(){
   }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
-  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，過去')}`:`${pastLabel(base.data.availableDays)} <strong>${base.count} 檔・${base.events} 次</strong>${forwardText(base.forward,'，')}`}。長條＝加入後還剩幾檔。</p>`:'';
+  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，歷史上')}`:`${pastLabel(base.data.availableDays)} <strong>${base.count} 檔・${base.events} 次</strong>${forwardText(base.forward,'，')}`}。長條＝加入後還剩幾檔。</p>`:'';
   const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
   const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
@@ -633,7 +659,11 @@ async function runIndex(){
     const last=(result.steps||[]).at(-1);
     if(last){state.history=historyFrom(historySignature(),{availableDays:result.availableDays,symbolsCount:result.symbolsCount,totalEvents:last.totalEvents,triggeredSymbols:last.triggeredSymbols,days:last.days,events:last.events||[],truncated:last.truncated,verdict:result.verdict,failedDays:0});}
     save();drawIndexViews();
-  }catch(error){if(seq!==indexSeq)return;indexData={...indexData,loading:false,error:errorText(error)};drawIndexViews();}
+  }catch(error){
+    if(seq!==indexSeq)return;
+    if(error.code==='TEMPLATE_NOT_FOUND'&&!runIndex.healing){runIndex.healing=true;templateCache=null;await loadTemplates();runIndex.healing=false;if(reconcileFilters()){drawFilters();return;}}
+    indexData={...indexData,loading:false,error:errorText(error)};drawIndexViews();
+  }
 }
 function drawIndexViews(){if(!['conditions','daily'].includes(node()))return;scheduleExample();const target=root.querySelector('#addedPanel');if(target){target.innerHTML=filterMarkup();bindFilterList();}drawTemplates();drawHistory();drawSticky();}
 function indexFresh(){return indexData&&indexData.signature===indexSignature()?indexData:null;}
@@ -644,22 +674,29 @@ function countText(item){return item.daily||item.totalEvents==null?`${item.trigg
 function forwardText(f,lead=''){if(!f||!f.samples)return'';const pct=(f.mean*100).toFixed(1);return`${lead}之後 ${f.days} 個交易日平均 ${f.mean>0?'+':''}${pct}%・${Math.round(f.winRate*100)}% 上漲（${f.samples} 次）`;}
 // Minute-index window label; the server decides how many days it keeps (7 unless HISTORY_DAYS says otherwise).
 function pastLabel(days){return`過去 ${days>7?days:7} 日`;}
+// One line for the whole combination (every selected filter met at once, owner request 2026-10-20: the stat is not
+// per filter). The row of the filter that empties the list says so (cutLine).
 function stepLine(index){
   const data=indexFresh();
-  const daily=isDaily(),label=daily?'符合檔數':pastLabel(data?.availableDays);
+  const daily=isDaily(),many=F().length>1,label=daily?(many?'全部成立':'符合檔數'):pastLabel(data?.availableDays);
   if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">${label}：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
-  if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算</small>`;
+  if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算（${escapeHtml(data.error)}）</small>`;
   const step=data.steps?.[index];if(!step)return'';
-  if(daily){const head=`${index?'加上這個後，':''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，過去')}</small>`:`<small class="proto-count zero">${head} 0 檔符合${index?'，是這個過濾把股票全部篩掉了':''}</small>`;}
-  const head=index?'加上這個後':pastLabel(data.availableDays);
-  if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${index?'，是這個過濾把股票全部篩掉了':'，這個過濾可能太嚴格'}</small>`;
+  if(daily){const head=`${many?`${F().length} 個過濾全部成立，`:''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，歷史上')}</small>`:`<small class="proto-count zero">${head} 0 檔符合</small>`;}
+  const head=many?`全部成立・${pastLabel(data.availableDays)}`:pastLabel(data.availableDays);
+  if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${many?'':'，這個過濾可能太嚴格'}</small>`;
   return`<small class="proto-count">${head}：${countText(step)}${forwardText(step.forward,'，')}</small>`;
+}
+function cutLine(index){
+  const steps=indexFresh()?.steps;if(!steps||F().length<2)return'';
+  const step=steps[index],before=index?steps[index-1]:null;
+  return step&&!step.triggeredSymbols&&(!before||before.triggeredSymbols)?`<small class="proto-count zero">${index?'加上這個後 0 檔，是這個過濾把股票全部篩掉了':'單獨這個就 0 檔'}</small>`:'';
 }
 function candidateLine(spec){
   const data=indexFresh();if(!data||!data.counts)return'';
   const item=data.counts.get(specKey(spec));if(!item)return'';
   const prefix=F().length?'加入後':isDaily()?`${dailyDateText(data)}收盤`:pastLabel(data.availableDays);
-  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}${forwardText(item.forward,isDaily()?'，過去':'，')}</small>`;
+  return`<small class="proto-count ${item.triggeredSymbols?'':'zero'}">${prefix} ${countText(item)}${forwardText(item.forward,isDaily()?'，歷史上':'，')}</small>`;
 }
 // D3. Example chart (owner decision 2026-10): one candlestick example of what a stock looks like when ALL selected
 // filters hold — any stock, not named; daily history first, one-minute bars when daily never met it. Only the bars
@@ -843,11 +880,11 @@ function request(){
 }
 
 function confirmPage(){
-  if(!hasAnyStep())return go('conditions');
+  if(!hasAnyStep())return go('daily');
   const minute=state.filters.length>0,dailyList=state.dailyFilters;
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:'conditions',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日 13:00 判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>每個交易日 13:00（收盤前），以 13:00 價格當作今天收盤，新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：這個瀏覽器的系統通知（需保持網頁開啟），也可以在「我的監控」綁定 LINE</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:M1_ENABLED?'conditions':'daily',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日 13:00 判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>每個交易日 13:00（收盤前），以 13:00 價格當作今天收盤，新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：這個瀏覽器的系統通知（需保持網頁開啟），也可以在「我的監控」綁定 LINE</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
@@ -858,6 +895,8 @@ function confirmPage(){
   button.addEventListener('click',async()=>{
     button.disabled=true;button.textContent='建立中…';
     try{
+      templateCache=null;await loadTemplates();
+      if(reconcileFilters()){if(!hasAnyStep())return go('daily');return render();}
       const body={...monitorSpec(),daily:dailyPayload()};
       if(minute)await withFormula(['/api/monitor/configure',body]);else await api('/api/monitor/configure',body);
       createdDailyOnly=!minute;
