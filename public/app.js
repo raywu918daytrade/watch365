@@ -84,10 +84,11 @@ async function home(){
   root.querySelectorAll('[data-purpose]').forEach((button)=>button.addEventListener('click',()=>{const purpose=button.dataset.purpose;if(purpose!==state.purpose){state.purpose=purpose;state.watchlist=[];}save();go(purpose==='watchlist'?'stocks':'daily');}));
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
   const target=root.querySelector('#homeMonitor');
+  if(await drawGate(target))return;
   try{
     const data=await api('/api/state');if(node()!=='home')return;
     const settings=data.settings||{};
-    if(!settings.monitorTask?.onboardingCompleted){target.innerHTML='';drawRecover(target);return;}
+    if(!settings.monitorTask?.onboardingCompleted){target.innerHTML='';return;}
     const {current:homeSignals}=monitorSignals(settings,data.signals||[]);
     const today=homeSignals.filter((signal)=>isToday(signal.triggeredAt));
     // Only one monitor runs at a time (owner report 2026-10: a separate draft card read like a second monitor), so an
@@ -100,18 +101,19 @@ async function home(){
     target.querySelector('#discardEdit')?.addEventListener('click',()=>{resetDraft();render();});
   }catch{target.innerHTML='';}
 }
-// No login (owner decision 2026-10-20): a new phone or browser has no monitor until LINE says who it is, so home offers
-// to link the LINE account used before, which brings that monitor back (server: src/monitors.js join).
-async function drawRecover(target){
-  try{lineStatus=await api('/api/line/status');}catch{return;}
-  if(node()!=='home'||!lineStatus.enabled||lineStatus.linked?.length)return;
-  // Two equal buttons first (owner 2026-10-20): returning customers get their monitor back with LINE, new ones start
-  // straight away (the start options and 熱門策略 show after 直接開始). A draft in progress skips this.
-  const opened=(()=>{try{return sessionStorage.getItem('w365-start')==='1';}catch{return false;}})();
-  if(state.purpose||opened){target.innerHTML='';root.querySelector('.proto-options')?.insertAdjacentHTML('afterend','<div id="lineBox" class="proto-line" data-recover="1"></div>');drawLineBox();return;}
-  const page=target.closest('.proto-frame');if(!page)return;page.classList.add('proto-gated');
+// Who is this (owner decision 2026-10-20, no account system): until this browser is logged in with LINE, home first asks
+// one thing with two equal buttons, 看我的監控 (log in with LINE; the monitor of that LINE account shows) or 直接開始 (a new
+// customer sets up and logs in with LINE when creating the monitor). A draft in progress, or 直接開始 earlier in this
+// tab, skips it. Returns true while the question is showing.
+async function drawGate(target){
+  if(state.purpose)return false;
+  try{if(sessionStorage.getItem('w365-start')==='1')return false;}catch{}
+  try{lineStatus=await api('/api/line/status');}catch{return false;}
+  if(node()!=='home'||!lineStatus.enabled||lineStatus.linked?.length)return false;
+  const page=target.closest('.proto-frame');if(!page)return false;page.classList.add('proto-gated');
   target.innerHTML='<div class="proto-gate"><div id="lineBox" class="proto-line" data-recover="1"></div><button class="proto-primary proto-full" id="startNow">直接開始</button></div>';drawLineBox();
-  target.querySelector('#startNow').addEventListener('click',()=>{try{sessionStorage.setItem('w365-start','1');}catch{}page.classList.remove('proto-gated');target.innerHTML='';root.querySelector('.proto-options')?.scrollIntoView({block:'start',behavior:'smooth'});});
+  target.querySelector('#startNow').addEventListener('click',()=>{try{sessionStorage.setItem('w365-start','1');}catch{}stopLinePoll();lineCode=null;page.classList.remove('proto-gated');render();});
+  return true;
 }
 // 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
 // into the daily step. Each is named by its list labels and skipped when the list doesn't have every one of them.
@@ -964,14 +966,17 @@ function confirmPage(){
   const plan=planHtml({scope:state.purpose==='watchlist'?`你選的 ${state.watchlist.length} 檔股票`:'今日監控名單',daily:dailyList.map((filter)=>filter.label),minute:state.filters.map((filter)=>filter.label)});
   const history=historyFresh();
   shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:M1_ENABLED?'conditions':'daily',body:`<div id="replaceNotice"></div>${plan}<dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length&&minute?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">以前一天收盤篩出當天要盯的股票</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>怎麼通知</dt><dd>以 13:00 價格當作今天收盤判斷，新符合的股票各通知一次，收盤前還來得及下單</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：到「我的監控」開啟 LINE 通知，或用這個瀏覽器的系統通知（需保持網頁開啟）</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
-  const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
+  const button=root.querySelector('#createMonitor'),label=()=>button.dataset.line?'用 LINE 登入並開始監控':button.dataset.replace?'取代並啟用':'建立並啟用監控';
+  // Creating a monitor is where LINE login happens (owner decision 2026-10-20): a browser not logged in with LINE logs in
+  // here, and the monitor is created as soon as LINE confirms, so there is no "monitor without LINE" in between.
+  api('/api/line/status').then((status)=>{lineStatus=status;if(node()!=='confirm'||!status.enabled||status.linked?.length)return;button.dataset.line='1';button.classList.add('proto-line-cta');if(!button.disabled)button.textContent=label();}).catch(()=>{});
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
     const settings=data.settings||{};if(node()!=='confirm'||!settings.monitorTask?.onboardingCompleted)return;
     root.querySelector('#replaceNotice').innerHTML=`<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>你一次只會有一組監控。建立後會<strong>取代</strong>${settings.enabled?'正在運作的':'目前暫停的'}「${escapeHtml(monitorConditionText(settings))}」（${escapeHtml(monitorScopeText(settings))}）。</span></p>`;
     button.dataset.replace='1';if(!button.disabled)button.textContent=label();root.querySelector('#createHint').textContent='舊的觸發紀錄會保留';
   }).catch(()=>{});
-  button.addEventListener('click',async()=>{
+  const create=async()=>{
     button.disabled=true;button.textContent='建立中…';
     try{
       templateCache=null;await loadTemplates();
@@ -982,12 +987,28 @@ function confirmPage(){
       templateCache=null; // an AI-built formula is now in the library; reload the list next time
       resetDraft();go('success');
     }catch(error){root.querySelector('#createError').textContent=errorText(error);button.disabled=false;button.textContent=label();}
+  };
+  button.addEventListener('click',async()=>{
+    if(!button.dataset.line)return create();
+    button.disabled=true;button.textContent='請稍候…';
+    try{
+      lineCode=await api('/api/line/link-code',{});
+      root.querySelector('#createError').insertAdjacentHTML('beforebegin','<div id="lineBox" class="proto-line" data-confirm="1"></div>');drawLineBox();
+      root.querySelector('#lineBox').scrollIntoView({block:'center',behavior:'smooth'});
+      lineLinked=()=>{delete button.dataset.line;button.classList.remove('proto-line-cta');root.querySelector('#lineBox')?.remove();create();};
+      stopLinePoll();lineTimer=setInterval(()=>{if(node()!=='confirm'||!lineCode||Date.parse(lineCode.expiresAt)<=Date.now()){stopLinePoll();lineCode=null;lineLinked=null;root.querySelector('#lineBox')?.remove();button.disabled=false;button.textContent=label();return;}refreshLine();},3000);
+      button.textContent='等待 LINE…';
+    }catch(error){root.querySelector('#createError').textContent=errorText(error);button.disabled=false;button.textContent=label();}
   });
 }
 
 let createdDailyOnly=false;
 function filterChips(list){return list.map((filter)=>`<span>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}${filter.formulaSummary?`<br><small>${escapeHtml(filter.formulaSummary)}</small>`:''}</span>`).join('<span class="proto-and-pill">且</span>');}
 function success(){
+  if(lineStatus?.linked?.length){
+    shell({title:'監控已建立',lead:'',body:`<div class="proto-success"><span class="proto-check" aria-hidden="true">✓</span><p>${createdDailyOnly?'每個交易日 13:00 判斷，新符合的股票會傳到 LINE。':'條件成立時會傳到 LINE。'}</p></div><button class="proto-primary proto-full" data-go="dashboard">查看我的監控</button>`});
+    window.scrollTo(0,0);return;
+  }
   const supported='Notification' in window,permission=supported?Notification.permission:'unsupported';
   const action=permission==='default'?'<button class="proto-primary" id="notifyAndGo">開啟通知並查看監控</button>':'<button class="proto-primary" data-go="dashboard">查看我的監控</button>';
   const note=permission==='denied'?'<p class="proto-notice" role="note"><span aria-hidden="true">!</span><span>瀏覽器已封鎖通知。請點網址列左側的鎖頭圖示，把「通知」改為允許，才收得到觸發提醒。</span></p>':permission==='granted'?'<p class="proto-signature">通知已開啟。</p>':permission==='unsupported'?(isIosSafari()?`<p class="proto-notice" role="note"><span aria-hidden="true">i</span>${iosNotifyHint()}</p>`:'<p class="proto-signature">這個瀏覽器不支援通知，觸發紀錄會顯示在「我的監控」。</p>'):'<p class="proto-signature">最後一步：允許瀏覽器通知，條件成立時才會即時提醒你。</p>';
@@ -1060,7 +1081,7 @@ function drawDashboard(data,{force=false}={}){
 }
 // LINE notifications (server: src/line.js). The box is redrawn from lineStatus so a dashboard poll doesn't lose it;
 // while a link code is showing, the status is re-read every 5 s until the account appears.
-let lineStatus=null,lineCode=null,lineTimer=null;
+let lineStatus=null,lineCode=null,lineTimer=null,lineLinked=null;
 function lineBoxHtml(){
   if(!lineStatus||!lineStatus.enabled)return'';
   const linked=lineStatus.linked||[];
@@ -1070,14 +1091,14 @@ function lineBoxHtml(){
   if(lineCode&&Date.parse(lineCode.expiresAt)>Date.now()){
     const mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     const steps=lineCode.linkUrl?(mobile?'':'用手機 LINE 掃描'):'在 LINE 傳送：';
-    return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>${root.querySelector('#lineBox')?.dataset.recover?'用 LINE 找回盯盤設定':'用 LINE 收通知'}</strong>${steps?`<small>${steps}</small>`:''}</span></div><div class="proto-line-code">${mobile&&lineCode.linkUrl?'':`<div class="proto-line-qr">${lineCode.qrSvg}</div>`}<div>${lineCode.linkUrl?'':`<p class="proto-line-digits">${escapeHtml(lineCode.code)}</p>`}${lineCode.linkUrl&&mobile?`<a class="proto-primary proto-line-open" href="${escapeHtml(lineCode.linkUrl)}" target="_blank" rel="noopener">開啟 LINE</a>`:''}</div></div><p class="proto-signature" role="status">等待中…<button class="proto-link" id="lineCancel">取消</button></p>`;
+    return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>${root.querySelector('#lineBox')?.dataset.recover?'用 LINE 看我的監控':root.querySelector('#lineBox')?.dataset.confirm?'用 LINE 登入':'用 LINE 收通知'}</strong>${steps?`<small>${steps}</small>`:''}</span></div><div class="proto-line-code">${mobile&&lineCode.linkUrl?'':`<div class="proto-line-qr">${lineCode.qrSvg}</div>`}<div>${lineCode.linkUrl?'':`<p class="proto-line-digits">${escapeHtml(lineCode.code)}</p>`}${lineCode.linkUrl&&mobile?`<a class="proto-primary proto-line-open" href="${escapeHtml(lineCode.linkUrl)}" target="_blank" rel="noopener">開啟 LINE</a>`:''}</div></div><p class="proto-signature" role="status">等待中…<button class="proto-link" id="lineCancel">取消</button></p>`;
   }
-  if(root.querySelector('#lineBox')?.dataset.recover)return`<button class="proto-primary proto-line-login" id="lineLink">${'<span class="proto-line-logo" aria-hidden="true">LINE</span>'}用 LINE 找回盯盤設定</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
+  if(root.querySelector('#lineBox')?.dataset.recover)return`<button class="proto-primary proto-line-login" id="lineLink">${'<span class="proto-line-logo" aria-hidden="true">LINE</span>'}用 LINE 看我的監控</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
   return`<button class="proto-primary proto-line-login" id="lineLink">${'<span class="proto-line-logo" aria-hidden="true">LINE</span>'}用 LINE 收通知</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
 }
 function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();root.querySelector('#notifyRow')?.toggleAttribute('hidden',Boolean(lineStatus?.linked?.length));}
 async function refreshLine(){
-  try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){const waiting=Boolean(lineCode);lineCode=null;stopLinePoll();if(waiting&&root.querySelector('#lineBox')?.dataset.recover)return render();}if(changed)drawLineBox();}
+  try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){const waiting=Boolean(lineCode);lineCode=null;stopLinePoll();if(waiting&&lineLinked){const done=lineLinked;lineLinked=null;return done();}if(waiting&&root.querySelector('#lineBox')?.dataset.recover)return render();}if(changed)drawLineBox();}
   catch{/* LINE box stays as it was */}
 }
 function stopLinePoll(){clearInterval(lineTimer);lineTimer=null;}
@@ -1087,9 +1108,9 @@ function bindLineBox(){
   box.querySelector('#lineLink')?.addEventListener('click',async(event)=>{
     const button=event.currentTarget;button.disabled=true;button.textContent='請稍候…';
     try{lineCode=await api('/api/line/link-code',{});drawLineBox();stopLinePoll();lineTimer=setInterval(()=>{if(!root.querySelector('#lineBox')||!lineCode||Date.parse(lineCode.expiresAt)<=Date.now()){stopLinePoll();lineCode=null;drawLineBox();return;}refreshLine();},5000);}
-    catch(error){button.disabled=false;button.textContent=box.dataset.recover?'用 LINE 找回盯盤設定':'用 LINE 收通知';message(error.code==='LINE_NOT_CONFIGURED'?'LINE 通知尚未開放。':errorText(error));}
+    catch(error){button.disabled=false;button.textContent=box.dataset.recover?'用 LINE 看我的監控':'用 LINE 收通知';message(error.code==='LINE_NOT_CONFIGURED'?'LINE 通知尚未開放。':errorText(error));}
   });
-  box.querySelector('#lineCancel')?.addEventListener('click',()=>{lineCode=null;stopLinePoll();drawLineBox();});
+  box.querySelector('#lineCancel')?.addEventListener('click',()=>{lineCode=null;stopLinePoll();if(box.dataset.confirm){lineLinked=null;box.remove();const create=root.querySelector('#createMonitor');if(create){create.disabled=false;create.textContent='用 LINE 登入並開始監控';}return;}drawLineBox();});
   box.querySelector('#lineTest')?.addEventListener('click',async(event)=>{const button=event.currentTarget;button.disabled=true;try{const result=await api('/api/line/test',{});message(result.sent?'已傳送，請看 LINE。':'找不到 LINE 帳號，請重新開啟。');}catch(error){message('傳送失敗，請稍後再試。');}button.disabled=false;});
   box.querySelector('#lineUnlink')?.addEventListener('click',async(event)=>{const button=event.currentTarget;button.disabled=true;try{const result=await api('/api/line/unlink',{});lineStatus=result.status;drawLineBox();}catch(error){button.disabled=false;message('解除失敗，請稍後再試。');}});
 }

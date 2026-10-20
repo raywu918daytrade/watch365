@@ -391,3 +391,4 @@
 .proto-gated .proto-options, .proto-gated #optionsHead, .proto-gated #strategyPanel, .proto-gated .proto-resume { display:none !important; }
 .proto-gate { display:grid; gap:.75rem; }
 .proto-gate .proto-line[data-recover], .proto-gate .proto-full { margin:0; }
+.proto-primary.proto-line-cta { border-color:#06c755; background:#06c755; }
