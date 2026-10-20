@@ -286,7 +286,7 @@
 .proto-count { color:#2f6f5e; font-size:.74rem; font-variant-numeric:tabular-nums; }
 .proto-count.zero { color:#a4471f; font-weight:600; }
 .proto-count.muted { color:#7a8a8e; }
-.proto-combo-line { padding:.5rem .8rem; background:#f1f7f5; border-radius:.4rem; }.proto-combo-line .proto-count { font-size:.8rem; line-height:1.5; }
+.proto-combo-line { padding:.5rem .8rem; background:#f1f7f5; border-radius:.4rem; }.proto-combo-line .proto-count { display:block; font-size:.78rem; line-height:1.5; }.proto-combo-line strong { font-size:.86rem; }
 /* Ranked "next filter" list: bar = stocks left after adding the row, relative to the current result. */
 .proto-rank-base strong { color:#1f3d42; }
 .proto-rank-list { display:grid; border:1px solid #d0dddd; border-radius:.5rem; background:#fff; overflow:hidden; }

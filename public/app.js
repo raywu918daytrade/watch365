@@ -320,7 +320,7 @@ function conditions(){
   const daily=isDaily(),scopeBack=state.purpose==='watchlist'?'stocks':'home';
   const dailyNote=!daily&&state.dailyFilters.length?`只在日 K 篩出的股票上判斷（${state.dailyFilters.map((filter)=>escapeHtml(filter.label)).join(' 且 ')}，以前一天收盤為準）。`:'';
   const title=daily?'先用日 K 篩股票？':'盤中什麼時候通知？';
-  const lead=daily?'用日 K 指標篩出股票，最多 3 個，每個交易日 13:00 通知一次，收盤前還來得及下單。盤中觸發（一分鐘 K）即將推出。':`${dailyNote}從清單選一分鐘 K 指標，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。${state.dailyFilters.length?'不需要盤中條件可以跳過，改成 13:00 通知。':''}`;
+  const lead=daily?'最多 3 個，全部成立的股票在每個交易日 13:00 通知你。':`${dailyNote}從清單選一分鐘 K 指標，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。${state.dailyFilters.length?'不需要盤中條件可以跳過，改成 13:00 通知。':''}`;
   shell({step:node(),title,lead,back:daily?scopeBack:'daily',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label>${daily?'':'<p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p>'}<div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span>${daily?'<button class="proto-secondary proto-soon-button" disabled aria-disabled="true" title="盤中觸發即將推出">盤中觸發<span class="proto-soon-tag">即將推出</span></button>':''}<button id="confirmConditions" class="proto-primary">下一步</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
@@ -360,7 +360,7 @@ function filterMarkup(){
   const rows=list.map((filter,index)=>{
     const legacy=Boolean(filter.spec.legacy);
     const small=legacy?'舊版條件，清單裡沒有對應的指標，請移除後重新加入':''; // details live in the list (owner decision 2026-10)
-    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span><small>全部成立才通知</small></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':cutLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
+    return`${index?'<div class="proto-and-row"><span class="proto-and-pill">且</span></div>':''}<div class="proto-condition ${legacy?'legacy':''}"><span class="proto-condition-text"><strong>${filter.spec.ai?'<span class="proto-tag-ai">AI 建立</span>':''}${escapeHtml(filter.label)}</strong>${small?`<small>${escapeHtml(small)}</small>`:''}${legacy?'':cutLine(index)}</span><span class="proto-condition-actions"><button type="button" aria-label="移除 ${escapeHtml(filter.label)}" data-remove="${escapeHtml(filter.id)}">移除</button></span></div>`;
   }).join('');
   const reason=addBlockReason();const foot=reason?`<p class="proto-signature proto-full-note">${escapeHtml(reason)}</p>`:'';
   return`<div class="proto-condition-list"><p class="proto-eyebrow">${isDaily()?'已選日 K 過濾':'已選過濾'} ${list.length}/${MAX_FILTERS}</p>${rows}${legacyFilters(list).length?'':`<div class="proto-combo-line">${stepLine(list.length-1)}</div>`}${foot}</div>`;
@@ -455,7 +455,8 @@ function drawTemplates(){
   }else body=`<div class="proto-preset-list proto-family-rows">${rows.map(presetLine(full,block)).join('')}</div>`;
   const tabCount=(name)=>name===RANK_TAB?'':name===PATTERN_FAMILY?`<small>${patterns.length}</small>`:`<small>${(groups.get(name)||[]).length}</small>`;
   const strip=tabs.length?`<div class="proto-family-tabs" role="tablist" aria-label="指標類別">${tabs.map((name)=>`<button type="button" role="tab" class="proto-family-tab ${name===PATTERN_FAMILY?'soon':''}" aria-selected="${name===tab}" data-tab="${escapeHtml(name)}">${name===RANK_TAB?'剩餘最多':escapeHtml(name)}${tabCount(name)}</button>`).join('')}</div>`:'';
-  const head=base?`<p class="proto-signature proto-rank-base">以「${F().map((filter)=>escapeHtml(filter.label)).join(' 且 ')}」為基準：${isDaily()?`${escapeHtml(dailyDateText(base.data))}收盤 <strong>${base.count} 檔</strong>符合${forwardText(base.forward,'，歷史上')}`:`${pastLabel(base.data.availableDays)} <strong>${base.count} 檔・${base.events} 次</strong>${forwardText(base.forward,'，')}`}。長條＝加入後還剩幾檔。</p>`:'';
+  // The combination's own count and 7-day stat are shown once, under the selected filters (owner: too much text, 2026-10-20).
+  const head=base?'<p class="proto-signature proto-rank-base">長條＝加入後還剩幾檔</p>':'';
   const note=full?`<small class="proto-signature">${escapeHtml(block)}</small>`:value?`<small class="proto-signature">符合 ${templateRows.length+patterns.length} 個</small>`:'';
   const previous=target.querySelector('.proto-family-tabs')?.scrollLeft||0;
   target.hidden=false;
@@ -682,7 +683,10 @@ function stepLine(index){
   if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">${label}：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
   if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算（${escapeHtml(data.error)}）</small>`;
   const step=data.steps?.[index];if(!step)return'';
-  if(daily){const head=`${many?`${F().length} 個過濾全部成立，`:''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，歷史上')}</small>`:`<small class="proto-count zero">${head} 0 檔符合</small>${step.forward?.samples?`<small class="proto-count">${forwardText(step.forward,'歷史上同時成立時，')}</small>`:''}`;}
+  if(daily){
+    const head=`${many?'全部成立：':''}${escapeHtml(dailyDateText(data))}收盤 ${step.triggeredSymbols} 檔`,past=step.forward?.samples?`<small class="proto-count">${forwardText(step.forward,'歷史上')}</small>`:'';
+    return`<small class="proto-count ${step.triggeredSymbols?'':'zero'}"><strong>${head}</strong></small>${past}`;
+  }
   const head=many?`全部成立・${pastLabel(data.availableDays)}`:pastLabel(data.availableDays);
   if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${many?'':'，這個過濾可能太嚴格'}</small>`;
   return`<small class="proto-count">${head}：${countText(step)}${forwardText(step.forward,'，')}</small>`;
@@ -730,7 +734,7 @@ function drawExample(){
   if(exampleData.error){target.innerHTML=`${head}<p class="proto-signature">範例暫時無法顯示：${escapeHtml(exampleData.error)}</p>`;return;}
   const example=exampleData.example;
   if(!example){target.innerHTML=`${head}<div class="proto-status"><strong>找不到範例</strong><p>歷史資料裡沒有股票同時符合這${F().length>1?'幾個':'個'}過濾。</p></div>`;return;}
-  target.innerHTML=`${head}${exampleSvg(example)}<p class="proto-signature">${example.timeframe==='d1'?'日 K ':'一分鐘 K '}範例・▲ 為所有過濾都成立${isDaily()?'的日子':'、會通知的時間點'}。只用來說明條件長什麼樣子，不是投資建議。</p>`;
+  target.innerHTML=`${head}${exampleSvg(example)}<p class="proto-signature">${example.timeframe==='d1'?'日 K ':'一分鐘 K '}範例・▲ 為所有過濾都成立${isDaily()?'的日子':'、會通知的時間點'}・非投資建議</p>`;
 }
 const EXAMPLE_COLORS=['#2f6fbf','#c47f12','#7a4bb3','#1c8a8a'];
 function exampleSvg(example){
