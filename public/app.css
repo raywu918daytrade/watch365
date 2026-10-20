@@ -388,3 +388,6 @@
 .proto-line-login .proto-line-logo { background:#fff; color:#06c755; }
 .proto-line-code > div:only-child { flex:1; }
 .proto-full { margin-top:1rem; }
+.proto-gated .proto-options, .proto-gated #optionsHead, .proto-gated #strategyPanel, .proto-gated .proto-resume { display:none !important; }
+.proto-gate { display:grid; gap:.75rem; }
+.proto-gate .proto-line[data-recover], .proto-gate .proto-full { margin:0; }
