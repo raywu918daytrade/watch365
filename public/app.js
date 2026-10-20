@@ -682,7 +682,7 @@ function stepLine(index){
   if(!data||(data.loading&&!data.steps))return`<small class="proto-count muted">${label}：${data?.progress?escapeHtml(data.progress):'計算中…'}</small>`;
   if(data.error&&!data.steps)return`<small class="proto-count muted">${label}：無法計算（${escapeHtml(data.error)}）</small>`;
   const step=data.steps?.[index];if(!step)return'';
-  if(daily){const head=`${many?`${F().length} 個過濾全部成立，`:''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，歷史上')}</small>`:`<small class="proto-count zero">${head} 0 檔符合</small>`;}
+  if(daily){const head=`${many?`${F().length} 個過濾全部成立，`:''}${escapeHtml(dailyDateText(data))}收盤`;return step.triggeredSymbols?`<small class="proto-count">${head} ${step.triggeredSymbols} 檔符合${forwardText(step.forward,'，歷史上')}</small>`:`<small class="proto-count zero">${head} 0 檔符合</small>${step.forward?.samples?`<small class="proto-count">${forwardText(step.forward,'歷史上同時成立時，')}</small>`:''}`;}
   const head=many?`全部成立・${pastLabel(data.availableDays)}`:pastLabel(data.availableDays);
   if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${many?'':'，這個過濾可能太嚴格'}</small>`;
   return`<small class="proto-count">${head}：${countText(step)}${forwardText(step.forward,'，')}</small>`;
