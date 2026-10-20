@@ -639,6 +639,8 @@ async function routeApi(request, response) {
       state.settings.conditions = conditions;
       state.settings.enabled = true;
       state.settings.monitorTask = { name:`${taskName}監控`, onboardingCompleted:true, completedAt:new Date().toISOString() };
+      // Who created the monitor (kept out of publicState): only that browser's LINE accounts get its triggers.
+      state.monitorOwner = { visitor };
       if (changed) { revokePendingDeliveryAuthorizations(state); dropEarlierSignals(state); }
       appendLog(state, 'info', '建立並啟用監控', { purpose, conditions:taskName, symbols:watchlist.length });
     });
@@ -915,13 +917,13 @@ async function recordFormulaActivation(payload) {
   catch (error) { console.error('formula-library: record activation failed', error.code || error.message); }
 }
 
-// Every run's new signals also go to the linked LINE accounts (one message per run). The push runs in the background
+// Every run's new signals also go to the LINE accounts linked by the browser that created the monitor (one message per run). The push runs in the background
 // and is recorded on the notifications as line: 'sent' | 'failed'.
 async function runMonitor(source = 'scheduler') {
   const result = await runMonitorOnce(source);
-  if (result?.signals?.length && line.enabled && line.users().length) {
+  if (result?.signals?.length && line.enabled && line.users().length && store.getState().monitorOwner?.visitor) {
     const ids = new Set(result.signals.map((signal) => signal.id));
-    line.notifySignals(result.signals).then((outcome) => store.update((state) => {
+    line.notifySignals(result.signals, { visitor: store.getState().monitorOwner?.visitor ?? null }).then((outcome) => store.update((state) => {
       for (const notification of state.notifications) if (ids.has(notification.signalId)) notification.line = outcome.sent ? 'sent' : 'failed';
       appendLog(state, outcome.sent ? 'info' : 'warn', outcome.sent ? `LINE 通知已送出（${result.signals.length} 檔）` : 'LINE 通知送出失敗', { source, error: outcome.error ?? null });
     })).catch(console.error);

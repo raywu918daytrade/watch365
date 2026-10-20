@@ -4,8 +4,8 @@
 //
 // Linking: the dashboard asks for a one-time 6-digit code (10 minutes, kept in memory), the user adds the official
 // account and sends the code, and the webhook stores { userId, displayName, visitor } in state.line.users. That list
-// is never part of publicState; each browser only sees the accounts it linked itself. Every linked account gets the
-// monitor's triggers, one push per monitor run (all stocks of the run in one message, to save the monthly quota).
+// is never part of publicState; each browser only sees the accounts it linked itself. Every account linked from a browser gets the
+// monitor's triggers when that browser created the monitor, one push per monitor run (all stocks of the run in one message, to save the monthly quota).
 
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 
@@ -150,10 +150,11 @@ export class LineNotifier {
     await this.store.update((state) => { state.line = { ...(state.line || {}), users: (state.line?.users || []).filter((user) => user.userId !== userId) }; });
   }
 
-  // Called after every monitor run with that run's new signals. Never throws.
-  async notifySignals(signals) {
-    if (!this.enabled || !signals?.length) return { sent: 0 };
-    const users = this.users();
+  // Called after every monitor run with that run's new signals; only the accounts linked from the monitor owner's
+  // browser get them (another visitor's LINE never receives this monitor). Never throws.
+  async notifySignals(signals, { visitor } = {}) {
+    if (!this.enabled || !signals?.length || !visitor) return { sent: 0 };
+    const users = this.users().filter((user) => user.visitor === visitor);
     if (!users.length) return { sent: 0 };
     const text = signalsMessage([...signals].reverse(), { siteUrl: this.config.siteUrl });
     try {

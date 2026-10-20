@@ -56,14 +56,15 @@ test('expired codes do not link; unfollow and unlink remove the account', async 
   assert.deepEqual(await line.unlink('w'), { removed: 1 });
 });
 
-test('one run of signals becomes one message to every linked account', async () => {
-  const calls = [], store = memoryStore({ line: { users: [{ userId: 'U1', visitor: 'a' }, { userId: 'U2', visitor: 'b' }] } });
+test('one run of signals becomes one message to the monitor owner\'s linked accounts only', async () => {
+  const calls = [], store = memoryStore({ line: { users: [{ userId: 'U1', visitor: 'a' }, { userId: 'U2', visitor: 'a' }, { userId: 'U3', visitor: 'b' }] } });
   const line = new LineNotifier({ config, store, fetchImpl: fakeFetch(calls) });
   const signals = [
     { engine: 'daily_close', symbol: '2317', name: '鴻海', price: 210.5, ruleName: 'SMA(5) 上穿 SMA(20)' },
     { engine: 'daily_close', symbol: '2330', name: '台積電', price: 1050, ruleName: 'SMA(5) 上穿 SMA(20)' }
   ];
-  assert.deepEqual(await line.notifySignals(signals), { sent: 2 });
+  assert.deepEqual(await line.notifySignals(signals), { sent: 0 });
+  assert.deepEqual(await line.notifySignals(signals, { visitor: 'a' }), { sent: 2 });
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /multicast$/);
   assert.deepEqual(calls[0].body.to, ['U1', 'U2']);
