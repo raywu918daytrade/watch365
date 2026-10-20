@@ -20,6 +20,10 @@
 - 綁定：「我的監控 → 綁定 LINE」向 `POST /api/line/link-code` 取得 6 位數綁定碼（10 分鐘、存在記憶體），附 QR code 與預填綁定碼的 `line.me/R/oaMessage` 連結；使用者把綁定碼傳給官方帳號，webhook（驗 `X-Line-Signature`）把 `{ userId, displayName, visitor }` 存進 state 的 `line.users`。這份名單不在 `publicState` 裡，每個瀏覽器只看得到自己綁的帳號（`GET /api/line/status`）。封鎖官方帳號（unfollow）或 `POST /api/line/unlink` 會移除。
 - 推播：每輪監控的新觸發合併成一則訊息，送給所有綁定的帳號（`push`／`multicast`，省每月免費額度），結果記在通知的 `line: 'sent'|'failed'`，觸發紀錄顯示「LINE 已通知」。`POST /api/line/test` 送測試訊息。
 
+## 資料保存與備份
+
+正式環境自 2026-10-20 起設 `STORAGE=files`：TiDB 免費額度用完後，資料改存 Railway Volume（掛在 `/app/data`，500 MB）上的 JSON 檔，`DB_*` 設定保留，拿掉 `STORAGE` 就切回資料庫。`src/backup.js` 每天 14:30（台北）後把 `data/*.json`、`*.jsonl` 備份到私人 HF dataset `HF_BACKUP_REPO`（`backups/latest/` 與 `backups/YYYY-MM-DD/`，事件紀錄只放 latest），token 用 `HF_BACKUP_TOKEN`（沒有就用 `HF_TOKEN`，需要寫入權限）；repo 不存在會建立成私人，公開的 repo 會拒絕備份（資料含 LINE userId）。
+
 ## HF-only 資料流
 
 - 使用 `HF_REPO_ID` 與 `HF_TOKEN`，設定值不會出現在 API、log 或 capability report。

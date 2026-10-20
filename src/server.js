@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { extname, join, normalize, resolve } from 'node:path';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchMarketBars } from './marketData.js';
 import { readHfAssetVersion, readHfSystemUniverse, readHfTickerMaster } from './hfAdapter.js';
@@ -27,6 +27,7 @@ import { createAdminApi } from './adminApi.js';
 import { fork } from 'node:child_process';
 import { LineNotifier, verifySignature } from './line.js';
 import QRCode from 'qrcode';
+import { DataBackup } from './backup.js';
 import { IndicatorRequestStore } from './indicatorRequests.js';
 import { formulaFingerprint, issueFormulaToken, verifyFormulaToken } from './formulaEngine.js';
 import { FormulaLibrary, resolveMonitorCondition } from './formulaLibrary.js';
@@ -72,6 +73,9 @@ const conditionStates = new ConditionStateStore(CONDITION_STATE_FILE, { backend:
 const ruleStates = new RuleStateStore(RULE_STATE_FILE, { backend: CONDITION_LAYER_ENABLED ? await createRuleStateBackend(dbConfigFromEnv()) : null });
 // LINE Messaging API notifications (src/line.js); off until LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN are set.
 const line = new LineNotifier({ store });
+// Daily copy of the data folder to a private HF dataset (src/backup.js); off until HF_BACKUP_REPO is set.
+const dataBackup = new DataBackup({ dir: dirname(DATA_FILE) });
+setInterval(() => { dataBackup.tick().catch(() => {}); }, 10 * 60 * 1000).unref();
 const adminApi = createAdminApi({ events, store, formulaLibrary, unknownIndicators, conditionStates: CONDITION_LAYER_ENABLED ? conditionStates : null, ruleStates: CONDITION_LAYER_ENABLED ? ruleStates : null, notifyEngine: NOTIFY_ENGINE, legacySignalsToday: () => { const state = store.getState(); if (NOTIFY_ENGINE === 'state') return state.runtime.legacyShadow?.day === taipeiDate() ? state.runtime.legacyShadow.count : 0; return state.signals.filter((signal) => signal.tradingDate === taipeiDate()).length; }, secret: formulaTokenSecret });
 // 7-day condition index in a long-lived worker (src/historyIndexWorker.js). HISTORY_INDEX=off disables it.
 const HISTORY_INDEX_ENABLED = process.env.HISTORY_INDEX !== 'off';
@@ -148,7 +152,7 @@ function historyJobView(job) {
 await Promise.all([store.load(),indicatorRequests.load(),formulaLibrary.load(),events.load(),unknownIndicators.load(),CONDITION_LAYER_ENABLED?conditionStates.load():null,CONDITION_LAYER_ENABLED?ruleStates.load():null]);
 { const before = store.getState().signals.length; await store.update((state) => { dropEarlierSignals(state); }); const dropped = before - store.getState().signals.length; if (dropped) console.log(`Dropped ${dropped} trigger records of earlier monitor conditions`); }
 console.log(`Formula library: ${formulaLibrary.list().length} formulas, ${formulaLibrary.aliases.size} aliases`);
-console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; LINE: ${line.enabled ? 'on' : 'off'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
+console.log(`Admin API: ${adminApi.enabled ? 'enabled' : 'disabled (set ADMIN_TOKEN)'}; LINE: ${line.enabled ? 'on' : 'off'}; backup: ${dataBackup.config.enabled ? dataBackup.config.repo : 'off'}; indicator lookup: ${INDICATOR_LOOKUP_ENABLED ? 'on' : 'off'}; notify engine: ${NOTIFY_ENGINE}`);
 syncMonitorTimer();
 // Start the index worker in the background and precompute every indicator-list row once.
 if (HISTORY_INDEX_ENABLED) historyIndex.start().then(() => historyIndex.ensure(libraryConditions())).then((result) => console.log(`history-index: ${result?.loading ? 'loading 7-day data' : `ready, ${result?.conditions} conditions`}`)).catch((error) => console.error('history-index: start failed', error.code || error.message));
