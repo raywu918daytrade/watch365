@@ -79,7 +79,8 @@ function render(){if(!M1_ENABLED&&node()==='conditions')return go('daily');const
 
 async function home(){
   const draft=state.purpose?`<div class="proto-resume" id="draftCard"><strong>有一份尚未完成的草案</strong><p>${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔`:'條件選股'} · ${state.dailyFilters.length+state.filters.length} 個過濾</p><div class="proto-inline-actions"><button class="proto-link" id="discardDraft">捨棄草案</button><button class="proto-secondary" data-go="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續草案</button></div></div>`:'';
-  shell({title:'今天想怎麼盯？',lead:M1_ENABLED?'選一個方式開始，條件成立時會即時通知你。':'選一個方式開始，每個交易日 13:00 條件成立就通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><p class="proto-eyebrow proto-options-head" id="optionsHead" hidden>換一組監控（建立後會取代上面這組）</p><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div>${draft}`});
+  shell({title:'今天想怎麼盯？',lead:M1_ENABLED?'選一個方式開始，條件成立時會即時通知你。':'選一個方式開始，每個交易日 13:00 條件成立就通知你。',body:`<div id="homeMonitor"><div class="proto-skeleton" aria-hidden="true"></div></div><p class="proto-eyebrow proto-options-head" id="optionsHead" hidden>換一組監控（建立後會取代上面這組）</p><div class="proto-options"><button class="proto-option" data-purpose="watchlist"><span><strong>盯指定股票</strong><small>從今日可監控名單搜尋、依類股多選</small></span><span class="proto-arrow">→</span></button><button class="proto-option" data-purpose="screen"><span><strong>用條件找股票</strong><small>條件套用到今日監控名單（有成交量的股票），每天自動更新</small></span><span class="proto-arrow">→</span></button></div><section id="strategyPanel" class="proto-strategies" hidden></section>${draft}`});
+  drawStrategies();
   root.querySelectorAll('[data-purpose]').forEach((button)=>button.addEventListener('click',()=>{const purpose=button.dataset.purpose;if(purpose!==state.purpose){state.purpose=purpose;state.watchlist=[];}save();go(purpose==='watchlist'?'stocks':'daily');}));
   root.querySelector('#discardDraft')?.addEventListener('click',()=>{resetDraft();render();});
   const target=root.querySelector('#homeMonitor');
@@ -93,11 +94,57 @@ async function home(){
     // unfinished draft is shown inside this card as the replacement being set up, and the start options say they replace it.
     root.querySelector('#draftCard')?.remove();root.querySelector('#optionsHead').hidden=false;
     const editing=state.purpose?`<div class="proto-notice proto-notice-compact proto-editing" role="note"><span aria-hidden="true">i</span><span><strong>正在設定新的條件</strong>（${state.purpose==='watchlist'?`指定股票 ${state.selected.length} 檔・`:''}${state.dailyFilters.length+state.filters.length} 個過濾），建立後會取代這組；${settings.enabled?'在那之前這組照常監控':'這組目前維持暫停'}。<span class="proto-inline-actions"><button class="proto-link" id="discardEdit">放棄修改</button><button class="proto-link" data-resume="${state.purpose==='watchlist'&&!state.watchlist.length?'stocks':'daily'}">繼續設定</button></span></span></div>`:'';
-    target.innerHTML=`<article class="proto-monitor proto-home-monitor"><header><span><small class="proto-eyebrow">我的監控</small><strong>${escapeHtml(monitorConditionText(settings))}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}</p>${editing}<div class="proto-today"><strong>${todayCount(homeSignals,today)}</strong><span>今日觸發</span>${today.length?`<small>${todayBreakdown(today,3)}・最新 ${formatClock(today[0].triggeredAt)}</small>`:''}</div><button class="proto-primary" data-go="dashboard">查看我的監控</button></article>`;
+    target.innerHTML=`<article class="proto-monitor proto-home-monitor"><header><small class="proto-eyebrow">我的監控</small>${statusBadge(settings.enabled)}</header>${settingsPlan(settings)}${editing}<div class="proto-today"><strong>${todayCount(homeSignals,today)}</strong><span>今日觸發</span>${today.length?`<small>${todayBreakdown(today,3)}・最新 ${formatClock(today[0].triggeredAt)}</small>`:''}</div><button class="proto-primary" data-go="dashboard">查看我的監控</button></article>`;
     target.querySelector('[data-go]').addEventListener('click',()=>go('dashboard'));
     target.querySelector('[data-resume]')?.addEventListener('click',(event)=>go(event.currentTarget.dataset.resume));
     target.querySelector('#discardEdit')?.addEventListener('click',()=>{resetDraft();render();});
   }catch{target.innerHTML='';}
+}
+// 熱門策略 (UI review 2026-10-20, after 玩股網 / CMoney / 財報狗 preset screens): ready-made daily filter sets, one click
+// into the daily step. Each is named by its list labels and skipped when the list doesn't have every one of them.
+const STRATEGIES=[
+  {name:'創 20 日新高＋爆量',desc:'收盤突破前 20 天最高價，成交量是均量 2 倍以上',labels:['收盤價向上穿越前20根最高價','量 ≥ 均量 2 倍']},
+  {name:'5 日線上穿月線',desc:'SMA(5) 由下往上穿越 SMA(20)',labels:['SMA(5) 上穿 SMA(20)']},
+  {name:'站上季線',desc:'收盤由下往上穿越 SMA(60)',labels:['收盤上穿 SMA(60)']},
+  {name:'KD 低檔黃金交叉',desc:'K 值在 20 以下時，K 線上穿 D 線',labels:['KD 低檔黃金交叉（K<20）']},
+  {name:'站上一目雲＋MACD 黃金交叉',desc:'收盤在一目雲之上，同一天 MACD 黃金交叉',labels:['收盤站上一目雲','MACD 黃金交叉']},
+  {name:'突破布林上軌＋量增',desc:'收盤上穿布林上軌，成交量是均量 1.5 倍以上',labels:['收盤上穿布林上軌(20,2σ)','量 ≥ 均量 1.5 倍']}
+];
+function strategyRows(strategy){
+  const rows=(templateCache||[]).filter((template)=>template.daily).flatMap((template)=>templateRowsFor(template,[]));
+  const picked=strategy.labels.map((label)=>rows.find((row)=>normalizeQuery(row.label)===normalizeQuery(label)));
+  return picked.every(Boolean)?picked:null;
+}
+const strategyCounts=new Map();
+async function drawStrategies(){
+  const target=root.querySelector('#strategyPanel');if(!target)return;
+  await loadTemplates();if(node()!=='home')return;
+  const list=STRATEGIES.map((strategy)=>({strategy,rows:strategyRows(strategy)})).filter((item)=>item.rows);
+  if(!list.length)return;
+  const card=({strategy},index)=>{const count=strategyCounts.get(strategy.name);const stat=!count?'<small class="proto-signature">計算今天符合幾檔…</small>':count.error?'':`<small class="proto-strategy-stat"><strong>${escapeHtml(count.date)}收盤 ${count.n} 檔符合</strong>${count.forward?.samples?`<br>${forwardText(count.forward,'歷史上')}`:''}</small>`;return`<button type="button" class="proto-strategy" data-strategy="${index}"><strong>${escapeHtml(strategy.name)}</strong><small>${escapeHtml(strategy.desc)}</small>${stat}<span class="proto-strategy-go">套用 →</span></button>`;};
+  const draw=()=>{if(node()!=='home')return;target.hidden=false;target.innerHTML=`<div class="proto-list-head"><p class="proto-eyebrow">熱門策略・一鍵套用</p><small class="proto-signature">套用後還可以再改</small></div><div class="proto-strategy-grid">${list.map(card).join('')}</div>`;
+    target.querySelectorAll('[data-strategy]').forEach((button)=>button.addEventListener('click',()=>{const {rows}=list[Number(button.dataset.strategy)];state.purpose='screen';state.watchlist=[];state.filters=[];state.ai=null;state.requestText='';state.dailyFilters=rows.map((row)=>({id:crypto.randomUUID(),label:row.label,formulaSummary:row.summary||'',spec:row.spec}));invalidateToken();save();go('daily');}));};
+  draw();
+  await Promise.all(list.filter(({strategy})=>!strategyCounts.has(strategy.name)).map(async({strategy,rows})=>{
+    try{
+      const result=await api('/api/history/index',{purpose:'screen',filters:[],candidates:[],events:false,daily:{filters:rows.map((row)=>indexSpec({spec:row.spec})),candidates:[]}});
+      const step=result.status==='ready'&&result.daily?.status==='ready'?result.daily.steps?.at(-1):null;
+      if(step)strategyCounts.set(strategy.name,{n:step.latestCount||0,forward:step.forward||null,date:dailyDateText(result.daily)});
+    }catch{strategyCounts.set(strategy.name,{error:true});}
+  }));
+  draw();
+}
+// One plain sentence for the whole monitor (UI review 2026-10-20, after TradingView's alert wording), used on the
+// confirm page, the home card and 我的監控 so the same monitor always reads the same.
+function planHtml({scope,daily=[],minute=[]}){
+  const quote=(labels)=>labels.map((label)=>`「${escapeHtml(label)}」`).join('<span class="proto-plan-and">且</span>');
+  const cond=daily.length&&minute.length?`日 K ${quote(daily)}，盤中 ${quote(minute)}`:quote(daily.length?daily:minute);
+  return`<p class="proto-plan"><span class="proto-plan-scope">${escapeHtml(scope)}中</span><strong>${cond}</strong><span class="proto-plan-when">→ ${minute.length?'盤中條件成立時通知你':'每個交易日 13:00 通知你'}</span></p>`;
+}
+function settingsPlan(settings){
+  const daily=settings.daily?.filters?.length?(settings.daily.filters.map((filter)=>filter.label).filter(Boolean).length?settings.daily.filters.map((filter)=>filter.label).filter(Boolean):String(settings.daily.name||'').split(' 且 ')):[];
+  const minute=isDailyOnly(settings)?[]:settings.conditions?.length?settings.conditions.map(conditionLabel):settings.strategy?.name?[settings.strategy.name]:[];
+  return planHtml({scope:settings.scopeMode==='universe'?'今日監控名單':`${settings.watchlist?.length||0} 檔指定股票`,daily,minute});
 }
 function monitorConditionText(settings){const minute=settings.conditions?.length?settings.conditions.map(conditionLabel).join(' 且 '):settings.strategy?.name||'—';if(isDailyOnly(settings))return`${settings.daily?.name||minute}（日 K・13:00 通知）`;return settings.daily?.filters?.length?`${settings.daily.name}（日 K）→ ${minute}`:minute;}
 function isDailyOnly(settings){return settings?.strategy?.executor==='daily_close';}
@@ -370,6 +417,9 @@ function filterMarkup(){
 }
 function drawFilters(){const target=root.querySelector('#addedPanel');if(!target)return;target.innerHTML=filterMarkup();bindFilterList();drawSticky();drawTemplates();drawHistory();scheduleIndex();}
 function bindFilterList(){
+  const met=root.querySelector('#addedPanel .proto-met-list');
+  met?.addEventListener('toggle',()=>{metListOpen=met.open;});
+  met?.querySelector('[data-met-all]')?.addEventListener('click',()=>{metListAll=true;drawIndexViews();});
   root.querySelectorAll('#addedPanel [data-remove]').forEach((button)=>button.addEventListener('click',()=>{setF(F().filter((item)=>item.id!==button.dataset.remove));if(!isDaily())invalidateToken();save();drawFilters();focusSearch({scroll:false});}));
 }
 // Adds a filter; a preset / library filter then fetches its own formulaSummary (and validates the pair) from instantiate.
@@ -646,14 +696,14 @@ async function runIndex(){
   try{
     // Daily step: counts come from the daily index (stocks met on the latest close). Minute step: the 7-day minute
     // index, each day restricted to the daily list when daily filters were picked.
-    const body=daily?{...monitorSpec(),filters:[],candidates:[],events:false,daily:{filters,candidates:candidates.map((row)=>row.spec)}}:{...monitorSpec(),filters,candidates:candidates.map((row)=>row.spec),daily:dailyPayload()&&{filters:state.dailyFilters.map(indexSpec)}};
+    const body=daily?{...monitorSpec(),filters:[],candidates:[],events:false,daily:{filters,candidates:candidates.map((row)=>row.spec),list:true}}:{...monitorSpec(),filters,candidates:candidates.map((row)=>row.spec),daily:dailyPayload()&&{filters:state.dailyFilters.map(indexSpec)}};
     const result=await api('/api/history/index',body);
     if(seq!==indexSeq)return;
     if(result.status==='ready'&&result.daily?.status==='loading')Object.assign(result,{status:'loading',progress:'準備日 K 資料'});
     if(result.status==='ready'&&daily){
       const dailyResult=result.daily;
       const counts=new Map();(dailyResult.candidates||[]).forEach((item)=>{const key=indexData.candidateKeys[item.index];if(key&&!item.error)counts.set(key,{triggeredSymbols:item.latestCount,totalEvents:null,daily:true,forward:item.forward||null});});
-      indexData={signature,loading:false,error:null,daily:true,latestDate:dailyResult.latestDate,steps:(dailyResult.steps||[]).map((step)=>({triggeredSymbols:step.latestCount,totalEvents:null,daily:true,days:step.days,forward:step.forward||null})),counts};
+      indexData={signature,loading:false,error:null,daily:true,latestDate:dailyResult.latestDate,steps:(dailyResult.steps||[]).map((step)=>({triggeredSymbols:step.latestCount,totalEvents:null,daily:true,days:step.days,forward:step.forward||null,symbols:step.symbols||null})),counts};
       drawIndexViews();return;
     }
     if(result.status==='loading'){indexData={...indexData,loading:true,progress:result.progress};drawIndexViews();indexTimer=setTimeout(runIndex,3000);return;}
@@ -688,11 +738,19 @@ function stepLine(index){
   const step=data.steps?.[index];if(!step)return'';
   if(daily){
     const head=`${many?'全部成立：':''}${escapeHtml(dailyDateText(data))}收盤 ${step.triggeredSymbols} 檔`,past=step.forward?.samples?`<small class="proto-count">${forwardText(step.forward,'歷史上')}</small>`:'';
-    return`<small class="proto-count ${step.triggeredSymbols?'':'zero'}"><strong>${head}</strong></small>${past}`;
+    return`<small class="proto-count ${step.triggeredSymbols?'':'zero'}"><strong>${head}</strong></small>${past}${metList(step)}`;
   }
   const head=many?`全部成立・${pastLabel(data.availableDays)}`:pastLabel(data.availableDays);
   if(!step.triggeredSymbols)return`<small class="proto-count zero">${head}：0 檔觸發${many?'':'，這個過濾可能太嚴格'}</small>`;
   return`<small class="proto-count">${head}：${countText(step)}${forwardText(step.forward,'，')}</small>`;
+}
+// Which stocks the combination keeps today (UI review 2026-10-20, after 財報狗 showing the screen's result list).
+// Folded by default so the page doesn't grow; the open state survives the index redraws.
+let metListOpen=false,metListAll=false;
+function metList(step){
+  const list=step.symbols;if(!list?.length)return'';
+  const limit=metListAll?list.length:30,shown=list.slice(0,limit);
+  return`<details class="proto-met-list" ${metListOpen?'open':''}><summary>看是哪 ${list.length} 檔</summary><div class="proto-met-chips">${shown.map((item)=>`<span>${escapeHtml(item.symbol)} ${escapeHtml(item.name||'')}</span>`).join('')}${list.length>limit?`<button type="button" class="proto-link" data-met-all>顯示全部 ${list.length} 檔</button>`:''}</div></details>`;
 }
 function cutLine(index){
   const steps=indexFresh()?.steps;if(!steps||F().length<2)return'';
@@ -890,8 +948,9 @@ function confirmPage(){
   if(!hasAnyStep())return go('daily');
   const minute=state.filters.length>0,dailyList=state.dailyFilters;
   const scope=state.purpose==='watchlist'?`${state.watchlist.length} 檔：${state.watchlist.slice(0,8).map((item)=>`${item.symbol} ${item.name}`).join('、')}${state.watchlist.length>8?' …':''}`:'今日監控名單（有成交量的股票，每天依最新名單重新套用條件）';
+  const plan=planHtml({scope:state.purpose==='watchlist'?`你選的 ${state.watchlist.length} 檔股票`:'今日監控名單',daily:dailyList.map((filter)=>filter.label),minute:state.filters.map((filter)=>filter.label)});
   const history=historyFresh();
-  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:M1_ENABLED?'conditions':'daily',body:`<div id="replaceNotice"></div><dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">${minute?'以前一天收盤篩出當天要盯的股票':'每個交易日 13:00 判斷一次'}</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>通知時間</dt><dd>每個交易日 13:00（收盤前），以 13:00 價格當作今天收盤，新符合日 K 條件的股票各通知一次</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：這個瀏覽器的系統通知（需保持網頁開啟），也可以在「我的監控」綁定 LINE</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
+  shell({step:'confirm',title:'確認並建立監控',lead:'建立後會立即啟用，之後可隨時暫停。',back:M1_ENABLED?'conditions':'daily',body:`<div id="replaceNotice"></div>${plan}<dl class="proto-summary"><div><dt>監控範圍</dt><dd>${escapeHtml(scope)}</dd></div>${dailyList.length&&minute?`<div><dt>日 K 篩選</dt><dd class="proto-filter-summary">${filterChips(dailyList)}<small class="proto-signature" style="display:block">以前一天收盤篩出當天要盯的股票</small></dd></div>`:''}${minute?`<div><dt>盤中觸發</dt><dd class="proto-filter-summary">${filterChips(state.filters)}</dd></div><div><dt>組合方式</dt><dd>${state.filters.length>1?'全部成立才通知':'單一過濾'}</dd></div><div><dt>${pastLabel(history?.availableDays)}</dt><dd>${history?escapeHtml(historySummaryText(history)):'尚未回查 <button class="proto-link" data-go="conditions">去回查</button>'}</dd></div>`:'<div><dt>怎麼通知</dt><dd>以 13:00 價格當作今天收盤判斷，新符合的股票各通知一次，收盤前還來得及下單</dd></div>'}</dl><details class="proto-details"><summary>監控細節</summary><p>資料：${minute?`${dailyList.length?'日 K（前一天收盤）＋':''}一分鐘 K・台股 09:00–13:30（Asia/Taipei）`:'日 K・以當天 13:00 價格當作收盤判斷（13:00 後到收盤價格仍可能變動）'}</p><p>通知：建立後到「我的監控」綁定 LINE，手機關掉網頁也收得到；或用這個瀏覽器的系統通知（需保持網頁開啟）</p><p>${minute?'條件從不成立變成立時通知一次；持續成立不重複通知':'前一天收盤已符合的股票不重複通知'}</p></details><p id="createError" class="proto-error" role="alert"></p><div class="proto-sticky-action"><span id="createHint">建立後可隨時暫停</span><button id="createMonitor" class="proto-primary">建立並啟用監控</button></div>`});
   const button=root.querySelector('#createMonitor'),label=()=>button.dataset.replace?'取代並啟用':'建立並啟用監控';
   // The system runs one monitor at a time; warn before silently replacing a running one.
   api('/api/state').then((data)=>{
@@ -946,11 +1005,13 @@ function drawDashboard(data,{force=false}={}){
   const signature=JSON.stringify([settings,signals.map((signal)=>signal.id),notifications.map((item)=>[item.id,item.status]),runtime.lastProviderStatus,runtime.lastError,runtime.effectiveWatchlistCount,runtime.dailyList?.count,runtime.dailyClose,session.key,typeof Notification==='undefined'?'':Notification.permission]);
   if(!force&&signature===dashboardSignature){const clock=target.querySelector('#lastRun');if(clock)clock.textContent=runtime.lastRunAt?formatWhen(runtime.lastRunAt):'尚未執行';return;}
   dashboardSignature=signature;
-  const dailyHtml=settings.daily?.filters?.length?`<span class="proto-cond-line">${escapeHtml(settings.daily.name)}<small>（日 K${isDailyOnly(settings)?'・13:00 通知':''}）</small></span>${isDailyOnly(settings)?'':'<span class="proto-and">→</span>'}`:'';
-  const dailyLine=isDailyOnly(settings)?(runtime.dailyClose?.day?`<p>今天 13:00 判斷：${runtime.dailyClose.noSession?'沒有交易資料':`新符合 ${runtime.dailyClose.count} 檔（共 ${runtime.dailyClose.met} 檔符合）`}</p>`:'<p>每個交易日 13:00 判斷一次</p>'):settings.daily?.filters?.length&&runtime.dailyList?`<p>今天日 K 名單：${runtime.dailyList.count} 檔（${escapeHtml(runtime.dailyList.listDate.slice(5).replace('-','/'))} 收盤）</p>`:'';
-  const conditionHtml=isDailyOnly(settings)?dailyHtml:dailyHtml+(settings.conditions?.length?settings.conditions.map((condition)=>`<span class="proto-cond-line">${directionTag(condition.direction)}${escapeHtml(conditionLabel(condition))}</span>`).join('<span class="proto-and">且</span>'):escapeHtml(settings.strategy?.name||'—'));
+  // Status in one line (UI review 2026-10-20): what happened today, then the last check; data trouble gets its own line.
+  const meta=[];
+  if(isDailyOnly(settings)&&runtime.dailyClose?.day)meta.push(`今天 13:00：${runtime.dailyClose.noSession?'沒有交易資料':`新符合 ${runtime.dailyClose.count} 檔（共 ${runtime.dailyClose.met} 檔符合）`}`);
+  if(!isDailyOnly(settings)&&settings.daily?.filters?.length&&runtime.dailyList)meta.push(`今天日 K 名單 ${runtime.dailyList.count} 檔`);
+  if(!isDailyOnly(settings)&&runtime.effectiveWatchlistCount!=null)meta.push(`本輪盯 ${runtime.effectiveWatchlistCount} 檔`);
   const supported='Notification' in window,permission=supported?Notification.permission:'unsupported';
-  const notify=permission==='granted'?'<span class="proto-note ok">通知已開啟</span>':permission==='denied'?'<span class="proto-note bad">通知被瀏覽器封鎖（網址列左側鎖頭 → 通知 → 允許）</span>':permission==='unsupported'?(isIosSafari()?iosNotifyHint():'<span class="proto-note">此瀏覽器不支援通知</span>'):'<button id="enableNotify" class="proto-primary">開啟瀏覽器通知</button>';
+  const notify=permission==='granted'?'<span class="proto-note ok">通知已開啟</span>':permission==='denied'?'<span class="proto-note bad">通知被瀏覽器封鎖（網址列左側鎖頭 → 通知 → 允許）</span>':permission==='unsupported'?(isIosSafari()?iosNotifyHint():'<span class="proto-note">此瀏覽器不支援通知</span>'):'<button id="enableNotify" class="proto-link">或改用瀏覽器通知（要開著網頁）</button>';
   const status=PROVIDER_STATUS[runtime.lastProviderStatus]||runtime.lastProviderStatus||'—';
   const healthy=!runtime.lastError&&!['error','coverage_unknown'].includes(runtime.lastProviderStatus);
   const {current}=monitorSignals(settings,signals);
@@ -959,9 +1020,9 @@ function drawDashboard(data,{force=false}={}){
   const tableHead='<div class="proto-history-row header"><span>股票</span><span>時間</span><span>符合條件・收盤價</span></div>';
   const olderHtml='';
   const empty=isDailyOnly(settings)?'<strong>還沒有 13:00 通知</strong><p>每個交易日 13:00 判斷，新符合的股票會出現在這裡並通知你。</p>':session.key==='open'?'<strong>今天還沒有觸發</strong><p>盤中條件成立時會出現在這裡並通知你。</p>':`<strong>目前沒有觸發紀錄</strong><p>${escapeHtml(session.detail)}。</p>`;
-  target.innerHTML=`<div class="proto-statusbar ${settings.enabled?(session.key==='open'?'live':'idle'):'paused'}" role="status"><i aria-hidden="true"></i><span><strong>${settings.enabled?(session.key==='open'?'監控中':`待命（${session.label}）`):'已暫停'}</strong>・上次檢查 <span id="lastRun">${runtime.lastRunAt?formatWhen(runtime.lastRunAt):'尚未執行'}</span>${settings.pollIntervalSeconds?`・每 ${settings.pollIntervalSeconds} 秒檢查`:''}</span></div>
-    <article class="proto-monitor"><header><span><small class="proto-eyebrow">${settings.scopeMode==='universe'?'用條件找股票':'盯指定股票'}</small><strong class="proto-cond">${conditionHtml}</strong></span>${statusBadge(settings.enabled)}</header><p>${escapeHtml(monitorScopeText(settings))}${runtime.effectiveWatchlistCount!=null?`・本輪實際監控 ${runtime.effectiveWatchlistCount} 檔`:''}</p>${dailyLine}<p class="${healthy?'':'proto-error'}">資料狀態：${escapeHtml(status)}${runtime.lastError?`・${escapeHtml(errorText({code:runtime.lastError}))}`:''}</p>
-    <div class="proto-notify-row">${notify}${permission==='granted'?'<span class="proto-signature">・請保持網頁開啟才收得到</span>':''}</div><div id="lineBox" class="proto-line">${lineBoxHtml()}</div>
+  const lineLinked=Boolean(lineStatus?.linked?.length);
+  target.innerHTML=`<article class="proto-monitor"><header><small class="proto-eyebrow">${settings.scopeMode==='universe'?'用條件找股票':'盯指定股票'}</small>${statusBadge(settings.enabled)}</header>${settingsPlan(settings)}<p class="proto-monitor-meta">${meta.map((item)=>`${escapeHtml(item)}・`).join('')}上次檢查 <span id="lastRun">${runtime.lastRunAt?formatWhen(runtime.lastRunAt):'尚未執行'}</span></p>${healthy?'':`<p class="proto-error">資料狀態：${escapeHtml(status)}${runtime.lastError?`・${escapeHtml(errorText({code:runtime.lastError}))}`:''}</p>`}
+    <div id="lineBox" class="proto-line">${lineBoxHtml()}</div><div class="proto-notify-row" id="notifyRow" ${lineLinked?'hidden':''}>${notify}${permission==='granted'?'<span class="proto-signature">・請保持網頁開啟才收得到</span>':''}</div>
     <div class="proto-inline-actions proto-monitor-actions"><button id="toggleMonitor" class="proto-secondary">${settings.enabled?'暫停監控':'恢復監控'}</button><button id="runNow" class="proto-secondary">立即檢查一次</button><button id="newMonitor" class="proto-link">重新設定條件</button></div><div id="resetConfirm"></div></article>
     <section class="proto-history"><div class="proto-history-head"><div><p class="proto-eyebrow">觸發紀錄</p><h2>今日觸發 ${todayCount(current,today)} 次</h2>${today.length?`<p class="proto-signature">${todayBreakdown(today)}</p>`:''}</div><span>這組監控共 ${current.length} 筆</span></div>${current.length?`<div class="proto-history-table">${tableHead}${current.slice(0,30).map(row).join('')}</div>`:`<div class="proto-status">${empty}</div>`}${olderHtml}</section><section class="proto-history" id="monitorHistory" aria-live="polite"></section>`;
   drawMonitorHistory(settings);
@@ -994,7 +1055,7 @@ function lineBoxHtml(){
   }
   return`<div class="proto-line-head"><span class="proto-line-logo" aria-hidden="true">LINE</span><span><strong>用 LINE 收通知</strong><small>綁定後條件成立會傳到 LINE，手機關掉網頁也收得到</small></span></div><button class="proto-primary" id="lineLink">綁定 LINE</button><p class="proto-error" id="lineMsg" role="alert"></p>`;
 }
-function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();}
+function drawLineBox(){const box=root.querySelector('#lineBox');if(!box)return;box.innerHTML=lineBoxHtml();bindLineBox();root.querySelector('#notifyRow')?.toggleAttribute('hidden',Boolean(lineStatus?.linked?.length));}
 async function refreshLine(){
   try{const next=await api('/api/line/status');const changed=JSON.stringify(next)!==JSON.stringify(lineStatus);lineStatus=next;if(next.linked?.length){lineCode=null;stopLinePoll();}if(changed)drawLineBox();}
   catch{/* LINE box stays as it was */}

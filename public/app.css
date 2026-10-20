@@ -354,3 +354,29 @@
 .proto-sticky-action:has(.proto-soon-button) .proto-primary { white-space:nowrap; }
 @media (max-width:640px) { .proto-sticky-action:has(.proto-soon-button) { flex-wrap:wrap; gap:.6rem; } .proto-sticky-action:has(.proto-soon-button) > span { flex-basis:100%; } .proto-sticky-action .proto-soon-button { margin-left:0; } .proto-sticky-action:has(.proto-soon-button) button { flex:1; justify-content:center; } }
 .proto-soon-tag { border-radius:999px; padding:.15rem .45rem; background:#fbf1d6; color:#8a6d1f; font-size:.68rem; font-weight:800; }
+/* UI review 2026-10-20: plain-sentence plan, 熱門策略, today's list on the daily step, one-line monitor status */
+.proto-plan { margin:.6rem 0 0; padding:.85rem 1rem; border-radius:.5rem; background:#eef7f5; color:#163238; font-size:.95rem; line-height:1.6; }
+.proto-monitor .proto-plan { margin-top:.55rem; color:#163238; font-size:.95rem; }
+.proto-plan strong { font-weight:800; }
+.proto-plan-scope,.proto-plan-when { display:block; color:#4f676c; font-size:.82rem; }
+.proto-plan-when { margin-top:.2rem; color:#087f72; font-weight:800; font-size:.9rem; }
+.proto-plan-and { margin:0 .3rem; color:#61767a; font-weight:700; font-size:.82rem; }
+.proto-frame > .proto-plan { margin:0 0 1rem; font-size:1.05rem; }
+.proto-monitor header .proto-eyebrow { margin:0; }
+.proto-monitor .proto-badge { white-space:nowrap; }
+.proto-monitor-meta { font-size:.78rem; }
+.proto-strategies { margin-top:1.4rem; }
+.proto-strategies .proto-list-head { display:flex; align-items:baseline; justify-content:space-between; gap:.6rem; }
+.proto-strategy-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.6rem; margin-top:.4rem; }
+.proto-strategy { display:flex; flex-direction:column; gap:.25rem; padding:.85rem .95rem; border:1px solid #cedcdc; border-radius:.5rem; background:#fff; color:#173036; text-align:left; cursor:pointer; font:inherit; }
+.proto-strategy:hover,.proto-strategy:focus-visible { border-color:#078777; outline:2px solid rgba(7,135,119,.14); outline-offset:1px; }
+.proto-strategy > strong { font-size:.96rem; }
+.proto-strategy > small { color:#60767b; font-size:.78rem; line-height:1.45; }
+.proto-strategy-stat { margin-top:.2rem; color:#4f676c; font-size:.76rem; line-height:1.5; }
+.proto-strategy-stat strong { color:#087f72; font-size:.82rem; }
+.proto-strategy-go { margin-top:auto; padding-top:.35rem; color:#087f72; font-weight:800; font-size:.82rem; }
+.proto-met-list { margin-top:.35rem; font-size:.8rem; }
+.proto-met-list summary { color:#087f72; font-weight:800; cursor:pointer; }
+.proto-met-chips { display:flex; flex-wrap:wrap; gap:.3rem; max-height:9.5rem; overflow:auto; margin-top:.4rem; }
+.proto-met-chips span { padding:.18rem .45rem; border:1px solid #d4e0e0; border-radius:999px; background:#fff; color:#173036; font-size:.74rem; white-space:nowrap; }
+@media (max-width:640px) { .proto-strategy-grid { grid-template-columns:1fr; } }
