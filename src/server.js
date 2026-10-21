@@ -357,6 +357,15 @@ async function routeApi(request, response) {
     let body; try { body = await readJson(request); } catch { sendJson(response, 400, { error:'INVALID_JSON' }); return; }
     try {
       const payload = verifyFormulaToken(body?.proposalToken, formulaTokenSecret);
+      // Daily filter step: vetted on the daily index instead (met by some stocks, not by nearly all of them).
+      if (body?.timeframe === 'd1' && !formulaLibrary.get(payload.fingerprint)) {
+        if (!dailyCapable(payload.ast)) { sendJson(response, 422, { error:'DAILY_CONDITION_UNSUPPORTED' }); return; }
+        if (!HISTORY_INDEX_ENABLED) { sendJson(response, 503, { error:'HISTORY_INDEX_DISABLED' }); return; }
+        const verdict = await dailyVerdict(payload);
+        if (!verdict) { sendJson(response, 202, { status:'loading' }); return; }
+        if (!verdict.ok) { sendJson(response, 409, { error:'FORMULA_NOT_VETTED', verdict }); return; }
+        vettedFormulas.add(payload.fingerprint);
+      }
       if (!vettedFormulas.has(payload.fingerprint) && !formulaLibrary.get(payload.fingerprint)) {
         // Not vetted in this process (e.g. vetted before a restart): check it now on the 7-day index, same verdict rule.
         const verdict = HISTORY_INDEX_ENABLED ? await indexVerdict(payload) : null;
@@ -420,7 +429,11 @@ async function routeApi(request, response) {
       const registry=await indicatorRegistry.load();
       // Library first (exact alias match, active formulas only), then the indicator reality check (indicatorLookup.js),
       // then the AI planner. All paths return the same shape.
-      const result=await resolveMonitorCondition(body.text,registry.items,{library:formulaLibrary,context:body.context,lookupImpl:INDICATOR_LOOKUP_ENABLED?lookupIndicator:null});
+      // timeframe 'd1': the daily filter step (formula evaluated on daily candles; see planMonitorCondition).
+      const timeframe=body?.timeframe==='d1'?'d1':'1m';
+      let result=await resolveMonitorCondition(body.text,registry.items,{library:formulaLibrary,context:body.context,lookupImpl:INDICATOR_LOOKUP_ENABLED?lookupIndicator:null,timeframe});
+      if(timeframe==='d1'&&result.library&&result.proposal?.ast&&!dailyCapable(result.proposal.ast))result=await resolveMonitorCondition(body.text,registry.items,{context:body.context,lookupImpl:INDICATOR_LOOKUP_ENABLED?lookupIndicator:null,timeframe});
+      if(timeframe==='d1'&&result.library)result.summary=`${result.proposal?.name||String(result.summary||'').replace(/ · .*$/,'')} · 日 K`;
       if(result.status==='formula'){result.proposalId=randomUUID();result.proposalToken=issueFormulaToken({...result.proposal,proposalId:result.proposalId,sourceText:typeof body.text==='string'?body.text:undefined},formulaTokenSecret);}
       if(result.status==='unknown_indicator'){events.record('unknown_indicator',{text,candidates:result.lookup?.candidates??[],indicatorName:result.lookup?.indicatorName??null},{visitor});unknownIndicators.record({text:body.text,candidates:result.lookup?.candidates??[]});}
       delete result.proposal?.ast;
@@ -1305,6 +1318,21 @@ function libraryConditions() {
 }
 
 // Vet verdict of one formula over the whole universe from the 7-day index (null while the index is loading).
+// Daily (D1) vet over the daily index's last DAILY_DAYS dates: no_triggers when no stock ever meets it, too_many
+// when it holds for 90%+ of the stocks every day (filters nothing).
+async function dailyVerdict(payload) {
+  const result = await historyIndex.query({ filters:[], candidates:[], events:false, daily:{ filters:[{ key:payload.fingerprint, ast:payload.ast }] } });
+  if (result.loading || !result.daily || result.daily.loading) return null;
+  const days = result.daily.steps[0]?.days ?? [], counts = days.map((day) => day.count);
+  const symbolsCount = (await getUniverseWatchlist().catch(() => [])).length || 0;
+  const totalEvents = counts.reduce((sum, count) => sum + count, 0), most = Math.max(0, ...counts), least = counts.length ? Math.min(...counts) : 0;
+  const base = { totalEvents, symbolsCount:most, availableDays:days.length, latestCount:result.daily.steps[0]?.latestCount ?? 0 };
+  if (!days.length) return { ok:false, code:'no_data', message:'沒有可用的日 K 資料，無法驗證這個條件。', ...base };
+  if (!most) return { ok:false, code:'no_triggers', message:`過去 ${days.length} 個交易日沒有任何一檔符合，這個條件可能太嚴格。`, ...base };
+  if (symbolsCount && least >= symbolsCount * 0.9) return { ok:false, code:'too_many', message:'幾乎每一檔每天都符合，加了也篩不掉股票。', ...base };
+  return { ok:true, code:'ok', ...base };
+}
+
 async function indexVerdict(payload) {
   const result = await historyIndex.query({ filters:[{ key:payload.fingerprint, ast:payload.ast }], events:false });
   if (result.loading) return null;

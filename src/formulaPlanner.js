@@ -2,6 +2,7 @@ import { analyzeIndicatorRequest, requestStructuredAgent } from './indicatorAgen
 import { validateStrategy } from './indicatorRegistry.js';
 import { FORMULA_OPS, FORMULA_SOURCE_FIELDS, formulaSummary, validateFormula } from './formulaEngine.js';
 import { FORMULA_RECIPES } from './formulaRecipes.js';
+import { dailyCapable } from './dailyIndex.js';
 
 const NAME='plan_monitor_condition';
 const NODE_OPS=[...FORMULA_OPS];
@@ -25,7 +26,10 @@ export const FORMULA_PLAN_SCHEMA={type:'object',additionalProperties:false,prope
 
 // lookupImpl (server: lookupIndicator from indicatorLookup.js) runs before the formula stage: an indicator no
 // public reference knows is not built (status 'unknown_indicator'); a lookup failure (found:null) never blocks.
-export async function planMonitorCondition(text,definitions,{context=[],lookupImpl=null,...options}={}){
+// timeframe 'd1' (the daily filter step): the same blocks evaluated on daily candles. No registry pass (its strategies
+// are one-minute ones), daily wording is not a limit, and session-only blocks (first, VWAP-style cumsum÷cumsum) are refused.
+export async function planMonitorCondition(text,definitions,{context=[],lookupImpl=null,timeframe='1m',...options}={}){
+  if(timeframe==='d1')return planDailyCondition(text,definitions,{context,lookupImpl,...options});
   const request=String(text||'').trim();if(!request)throw plannerError('INDICATOR_AGENT_INPUT_REQUIRED',400);if(request.length>500)throw plannerError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
   const history=validateContext(context);
   // Other timeframes are an engine limit, not something the model should guess at: answer at once with a 1m rewrite.
@@ -75,21 +79,54 @@ export async function planMonitorCondition(text,definitions,{context=[],lookupIm
   return result;
 }
 
+async function planDailyCondition(text,definitions,{context=[],lookupImpl=null,...options}){
+  const request=String(text||'').trim();if(!request)throw plannerError('INDICATOR_AGENT_INPUT_REQUIRED',400);if(request.length>500)throw plannerError('INDICATOR_AGENT_INPUT_TOO_LONG',400);
+  const history=validateContext(context);
+  let canonicalName=null;
+  if(lookupImpl&&!history.length&&!mentionsDailyLimit(request)){
+    let lookup=null;try{lookup=await lookupImpl(request);}catch(error){console.warn(`indicator-lookup: failed ${error.code||error.message}; not blocking`);}
+    if(lookup&&lookup.found===false)return unknownIndicatorResult(lookup);
+    if(lookup&&lookup.found===true&&typeof lookup.matched?.title==='string'&&lookup.matched.title.trim())canonicalName=lookup.matched.title.trim().slice(0,120);
+  }
+  const system=buildPlannerSystem(definitions,{timeframe:'d1'});
+  const user=history.length?JSON.stringify({previousConversation:history,currentReply:request}):canonicalName?JSON.stringify({request,canonicalName}):request;
+  const {raw,status}=await requestStructuredAgent(system,user,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,reasoningEffort:'medium',...options});
+  let plan=normalizePlan(raw);
+  if(plan.status==='discussion'&&!mentionsDailyLimit(request)&&!history.length){
+    console.warn(`formula-planner: premature daily discussion for "${request.slice(0,40)}", retrying with an approximation instruction`);
+    const push=`${user}\n\n（系統提示：這個需求沒有用到籌碼、財報等不可得資料。請先用你對這個指標的一般知識寫出它的數學定義，再用允許的積木在日K上組出等價或近似的條件並回 formula；近似時在 name 標「近似」。只有真的做不到才回 discussion，並說明是哪一步做不到。）`;
+    try{const second=await requestStructuredAgent(system,push,FORMULA_PLAN_SCHEMA,NAME,{maxTokens:6000,reasoningEffort:'medium',...options});const candidate=normalizePlan(second.raw);if(candidate.status==='formula'){try{validatePlan(candidate,definitions,second.status);plan=candidate;}catch(error){console.warn(`formula-planner: retry plan rejected (${error.detail||error.code}), keeping discussion`);}}}
+    catch(error){console.warn(`formula-planner: retry failed ${error.code||error.message}`);}
+  }
+  let result;
+  try{result=validatePlan(plan,definitions,status);}
+  catch(error){console.warn(`formula-planner: rejected daily plan (${error.code}) detail=${error.detail||'-'} status=${plan?.status} nodes=${Array.isArray(plan?.nodes)?plan.nodes.length:'?'} root=${plan?.rootId} name=${String(plan?.name||'').slice(0,60)}`);throw error;}
+  if(result.status==='existing')throw plannerError('FORMULA_PLAN_INVALID',422,'formula stage returned existing');
+  if(result.status==='formula'){
+    if(!dailyCapable(result.proposal.ast))return{status:'discussion',message:'這個條件要用盤中一分鐘 K（例如 VWAP、相對當日開盤）才算得出來，日 K 上沒有意義。可改用：收盤上穿 SMA(20)',provider:result.provider};
+    result.summary=`${result.proposal.name} · 日 K`;
+  }
+  return result;
+}
+// Daily step: only data the engine lacks altogether (chips, financials, news, other stocks, intraday bars) is a limit.
+export function mentionsDailyLimit(text){return /\d+\s*分(鐘|k|線)|小時|盤中|外資|投信|自營|法人|融資|融券|借券|籌碼|財報|營收|eps|本益比|新聞|公告|股東|除權|除息|大盤|加權指數|其他股票|跨股/i.test(String(text).normalize('NFKC'));}
+
 // Output format rules come first and carry a complete example with its null fields: free models (gpt-oss) drop
 // null keys and fill params unless they have seen the exact shape. Kept under 4500 chars for 8000-TPM tiers.
-export function buildPlannerSystem(definitions){
+export function buildPlannerSystem(definitions,{timeframe='1m'}={}){
+  const daily=timeframe==='d1';
   const registry=definitions.map(({id,version,name,timeframe,params,condition})=>({id,version,name,timeframe,params,condition}));
   return[
-    '你是台股盤中監控條件規劃器，只輸出一個 JSON 物件，不得執行程式，說明一律繁體中文。',
+    daily?'你是台股日K選股條件規劃器，只輸出一個 JSON 物件，不得執行程式，說明一律繁體中文。':'你是台股盤中監控條件規劃器，只輸出一個 JSON 物件，不得執行程式，說明一律繁體中文。',
     '輸出格式（硬性規定）：頂層欄位 status/message/name/timeframe/indicatorId/version/params/nodes/rootId 都要有。每個 node 一律輸出 9 個 key：id,op,field,value,period,inputId,leftId,rightId,itemIds，不適用的填 null，不可省略。status=formula 時 params 一律 {"period":null,"threshold":null}、indicatorId/version 為 null，數字只寫在 node 的 period/value。status=discussion/clarification 時 nodes 必須是空陣列 []、rootId 為 null。',
     `完整範例「收盤上穿 SMA 20」：${JSON.stringify({status:'formula',message:'',name:'收盤上穿 SMA 20',timeframe:'1m',indicatorId:null,version:null,params:{period:null,threshold:null},nodes:[{id:'n1',op:'source',field:'close',value:null,period:null,inputId:null,leftId:null,rightId:null,itemIds:null},{id:'n2',op:'sma',field:null,value:null,period:20,inputId:'n1',leftId:null,rightId:null,itemIds:null},{id:'n3',op:'crosses_above',field:null,value:null,period:null,inputId:null,leftId:'n1',rightId:'n2',itemIds:null}],rootId:'n3'})}`,
-    '系統只有一分鐘K；沒講週期視為一分鐘K，timeframe填1m，不為週期追問。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、cumsum(當日開盤以來累計)、first(當日第一根的值)、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
+    daily?'資料是每檔股票的日K（每根=一個交易日，條件在每天收盤判斷）；timeframe 仍固定填1m（格式欄位），不為週期追問。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、cumsum(從資料起點累計，只用於OBV這類累計量)、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200。禁止 first 與 VWAP（日K上沒有意義）。月線=SMA20、季線=SMA60、半年線=SMA120，昨收=prev(close,1)，跳空=open與prev(high,1)/prev(low,1)比較。':'系統只有一分鐘K；沒講週期視為一分鐘K，timeframe填1m，不為週期追問。積木：source(open/high/low/close/volume)、constant、tr(真實波幅，無參數)、add/sub/mul/div/max/min、abs、cumsum(當日開盤以來累計)、first(當日第一根的值)、sma/ema/rma(Wilder平滑)/highest/lowest/stddev(母體)、prev(前n根,n=1..60)、crosses_above/crosses_below/gte/lte/gt/lt、all(且)/any(或) 2到4條布林。視窗2到200；總暖機不可超過當日270根。',
     'nodes依相依順序排列、id唯一、可重複引用。source填field；constant填value；sma/ema/rma/highest/lowest/stddev/prev填inputId+period；abs/cumsum/first填inputId；算術與比較填leftId/rightId；all/any填itemIds。rootId指向最後一個布林節點。',
     '更多範例（只列非null欄位，實際輸出其餘填null）：',
     ...FORMULA_RECIPES.filter((recipe)=>PROMPT_EXAMPLE_KEYS.includes(recipe.key)).map((recipe)=>`- ${recipe.name}：${compactGraph(toGraph(recipe.ast))}`),
     '常見組法：布林上軌=sma(close,20)+2×stddev(close,20)、下軌=sma−2×stddev。「連續N根紅K」=all(close>open, prev(close,1)>prev(open,1)…)。「跌幅超過X%」=close≤prev(close,N)×(1−X/100)，「漲幅超過X%」=close≥prev(close,N)×(1+X/100)，N未指定用1並寫進name。「乖離率」=(close−sma(close,20))÷sma(close,20)，門檻3%寫0.03。「突破前N根最高」=highest後prev 1。ATR(14)=rma(tr,14)（tr 是現成積木，不要自己組真實波幅）。DMI/ADX 無法表達，回discussion。CCI≈(TP−sma(TP,20))÷(0.015×stddev(TP,20))，TP=(high+low+close)/3，name標「近似」。KD：RSV=(close−lowest(low,9))÷(highest(high,9)−lowest(low,9))×100，K=rma(RSV,3)、D=rma(K,3)。RSI用rma。',
-    'VWAP=cumsum(((high+low+close)÷3)×volume)÷cumsum(volume)。「相對開盤漲幅X%」=close≥first(open)×(1+X/100)。OBV=cumsum(sign×volume)，sign=min(max((close−prev(close,1))×1000000,−1),1)。替代條件用白話（如「量 ≥ 均量 2 倍」），不要寫函數式。需要昨日收盤（跳空、相對昨收漲跌幅）的條件無法表達：回discussion並建議改用相對當日開盤 first(open)。',
-    '這是公式階段，只能回formula、clarification或discussion，禁止existing。沒有現成組法的指標，先依一般技術分析知識寫出數學定義，再用積木組出等價或近似條件並回formula（近似時name標「近似」）；參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。其他週期、跨股票、籌碼、財報、新聞、超過270根暖機或積木組不出時回discussion：message一句話說原因，並包含「可改用：…」一個同類、可用一分鐘K計算的具體替代條件（量能→量能、趨勢→均線/MACD、波動→ATR/布林、動能→RSI/KD）。',
+    daily?'OBV=cumsum(sign×volume)，sign=min(max((close−prev(close,1))×1000000,−1),1)。替代條件用白話（如「量 ≥ 均量 2 倍」），不要寫函數式。均量用20日。':'VWAP=cumsum(((high+low+close)÷3)×volume)÷cumsum(volume)。「相對開盤漲幅X%」=close≥first(open)×(1+X/100)。OBV=cumsum(sign×volume)，sign=min(max((close−prev(close,1))×1000000,−1),1)。替代條件用白話（如「量 ≥ 均量 2 倍」），不要寫函數式。需要昨日收盤（跳空、相對昨收漲跌幅）的條件無法表達：回discussion並建議改用相對當日開盤 first(open)。',
+    daily?'這是公式階段，只能回formula、clarification或discussion，禁止existing。沒有現成組法的指標，先依一般技術分析知識寫出數學定義，再用積木組出等價或近似條件並回formula（近似時name標「近似」）；參數沒講用常用預設（MACD 12/26/9、均線20、均量20日×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。盤中分鐘資料、跨股票、籌碼、財報、新聞或積木組不出時回discussion：message一句話說原因，並包含「可改用：…」一個同類、可用日K計算的具體替代條件。':'這是公式階段，只能回formula、clarification或discussion，禁止existing。沒有現成組法的指標，先依一般技術分析知識寫出數學定義，再用積木組出等價或近似條件並回formula（近似時name標「近似」）；參數沒講用常用預設（MACD 12/26/9、均線20、均量20根×2），「MA」視為SMA，「黃金交叉／突破／站上」=向上穿越、「死亡交叉／跌破」=向下穿越，採用的參數寫進name。只有連指標都無法判斷才回clarification。其他週期、跨股票、籌碼、財報、新聞、超過270根暖機或積木組不出時回discussion：message一句話說原因，並包含「可改用：…」一個同類、可用一分鐘K計算的具體替代條件（量能→量能、趨勢→均線/MACD、波動→ATR/布林、動能→RSI/KD）。',
     'name與message用中性用語，不得出現買進、賣出、超買、超賣、轉強、訊號等判斷字眼。輸入含 canonicalName 時，依該正式名稱指標的標準定義組公式。',
     `Registry: ${JSON.stringify(registry)}`
   ].join('\n');

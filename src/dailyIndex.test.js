@@ -52,6 +52,9 @@ test('daily index rejects session-only conditions (VWAP) and recomputes on new d
   const vwap = { op:'gt', left:close, right:{ op:'div', left:{ op:'cumsum', input:{ op:'mul', left:close, right:{ op:'source', field:'volume' } } }, right:{ op:'cumsum', input:{ op:'source', field:'volume' } } } };
   assert.equal(dailyCapable(vwap), false);
   assert.equal(dailyCapable(above(20)), true);
+  const obv = { op:'cumsum', input:{ op:'mul', left:close, right:{ op:'source', field:'volume' } } };
+  assert.equal(dailyCapable({ op:'gt', left:obv, right:{ op:'sma', input:obv, period:20 } }), true);   // OBV: a running total, fine on daily
+  assert.equal(dailyCapable({ op:'gt', left:close, right:{ op:'first', input:{ op:'source', field:'open' } } }), false);
   const index = new DailyIndex();
   index.setSeries(store());
   assert.throws(() => index.ensure([{ key:'vwap', ast:vwap }]), (error) => error.code === 'DAILY_CONDITION_UNSUPPORTED');

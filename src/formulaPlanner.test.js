@@ -175,3 +175,17 @@ test('planner tolerates forward references, prev without period and the tr block
   assert.equal(red3.nodes.find((n) => n.id === 'c2').period, 2);
   assert.equal(validatePlan(red3, []).status, 'formula');
 });
+
+test('daily step (timeframe d1): plans on daily candles, accepts daily wording, refuses session-only blocks', async () => {
+  const definitions = await definitionsPromise, env = { INDICATOR_AGENT_PROVIDER:'groq', INDICATOR_AGENT_MODEL:'openai/gpt-oss-20b', GROQ_API_KEY:'secret' };
+  const sv = [full('c', 'source', { field:'close' }), full('p', 'prev', { inputId:'c', period:1 }), full('d', 'sub', { leftId:'c', rightId:'p' }), full('k', 'constant', { value:1000000 }), full('m', 'mul', { leftId:'d', rightId:'k' }), full('lo', 'constant', { value:-1 }), full('hi', 'constant', { value:1 }), full('mx', 'max', { leftId:'m', rightId:'lo' }), full('s', 'min', { leftId:'mx', rightId:'hi' }), full('v', 'source', { field:'volume' }), full('sv', 'mul', { leftId:'s', rightId:'v' }), full('obv', 'cumsum', { inputId:'sv' }), full('avg', 'sma', { inputId:'obv', period:20 }), full('x', 'crosses_above', { leftId:'obv', rightId:'avg' })];
+  const obv = { status:'formula', message:'', name:'OBV 上穿 OBV 的 20 日均線', timeframe:'1m', indicatorId:null, version:null, params:{ period:null, threshold:null }, nodes:sv, rootId:'x' };
+  let system = '';
+  const result = await planMonitorCondition('obv 日線上穿均線', definitions, { env, timeframe:'d1', fetchImpl:async (_url, options) => { system = JSON.parse(options.body).messages[0].content; return chat(obv); } });
+  assert.equal(result.status, 'formula');
+  assert.equal(result.summary, 'OBV 上穿 OBV 的 20 日均線 · 日 K');
+  assert.match(system, /日K/);
+  const open = { ...obv, name:'收盤高於當日開盤', nodes:[full('c', 'source', { field:'close' }), full('o', 'source', { field:'open' }), full('f', 'first', { inputId:'o' }), full('g', 'gt', { leftId:'c', rightId:'f' })], rootId:'g' };
+  const refused = await planMonitorCondition('收盤高於開盤', definitions, { env, timeframe:'d1', fetchImpl:async () => chat(open) });
+  assert.equal(refused.status, 'discussion');
+});

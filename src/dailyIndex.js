@@ -16,9 +16,11 @@ export const FORWARD_DAYS = 7;
 export const STAT_DAYS = 60;
 const EVAL_BARS = 400;   // enough history for the longest preset (60-day averages, 52-day Ichimoku) plus warmup
 
-// Session-only blocks (VWAP's cumulative sums, the day's first bar) have no meaning on daily candles.
+// Session-only blocks have no meaning on daily candles: the day's first bar, and a cumulative sum divided by another
+// (VWAP, an average anchored at the session open). A plain cumsum is a running total from the start of the history,
+// which is what OBV is on daily candles (its comparisons with its own average / high don't depend on the start).
 export function dailyCapable(ast) { return !usesSessionBlocks(ast); }
-function usesSessionBlocks(node) { return node.op === 'cumsum' || node.op === 'first' || formulaChildren(node).some(usesSessionBlocks); }
+function usesSessionBlocks(node) { return node.op === 'first' || (node.op === 'div' && node.left?.op === 'cumsum' && node.right?.op === 'cumsum') || formulaChildren(node).some(usesSessionBlocks); }
 
 export class DailyIndex {
   constructor({ days = DAILY_DAYS } = {}) {

@@ -392,26 +392,26 @@ function conditions(){
   const dailyNote=!daily&&state.dailyFilters.length?`只在日 K 篩出的股票上判斷（${state.dailyFilters.map((filter)=>escapeHtml(filter.label)).join(' 且 ')}，以前一天收盤為準）。`:'';
   const title=daily?'先用日 K 篩股票？':'盤中什麼時候通知？';
   const lead=daily?'最多 3 個，全部成立的股票在每個交易日 13:00 通知你。':`${dailyNote}從清單選一分鐘 K 指標，最多 3 個，全部成立才通知。每一列都標出過去 7 個交易日會觸發幾檔。${state.dailyFilters.length?'不需要盤中條件可以跳過，改成 13:00 通知。':''}`;
-  shell({step:node(),title,lead,back:daily?scopeBack:'daily',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="找指標，例如 KD、均線、VWAP" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label>${daily?'':'<p class="proto-signature proto-ai-hint">找不到的指標，AI 會幫你建立並加進清單</p>'}<div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span>${daily?'<button class="proto-secondary proto-soon-button" disabled aria-disabled="true" title="盤中觸發即將推出">盤中觸發<span class="proto-soon-tag">即將推出</span></button>':''}<button id="confirmConditions" class="proto-primary">下一步</button></div>`});
+  shell({step:node(),title,lead,back:daily?scopeBack:'daily',body:`<div class="proto-cond-top"><section id="examplePanel" class="proto-example" hidden></section><div id="addedPanel">${filterMarkup()}</div></div><div class="proto-ai-box"><label class="proto-search proto-ai-search"><input id="indicatorSearch" type="search" autocomplete="off" placeholder="${daily?'找指標或用一句話描述，例如 KD、OBV 上穿均線':'找指標，例如 KD、均線、VWAP'}" aria-label="找指標" aria-controls="templatePanel" value="${escapeHtml(state.requestText)}"></label><p class="proto-signature proto-ai-hint">找不到的指標，打一句話，AI 會幫你建立</p><div id="aiRow"></div><section id="aiPanel" aria-live="polite"></section></div><section class="proto-templates" id="templatePanel" aria-label="指標清單"></section><section class="proto-history" id="historyPanel"></section><div class="proto-sticky-action"><span id="stickyText"></span>${daily?'<button class="proto-secondary proto-soon-button" disabled aria-disabled="true" title="盤中觸發即將推出">盤中觸發<span class="proto-soon-tag">即將推出</span></button>':''}<button id="confirmConditions" class="proto-primary">下一步</button></div>`});
   const search=root.querySelector('#indicatorSearch');
   bindFilterList();drawSticky();
   // Typing again drops a first-turn AI card for other text, so the list comes back.
   search.addEventListener('input',()=>{const value=search.value.trim();state.requestText=value;if(state.ai&&!state.ai.context.length&&state.ai.text!==value){state.ai=null;drawAi();}save();drawTemplates();});
   search.addEventListener('keydown',(event)=>{
     const value=search.value.trim();
-    if(event.key==='Enter'){event.preventDefault();if(value.length>=2&&!templateRows.length&&!daily)startAi(value);else root.querySelector('#templatePanel [data-add]:not(:disabled)')?.focus();}
+    if(event.key==='Enter'){event.preventDefault();if(value.length>=2&&!templateRows.length)startAi(value);else root.querySelector('#templatePanel [data-add]:not(:disabled)')?.focus();}
     if(event.key==='Escape'&&value){search.value='';state.requestText='';save();drawTemplates();}
   });
   root.querySelector('#confirmConditions').addEventListener('click',()=>{if(daily){if(state.dailyFilters.length&&!legacyFilters().length)go('confirm');return;}if(!hasAnyStep())return;go('confirm');});
-  if(daily)state.ai=null;
+  if(state.ai&&Boolean(state.ai.daily)!==daily)state.ai=null;
   drawAi();drawTemplates();drawHistory();
   loadTemplates().then(()=>{if(!['conditions','daily'].includes(node()))return;const healed=reconcileFilters();if(resolveLegacy()||healed)drawFilters();drawTemplates();scheduleIndex();});
   autoHistory=false;scheduleIndex();if(!daily)persistDraftAiFilters();
 }
 function startAi(value){
   const text=String(value||'').trim();if(text.length<2)return;
-  const same=state.ai&&state.ai.text===text&&!state.ai.context.length&&(state.ai.loading||state.ai.result||state.ai.error);
-  if(!same)state.ai={text,context:[],result:null};
+  const same=state.ai&&state.ai.text===text&&Boolean(state.ai.daily)===isDaily()&&!state.ai.context.length&&(state.ai.loading||state.ai.result||state.ai.error);
+  if(!same)state.ai={text,context:[],result:null,daily:isDaily()};
   const search=root.querySelector('#indicatorSearch');if(search&&search.value.trim()!==text){search.value=text;state.requestText=text;}
   save();drawTemplates();
   if(same)drawAi();else runAi();
@@ -448,7 +448,7 @@ async function addFilter(filter,{withHistory=false,replace=false}={}){
   if(replace)setF([]);
   if(addBlockReason()){showToast(`${addBlockReason()}。`);return false;}
   if(hasSpec(filter.spec)){showToast('這個過濾已經加入了。');return false;}
-  if(isDaily()){state.dailyFilters.push(filter);state.requestText='';save();render();return true;} // daily filters need no formula token
+  if(isDaily()){state.dailyFilters.push(filter);state.requestText='';state.ai=null;save();render();return true;} // daily filters need no formula token
   state.filters.push(filter);invalidateToken();state.requestText='';state.ai=null;
   if(filter.token){if(filter.spec.ai)filter.spec.ai.token=filter.token;if(state.filters.length===1){state.formulaToken=filter.token;state.formulaTokenSignature=filterSignature();}delete filter.token;}
   autoHistory=withHistory;save();render();
@@ -494,8 +494,7 @@ function drawTemplates(){
   // AI row only when the search found nothing in the list (and no AI card is already open).
   const showAi=Boolean(value)&&!templateRows.length&&!state.ai;
   aiRow.hidden=!showAi;
-  if(isDaily())aiRow.innerHTML=showAi?'<p class="proto-dropdown-head">日 K 清單沒有符合的指標</p>':'';
-  else aiRow.innerHTML=showAi?(value.length>=2?`<button type="button" class="proto-row proto-row-ai" id="aiCreateRow"><strong><span class="proto-ai-tag" aria-hidden="true">AI</span>清單沒有這個指標，用 AI 建立：『${escapeHtml(value)}』</strong><small>按 Enter 也可以</small></button>`:'<p class="proto-dropdown-head">再多打一個字</p>'):'';
+  aiRow.innerHTML=showAi?(value.length>=2?`<button type="button" class="proto-row proto-row-ai" id="aiCreateRow"><strong><span class="proto-ai-tag" aria-hidden="true">AI</span>清單沒有這個指標，用 AI 建立：『${escapeHtml(value)}』</strong><small>按 Enter 也可以</small></button>`:'<p class="proto-dropdown-head">再多打一個字</p>'):'';
   aiRow.querySelector('#aiCreateRow')?.addEventListener('click',()=>startAi(value));
   if(!templateCache.length){target.hidden=false;target.innerHTML=`<p class="proto-eyebrow">指標清單</p><div class="proto-status"><strong>${templateError?'無法讀取指標清單':'清單還是空的'}</strong><p>${escapeHtml(templateError||'描述你要的指標，AI 會建立並加進清單。')}</p></div>`;return;}
   const patterns=isDaily()?patternRows(tokens):[];
@@ -572,9 +571,9 @@ function directionTag(direction){return`<span class="proto-dir ${direction==='be
 async function runAi(){
   const ai=state.ai;if(!ai)return;
   ai.loading=true;ai.error=null;ai.errorCode=null;drawAi();
-  const cacheable=!ai.context.length,cached=cacheable?aiCache.get(ai.text):null;
+  const cacheable=!ai.context.length,cacheKey=`${ai.daily?'d1':'1m'}|${ai.text}`,cached=cacheable?aiCache.get(cacheKey):null;
   if(cached){ai.result=cached;ai.loading=false;save();drawAi();return;}
-  try{const result=await api('/api/indicator-agent/parse',{text:ai.text,context:ai.context});if(cacheable)aiCache.set(ai.text,result);if(state.ai!==ai)return;ai.result=result;}
+  try{const result=await api('/api/indicator-agent/parse',{text:ai.text,context:ai.context,...(ai.daily?{timeframe:'d1'}:{})});if(cacheable)aiCache.set(cacheKey,result);if(state.ai!==ai)return;ai.result=result;}
   catch(error){if(state.ai!==ai)return;ai.result=null;ai.error=errorText(error);ai.errorCode=error?.code||null;}
   ai.loading=false;save();drawAi();
 }
@@ -603,15 +602,15 @@ function drawAi(){
     if(result.status==='existing'){eyebrow='內建指標';body=existingPreset?`<div class="proto-ai-body"><strong>${escapeHtml(existingPreset.label)}</strong><p class="proto-signature">清單裡有這個指標，直接加入即可。</p><div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseExisting">加入過濾</button></div></div>`:`<div class="proto-ai-body"><strong>${escapeHtml(result.summary||'')}目前不能從這裡建立</strong><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">換個說法</button><button type="button" class="proto-primary" id="aiQuickRequest">送出需求，之後通知我</button></div></div>`;}
     else if(result.status==='formula'&&ai.vetting){
       // Vetting an AI-built formula: replay it over the last 7 trading days before it may be added.
-      eyebrow='AI 新建立・驗證中';const name=String(result.summary||'').replace(/ · 一分鐘$/,'');
-      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><div class="proto-skeleton proto-skeleton-line" aria-hidden="true"></div><div class="proto-skeleton proto-skeleton-line short" aria-hidden="true"></div><p>正在用過去 7 個交易日驗證這個條件…</p><p id="vetProgress" class="proto-signature" aria-live="polite">${escapeHtml(ai.vetting.progress||'準備中')}</p><p class="proto-signature">第一次驗證要下載近期的一分鐘資料，可能需要 1～3 分鐘。</p></div>`;}
+      eyebrow='AI 新建立・驗證中';const name=String(result.summary||'').replace(/ · (一分鐘|日 K)$/,'');
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><div class="proto-skeleton proto-skeleton-line" aria-hidden="true"></div><div class="proto-skeleton proto-skeleton-line short" aria-hidden="true"></div><p>正在用過去 7 個交易日${ai.daily?'的日 K ':''}驗證這個條件…</p><p id="vetProgress" class="proto-signature" aria-live="polite">${escapeHtml(ai.vetting.progress||'準備中')}</p>${ai.daily?'':'<p class="proto-signature">第一次驗證要下載近期的一分鐘資料，可能需要 1～3 分鐘。</p>'}</div>`;}
     else if(result.status==='formula'&&ai.vet&&ai.vet.verdict&&!ai.vet.verdict.ok){
       // Blocked by the vet: 0 triggers or far too many over 7 days. Not added, not saved to the library.
-      const verdict=ai.vet.verdict,name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow='AI 新建立・未通過驗證';
-      body=`<div class="proto-ai-body"><strong>這個條件沒有通過驗證</strong><p>${escapeHtml(verdict.message||VERDICT_TEXT[verdict.code]||'這個條件目前不適合用來監控。')}</p><p class="proto-signature">${escapeHtml(name)}</p>${vetStats(verdict)}<div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiQuickRequest">送出需求，之後通知我</button><button type="button" class="proto-primary" id="aiRephrase">換個說法</button></div></div>`;}
+      const verdict=ai.vet.verdict,name=String(result.summary||'').replace(/ · (一分鐘|日 K)$/,'');eyebrow='AI 新建立・未通過驗證';
+      body=`<div class="proto-ai-body"><strong>這個條件沒有通過驗證</strong><p>${escapeHtml(verdict.message||VERDICT_TEXT[verdict.code]||'這個條件目前不適合用來監控。')}</p><p class="proto-signature">${escapeHtml(name)}</p>${ai.daily?'':vetStats(verdict)}<div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiQuickRequest">送出需求，之後通知我</button><button type="button" class="proto-primary" id="aiRephrase">換個說法</button></div></div>`;}
     else if(result.status==='formula'){
-      const name=String(result.summary||'').replace(/ · 一分鐘$/,'');eyebrow=result.library?'公式庫・已驗證':'AI 新建立';
-      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${warmupText(result.proposal)}${result.library?'':'<p class="proto-signature proto-ai-foot">加入前會先用過去 7 個交易日驗證；建立監控後會進入清單，下次直接選。</p>'}${ai.vetError?`<p class="proto-error" role="alert">${escapeHtml(ai.vetError)}</p>`:''}<div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">${ai.vetError?'再驗證一次':'加入過濾'}</button></div></div>`;}
+      const name=String(result.summary||'').replace(/ · (一分鐘|日 K)$/,'');eyebrow=result.library?'公式庫・已驗證':'AI 新建立';
+      body=`<div class="proto-ai-body"><strong>${escapeHtml(name)}</strong><p><span class="proto-how">怎麼判斷</span>${escapeHtml(result.formulaSummary||'')}</p>${ai.daily?'':warmupText(result.proposal)}${result.library?'':`<p class="proto-signature proto-ai-foot">${ai.daily?'加入前會先用過去 7 個交易日的日 K 驗證，通過後進入清單，下次直接選。':'加入前會先用過去 7 個交易日驗證；建立監控後會進入清單，下次直接選。'}</p>`}${ai.vetError?`<p class="proto-error" role="alert">${escapeHtml(ai.vetError)}</p>`:''}<div id="aiConfirmBox"></div><div class="proto-inline-actions"><button type="button" class="proto-secondary" id="aiRephrase">不是這個？換個說法</button><button type="button" class="proto-primary" id="aiUseFormula">${ai.vetError?'再驗證一次':'加入過濾'}</button></div></div>`;}
     else if(result.status==='unknown_indicator'){
       // The AI could not find a public definition for the indicator name; show what it looked up.
       eyebrow='查不到這個指標';const candidates=(result.lookup?.candidates||[]).filter(Boolean).slice(0,8);
@@ -627,7 +626,7 @@ function drawAi(){
   target.querySelector('#aiClose').addEventListener('click',()=>{dismiss();focusSearch({scroll:false});});
   target.querySelector('#aiRephrase')?.addEventListener('click',()=>{dismiss();focusSearch({select:true});});
   target.querySelectorAll('[data-go]').forEach((button)=>button.addEventListener('click',()=>go(button.dataset.go)));
-  target.querySelector('#aiRetry')?.addEventListener('click',()=>{aiCache.delete(ai.text);runAi();});
+  target.querySelector('#aiRetry')?.addEventListener('click',()=>{aiCache.delete(`${ai.daily?'d1':'1m'}|${ai.text}`);runAi();});
   target.querySelectorAll('[data-alt]').forEach((button)=>button.addEventListener('click',()=>{const text=button.dataset.alt;const search=root.querySelector('#indicatorSearch');if(search)search.value=text;state.requestText=text;save();startAi(text);}));
   target.querySelector('#aiQuickRequest')?.addEventListener('click',async(event)=>{
     const button=event.currentTarget,label=button.textContent;button.disabled=true;button.textContent='送出中…';
@@ -640,9 +639,10 @@ function drawAi(){
   // Library hits are already vetted and go straight in. A brand-new AI formula is first replayed over the
   // last 7 trading days (/api/formula/vet); it is only added when the verdict is ok.
   const useFormula=()=>{
-    const result=ai.result,name=String(result.summary||'').replace(/ · 一分鐘$/,'');
+    const result=ai.result,name=String(result.summary||'').replace(/ · (一分鐘|日 K)$/,'');
     if(result.library&&result.proposal?.fingerprint){addFilter({id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{fingerprint:result.proposal.fingerprint}});return;}
     const filter={id:crypto.randomUUID(),label:name,formulaSummary:result.formulaSummary||'',spec:{ai:{text:ai.text,context:ai.context}},token:result.proposalToken};
+    if(ai.daily)return dailySaveAndAdd(ai,filter);
     if(filtersFull())return confirmReplace(state.filters.length,()=>vetAndAdd(ai,filter,true));
     vetAndAdd(ai,filter,false);
   };
@@ -671,6 +671,37 @@ async function persistDraftAiFilters(){
   const pending=state.filters.filter((filter)=>filter.spec.ai&&filter.spec.ai.token&&!filter.saving);
   for(const filter of pending){filter.saving=true;const ok=await persistAiFilter(filter);delete filter.saving;if(ok){invalidateToken();save();if(node()==='conditions')drawFilters();}}
 }
+// Daily step: /api/formula/save vets the AI formula on the daily index itself (202 while daily data loads), keeps it in
+// the library, and the filter refers to that library formula like any list row.
+async function dailySaveAndAdd(ai,filter){
+  if(state.ai!==ai||ai.vetting)return;
+  if(addBlockReason()){showToast(`${addBlockReason()}。`);return;}
+  ai.vetting={progress:'準備中'};ai.vet=null;ai.vetError=null;save();drawAi();
+  let saved;
+  try{
+    for(let attempt=0;;attempt++){
+      saved=await api('/api/formula/save',{proposalToken:filter.token,timeframe:'d1'});
+      if(saved.status!=='loading')break;
+      if(attempt>=40)throw Object.assign(new Error('日 K 資料還在準備，請稍後再試一次。'),{code:'DAILY_LOADING'});
+      const node=root.querySelector('#vetProgress');if(node)node.textContent='日 K 資料準備中';
+      await new Promise((resolve)=>setTimeout(resolve,3000));
+      if(state.ai!==ai)return;
+    }
+  }catch(error){
+    if(state.ai!==ai)return;
+    ai.vetting=null;
+    if(['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code)){aiCache.delete(`d1|${ai.text}`);ai.result=null;save();runAi();return;}
+    if(error.code==='FORMULA_NOT_VETTED'&&error.payload?.verdict)ai.vet={verdict:error.payload.verdict};
+    else ai.vetError=error.code==='DAILY_CONDITION_UNSUPPORTED'?'這個條件只能用在盤中一分鐘 K，日 K 上沒有意義。':errorText(error);
+    save();drawAi();return;
+  }
+  if(state.ai!==ai)return;
+  ai.vetting=null;
+  // The list must know the new formula before render() reconciles saved filters against it.
+  templateCache=null;await loadTemplates();
+  const added=await addFilter({id:filter.id,label:filter.label,formulaSummary:filter.formulaSummary||saved.summary||'',spec:{fingerprint:saved.fingerprint}});
+  if(added)showToast('已加入，並放進日 K 清單。');
+}
 async function vetAndAdd(ai,filter,replace){
   if(state.ai!==ai||ai.vetting)return;
   ai.vetting={progress:'準備中'};ai.vet=null;ai.vetError=null;save();drawAi();
@@ -681,7 +712,7 @@ async function vetAndAdd(ai,filter,replace){
   }catch(error){
     if(state.ai!==ai)return;
     // An expired proposal needs a fresh parse; everything else is shown on the card with a retry.
-    if(['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code)){ai.vetting=null;aiCache.delete(ai.text);ai.result=null;save();runAi();return;}
+    if(['FORMULA_PROPOSAL_STALE','FORMULA_TOKEN_INVALID'].includes(error.code)){ai.vetting=null;aiCache.delete(`${ai.daily?'d1':'1m'}|${ai.text}`);ai.result=null;save();runAi();return;}
     ai.vetting=null;ai.vetError=errorText(error);save();drawAi();return;
   }
   if(state.ai!==ai)return;
