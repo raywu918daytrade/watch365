@@ -13,7 +13,7 @@ PUBLIC_SITE_URL = "https://watch365.just1stock.com"
 #   npx wrangler kv namespace create W365   and paste the id below.
 [[kv_namespaces]]
 binding = "W365"
-id = "REPLACE_WITH_KV_ID"
+id = "155bea938dcf42c48c2f6068490e6893"
 
 [alias]
 "node:fs/promises" = "./vfs.js"
