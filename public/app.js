@@ -1,3 +1,4 @@
+import{request as localRequest}from'./engine/local-api.js';
 // Three-step flow (選範圍 → 條件 → 確認) documented in docs/ui-prototype-flow.md, wired to /api
 // for stock lists, indicator requests and monitor creation.
 // Also: AI parsing of new indicators, 7-trading-day M1 history lookup, request progress and notification retry.
@@ -53,12 +54,8 @@ function node(){return location.hash.slice(1)||'home';}
 function go(next){if(location.hash===`#${next}`)render();else location.hash=next;}
 function errorText(error){if(error?.code==='INDICATOR_AGENT_RATE_LIMITED'&&error.payload?.retryAfterSeconds)return`AI 服務這一分鐘的用量已滿，請約 ${error.payload.retryAfterSeconds} 秒後再試。`;if(ERROR_TEXT[error?.code])return ERROR_TEXT[error.code];const message=error?.message||'';if(/^HTTP 5\d\d$/.test(message))return'伺服器暫時沒有回應，請稍後再試一次。';if(/^HTTP 4\d\d$/.test(message))return'這個請求無法處理，請重新整理頁面後再試。';return message||'發生錯誤，請稍後再試。';}
 
-async function api(url,body){
-  const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const payload=await response.json().catch(()=>({}));
-  if(!response.ok)throw Object.assign(new Error(payload.error||`HTTP ${response.status}`),{code:payload.error,payload});
-  return payload;
-}
+// Static site (GitHub Pages): compute routes run in the browser, stored state lives in the Cloudflare Worker (web/localApi.js).
+async function api(url,body){return localRequest(url,body);}
 
 // The request form is a side branch off 條件, not a required step, so it doesn't show in the progress bar.
 // While 盤中觸發 is 即將推出 the bar shows three steps, so nobody waits for a step that never comes.
@@ -1227,6 +1224,6 @@ function formatClock(value){return new Date(value).toLocaleTimeString('zh-TW',{t
 function formatWhen(value){if(!value)return'—';const date=new Date(value);return isToday(value)?formatClock(value):`${date.toLocaleDateString('zh-TW',{timeZone:'Asia/Taipei',month:'numeric',day:'numeric'})} ${formatClock(value)}`;}
 function formatTime(value){return new Date(value).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false});}
 function escapeHtml(value){return String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');}
-fetch('/api/version').then((response)=>response.ok?response.json():null).then((info)=>{const target=document.getElementById('appVersion');if(!info||!target)return;target.textContent=info.commit?`${info.version}・${info.commit}`:info.version;target.title=`部署時間：${formatTime(info.deployedAt)}${info.commit?`・commit ${info.commit}`:''}`;}).catch(()=>{});
+localRequest('/api/version').catch(()=>null).then((info)=>{const target=document.getElementById('appVersion');if(!info||!target)return;target.textContent=info.commit?`${info.version}・${info.commit}`:info.version;target.title=`部署時間：${formatTime(info.deployedAt)}${info.commit?`・commit ${info.commit}`:''}`;}).catch(()=>{});
 drawSessionPill();setInterval(drawSessionPill,30000);
 if(!location.hash)location.hash='#home';else render();

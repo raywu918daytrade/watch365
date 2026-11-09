@@ -1,0 +1,46 @@
+name: Site (GitHub Pages)
+# Builds the static site: browser engine bundle (scripts/build-web.mjs) + market data files (scripts/build-data.mjs),
+# then publishes public/ to GitHub Pages. Runs on every push to main and, for fresh data, from cron-job.org on weekdays
+# after the D1 update (workflow_dispatch; GitHub's own schedule is not used, it is late and stops after 60 idle days).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_REPO_ID: raywu918daytrade/daytrade
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:css
+      - run: node scripts/build-web.mjs
+      - run: node scripts/build-data.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

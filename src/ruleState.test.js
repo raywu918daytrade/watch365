@@ -124,7 +124,7 @@ test('state survives a restart through the file backend', async () => {
     const first = new RuleStateStore(file, { log:quiet });
     const conditions = new ConditionStateStore('/dev/null', { log:quiet });
     conditions.syncRules([rule]); first.syncRules([rule]);
-    first.beginRun(); conditions.evaluate(bars('2330', [99, 101]), new Date(), { onSymbol:(ctx) => first.onSymbol(ctx, conditions) }); first.endRun();
+    first.beginRun(); conditions.evaluate(bars('2330', [99, 101], { date:recentTradingDate() }), new Date(), { onSymbol:(ctx) => first.onSymbol(ctx, conditions) }); first.endRun();
     assert.deepEqual(await first.flush(), { states:1 });
     const restarted = await new RuleStateStore(file, { log:quiet }).load();
     assert.deepEqual([restarted.getState('r', '2330').state, restarted.getState('r', '2330').baseline], ['triggered', true]);
@@ -154,3 +154,6 @@ test('event rules re-arm 30 minutes after the last notification, even if they ke
   const ends = [0, 60_000, 40 * 60_000].map((ms) => ms + 1_000_000);
   assert.deepEqual(ruleTriggerIndexes([true, true, true], 30, 'event', ends), [0, 2]);
 });
+
+// Taipei calendar date of today: restart tests load files through the 7-day retention filter.
+function recentTradingDate() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }

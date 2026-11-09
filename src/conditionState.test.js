@@ -112,7 +112,7 @@ test('state survives a restart through the file backend and resumes from the las
   try {
     const file = join(dir, 'condition-state.json');
     const condition = describeCondition(gte(100));
-    const day = bars('2330', [99, 99, 101, 99]);
+    const day = bars('2330', [99, 99, 101, 99], { date:recentTradingDate() });   // within the 7-day retention window
     const first = new ConditionStateStore(file, { log:quiet });
     first.syncRules([{ ruleId:'r', conditions:[condition] }]);
     first.evaluate(day.slice(0, 2));
@@ -143,3 +143,6 @@ test('snapshot reports per-condition counts and recent flips for the admin page'
   assert.equal(snapshot.recentFlips[0].symbol, '2330');
   assert.ok(snapshot.recentFlips[0].label);
 });
+
+// Taipei calendar date of today: restart tests load files through the 7-day retention filter.
+function recentTradingDate() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10); }

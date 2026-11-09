@@ -1,0 +1,29 @@
+# Cloudflare Worker for watch365 (free plan). Deploy: npx wrangler deploy (from this folder), see worker/README.md.
+name = "watch365-api"
+main = "index.js"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+SITE_URL = "https://watch365.just1stock.com"
+ALLOWED_ORIGINS = "https://watch365.just1stock.com,https://raywu918daytrade.github.io"
+PUBLIC_SITE_URL = "https://watch365.just1stock.com"
+
+# KV namespace for monitors, LINE users, formula library, indicator requests. Create with
+#   npx wrangler kv namespace create W365   and paste the id below.
+[[kv_namespaces]]
+binding = "W365"
+id = "REPLACE_WITH_KV_ID"
+
+[alias]
+"node:fs/promises" = "./vfs.js"
+"node:fs" = "./vfs.js"
+"node:path" = "../web/shims/empty.js"
+"node:child_process" = "../web/shims/empty.js"
+"node:url" = "../web/shims/empty.js"
+"node:readline" = "../web/shims/empty.js"
+"technicalindicators" = "../node_modules/technicalindicators/dist/index.js"
+
+# workerd has no module URL; src/ resolves paths (config/indicators/…) from import.meta.url, served by vfs.js above.
+[define]
+"import.meta.url" = "'file:///src/worker.js'"

@@ -1,0 +1,38 @@
+name: Daily close check (13:00)
+# 13:00 Taipei check of every D1 monitor + LINE push (jobs/daily-close.mjs). Started by cron-job.org on weekdays at
+# 13:01 (scripts/setup-cronjob.mjs); never by GitHub's own schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run outside 13:00-13:40 / again today (testing): 1"
+        default: ""
+      dry_run:
+        description: "Write nothing, send nothing: 1"
+        default: ""
+concurrency:
+  group: daily-close
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Taipei
+      W365_API: ${{ vars.W365_API }}
+      SITE_URL: https://watch365.just1stock.com
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+      HF_REPO_ID: raywu918daytrade/daytrade
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+      FORCE: ${{ github.event.inputs.force }}
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: node jobs/daily-close.mjs

@@ -10,7 +10,12 @@
     "start": "node src/server.js",
     "test": "node --test",
     "test:engine": "node scripts/engine-smoke.mjs",
-    "test:formula-e2e": "node scripts/formula-e2e.mjs"
+    "test:formula-e2e": "node scripts/formula-e2e.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "build:data": "node scripts/build-data.mjs",
+    "build": "npm run build:css && npm run build:web && npm run build:data",
+    "worker:dev": "wrangler dev --config worker/wrangler.toml",
+    "worker:deploy": "wrangler deploy --config worker/wrangler.toml"
   },
   "engines": {
     "node": ">=20"
@@ -23,9 +28,12 @@
     "technicalindicators": "^3.1.0"
   },
   "devDependencies": {
+    "@noble/hashes": "^1.5.0",
     "@tailwindcss/cli": "^4.3.3",
     "daisyui": "^5.7.46",
+    "esbuild": "^0.24.0",
     "playwright": "^1.55.1",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "wrangler": "^3.90.0"
   }
 }
